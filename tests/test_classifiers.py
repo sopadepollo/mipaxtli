@@ -23,7 +23,15 @@ from lsm.classifiers.base import (
 from lsm.classifiers.dummy import DummyClassifier
 from lsm.features import FEATURE_SPEC_VERSION
 from lsm.synthetic import canonical_hand, still_sequence, translated
-from lsm.types import Distance, Handedness, Lighting, Prediction, Sample, Sequence
+from lsm.types import (
+    Distance,
+    Handedness,
+    LightDirection,
+    LightLevel,
+    Prediction,
+    Sample,
+    Sequence,
+)
 
 
 def a_sequence() -> Sequence:
@@ -38,8 +46,11 @@ def a_sample(label: str) -> Sample:
         session_id="session_01",
         timestamp=datetime(2026, 3, 10, 12, 0, tzinfo=UTC),
         handedness=Handedness.RIGHT,
-        lighting=Lighting.INDOOR,
+        light_level=LightLevel.INDOOR,
+        light_direction=LightDirection.FRONTAL,
         distance=Distance.MEDIUM,
+        mean_luminance=0.42,
+        mean_scale_px=100.2,
     )
 
 

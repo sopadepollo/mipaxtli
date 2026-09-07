@@ -19,11 +19,38 @@ Una `Sample` es **una secuencia etiquetada con sus metadatos**:
 | `session_id` | `str` | Qué grabación. Frames de la misma sesión no pueden repartirse entre train y test. |
 | `timestamp` | `datetime` con zona | Cuándo. ISO-8601 con offset; se exige zona horaria para que sea comparable entre máquinas. |
 | `handedness` | `LEFT` / `RIGHT` | Con qué mano firma. La normalización canoniza a derecha, pero el dato se conserva para poder medir si el modelo falla más con zurdos. |
-| `lighting` | `DIM`, `INDOOR`, `BRIGHT`, `BACKLIT`, `MIXED` | Condición de luz, anotada a mano al iniciar la sesión. |
-| `distance` | `NEAR`, `MEDIUM`, `FAR` | Distancia aproximada a la cámara. Categórica a propósito: nadie va a medir con cinta durante la captura, y lo que interesa es cubrir el rango. |
+| `light_level` | `DIM`, `INDOOR`, `BRIGHT` | Cuánta luz hay. Anotado a mano. |
+| `light_direction` | `FRONTAL`, `LATERAL`, `BACKLIT`, `MIXED` | De dónde viene la luz. Anotado a mano. |
+| `distance` | `NEAR`, `MEDIUM`, `FAR` | Distancia aproximada a la cámara. Etiqueta gruesa para filtrar a ojo. |
+| `mean_luminance` | `float` en `[0, 1]` | Luminancia media del frame, promediada sobre la secuencia. **Calculada.** |
+| `mean_scale_px` | `float` > 0 | Escala del paso 4 en píxeles, promediada sobre la secuencia. **Calculada.** |
 
-`lighting` y `distance` existen para poder responder, cuando el modelo falle, si
-falla por la luz o por la distancia. Sin ellos, la respuesta es "no sé".
+### Dos ejes de luz, no uno
+
+`BACKLIT` no es un nivel de iluminación, es una dirección: una escena a contraluz
+puede ser brillante o penumbrosa, y para el detector son problemas distintos. Con
+un solo campo habría que elegir cuál de las dos cosas se anota y se perdería la
+otra, justo cuando el contraluz es la condición que más degrada la detección.
+
+### Cada categoría lleva su número
+
+Las tres taxonomías dependen del juicio de quien graba, y dos personas etiquetarán
+distinto la misma escena. Por eso cada una viaja acompañada de una medida objetiva
+que sale gratis:
+
+- `light_level` ↔ `mean_luminance`, que es una media de píxeles.
+- `distance` ↔ `mean_scale_px`, que es el tamaño aparente de la mano — la magnitud
+  que el paso 4 **ya calcula** para normalizar, devuelta a píxeles con
+  `lsm.features.scale_to_pixels`.
+
+`NEAR/MEDIUM/FAR` no es más que una discretización pobre de ese número. Se conservan
+las dos porque sirven para cosas distintas: la categoría para filtrar el dataset a
+ojo y planear la captura ("faltan sesiones a contraluz"), el número para responder
+con datos si el modelo empeora con poca luz o a distancia, que es la pregunta que
+se hará al leer la primera matriz de confusión.
+
+Las taxonomías están **congeladas** en `docs/adr/0005-taxonomias-de-metadatos-de-captura.md`:
+cambiarlas después de la primera sesión invalida metadatos ya grabados.
 
 ## Se guardan landmarks crudos, no features
 
@@ -84,7 +111,8 @@ Mínimo, según `ARQUITECTURA.md` §4.7:
 - Variar iluminación y distancia entre sesiones, no dentro de una.
 - Incluir la clase negativa `NONE`: mano relajada, transiciones entre letras y
   gestos cotidianos que no son señas. Sin ella, el clasificador asigna una de las
-  27 letras aunque la persona no esté firmando.
+  29 letras aunque la persona no esté firmando. El vocabulario exacto —29 letras
+  más `NONE`— está en `src/lsm/vocabulary.py`, transcrito del glosario.
 
 Son unos 40 minutos por persona. El error clásico —un dataset de una persona, una
 sesión, una iluminación— da 98% en validación y 40% en la demo.

@@ -82,25 +82,46 @@ class Handedness(StrEnum):
     RIGHT = "RIGHT"
 
 
-class Lighting(StrEnum):
-    """Condición de iluminación de la sesión de captura (`ARQUITECTURA.md` §4.7).
+class LightLevel(StrEnum):
+    """Cuánta luz hay (`ARQUITECTURA.md` §4.7).
 
-    Taxonomía fijada en `docs/dataset-schema.md`. Se anota a mano al iniciar la
-    sesión; no se estima desde la imagen.
+    Es un eje **independiente** de la dirección: una escena a contraluz puede ser
+    brillante u oscura, y son problemas distintos para el detector. Mezclar ambos
+    ejes en un solo campo —como hacía la taxonomía original, con `BACKLIT` al lado
+    de `DIM`— obliga a elegir cuál de los dos se anota y pierde el otro.
+
+    Categoría subjetiva: la anota a mano quien graba. El número objetivo que la
+    acompaña es `Sample.mean_luminance`.
     """
 
     DIM = "DIM"
     INDOOR = "INDOOR"
     BRIGHT = "BRIGHT"
+
+
+class LightDirection(StrEnum):
+    """De dónde viene la luz respecto de quien firma (`ARQUITECTURA.md` §4.7).
+
+    Importa porque el contraluz es el caso que más degrada la detección de manos:
+    la silueta se recorta contra el fondo y los landmarks bailan.
+    """
+
+    #: Luz principal delante de quien firma, hacia la cámara.
+    FRONTAL = "FRONTAL"
+    #: Luz principal de costado. Media mano iluminada, media en sombra.
+    LATERAL = "LATERAL"
+    #: Luz detrás de quien firma: ventana al fondo, lámpara a la espalda.
     BACKLIT = "BACKLIT"
+    #: Varias fuentes de direcciones distintas, o cambiante durante la sesión.
     MIXED = "MIXED"
 
 
 class Distance(StrEnum):
     """Distancia aproximada de la mano a la cámara (`ARQUITECTURA.md` §4.7).
 
-    Categórica y no métrica a propósito: nadie va a medir con cinta durante la
-    captura, y lo que interesa es cubrir el rango, no cuantificarlo.
+    Etiqueta gruesa para filtrar el dataset a ojo. El número para el análisis serio
+    es `Sample.mean_scale_px`: `NEAR/MEDIUM/FAR` no es más que una discretización
+    pobre de una magnitud que el paso 4 ya calcula.
     """
 
     NEAR = "NEAR"
@@ -332,6 +353,14 @@ class Sample:
 
     Se guarda la secuencia **cruda**, no las features: si cambia la normalización
     se re-deriva sin volver a grabar.
+
+    Las condiciones de captura van por duplicado, categoría y número:
+    `light_level`/`mean_luminance` y `distance`/`mean_scale_px`. Las categorías
+    dependen del juicio de quien graba y dos personas etiquetarán distinto la misma
+    escena; los números no. Se conservan ambas porque sirven para cosas distintas:
+    la categoría para filtrar el dataset a ojo, el número para responder si el
+    modelo empeora con poca luz o a distancia, que es la pregunta que de verdad se
+    hará al mirar la matriz de confusión.
     """
 
     sequence: Sequence
@@ -340,8 +369,17 @@ class Sample:
     session_id: str
     timestamp: datetime
     handedness: Handedness
-    lighting: Lighting
+    light_level: LightLevel
+    light_direction: LightDirection
     distance: Distance
+    #: Luminancia media del frame, en `[0, 1]`, promediada sobre la secuencia.
+    #: Es la medida **objetiva** que acompaña a `light_level`: dos personas
+    #: etiquetan distinto la misma escena, pero el número no opina.
+    mean_luminance: float
+    #: Escala del paso 4 en píxeles, promediada sobre la secuencia. Es la medida
+    #: objetiva que acompaña a `distance`, y sale gratis: la tubería ya la calcula
+    #: para normalizar. Ver `lsm.features.scale_to_pixels`.
+    mean_scale_px: float
 
     def __post_init__(self) -> None:
         if not self.label:
@@ -354,3 +392,7 @@ class Sample:
                 raise ValueError(f"{name} vacío: rompe leave-one-signer-out")
         if self.timestamp.tzinfo is None:
             raise ValueError("timestamp debe llevar zona horaria (ISO-8601 con offset)")
+        if not 0.0 <= self.mean_luminance <= 1.0:
+            raise ValueError(f"mean_luminance fuera de [0, 1]: {self.mean_luminance}")
+        if self.mean_scale_px <= 0.0:
+            raise ValueError(f"mean_scale_px no positiva: {self.mean_scale_px}")

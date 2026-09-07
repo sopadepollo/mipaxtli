@@ -22,7 +22,8 @@ from lsm.types import (
     InvalidReason,
     Landmark,
     LandmarkIndex,
-    Lighting,
+    LightDirection,
+    LightLevel,
     Prediction,
     RawFrame,
     Sample,
@@ -134,8 +135,11 @@ def test_una_muestra_sin_signer_id_no_se_construye() -> None:
             session_id="s1",
             timestamp=datetime.now(UTC),
             handedness=Handedness.RIGHT,
-            lighting=Lighting.INDOOR,
+            light_level=LightLevel.INDOOR,
+            light_direction=LightDirection.FRONTAL,
             distance=Distance.MEDIUM,
+            mean_luminance=0.4,
+            mean_scale_px=100.0,
         )
 
 
@@ -148,6 +152,55 @@ def test_una_muestra_exige_timestamp_con_zona_horaria() -> None:
             session_id="s1",
             timestamp=datetime(2026, 3, 10, 12, 0, 0),
             handedness=Handedness.RIGHT,
-            lighting=Lighting.INDOOR,
+            light_level=LightLevel.INDOOR,
+            light_direction=LightDirection.FRONTAL,
             distance=Distance.MEDIUM,
+            mean_luminance=0.4,
+            mean_scale_px=100.0,
         )
+
+
+def _sample_kwargs() -> dict[str, object]:
+    return {
+        "sequence": Sequence(frames=(_frame(),)),
+        "label": "A",
+        "signer_id": "signer_01",
+        "session_id": "s1",
+        "timestamp": datetime.now(UTC),
+        "handedness": Handedness.RIGHT,
+        "light_level": LightLevel.INDOOR,
+        "light_direction": LightDirection.FRONTAL,
+        "distance": Distance.MEDIUM,
+        "mean_luminance": 0.4,
+        "mean_scale_px": 100.0,
+    }
+
+
+def test_la_iluminacion_son_dos_ejes_independientes() -> None:
+    """BACKLIT no es un nivel de luz, es una dirección: una escena a contraluz
+    puede ser brillante u oscura y son problemas distintos."""
+    assert "BACKLIT" not in set(LightLevel)
+    assert "BACKLIT" in set(LightDirection)
+
+    sample = Sample(**_sample_kwargs())  # type: ignore[arg-type]
+
+    assert sample.light_level is LightLevel.INDOOR
+    assert sample.light_direction is LightDirection.FRONTAL
+
+
+def test_una_muestra_lleva_las_dos_medidas_objetivas() -> None:
+    """Las categorías dependen del juicio de quien graba; los números no."""
+    sample = Sample(**_sample_kwargs())  # type: ignore[arg-type]
+
+    assert sample.mean_luminance == 0.4
+    assert sample.mean_scale_px == 100.0
+
+
+def test_la_luminancia_vive_en_cero_uno() -> None:
+    with pytest.raises(ValueError, match="mean_luminance"):
+        Sample(**{**_sample_kwargs(), "mean_luminance": 1.4})  # type: ignore[arg-type]
+
+
+def test_la_escala_en_pixeles_debe_ser_positiva() -> None:
+    with pytest.raises(ValueError, match="mean_scale_px"):
+        Sample(**{**_sample_kwargs(), "mean_scale_px": 0.0})  # type: ignore[arg-type]
