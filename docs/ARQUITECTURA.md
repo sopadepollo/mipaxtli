@@ -175,6 +175,35 @@ Detalles a implementar:
 Los umbrales van en un archivo de configuración, no hardcodeados. Se van a ajustar
 mucho durante las pruebas.
 
+#### Aristas que el diagrama no dibuja (resueltas en la Fase 0)
+
+El diagrama describe el camino feliz. Al implementarlo aparecieron tres huecos que
+cualquier implementación tiene que cubrir; se resolvieron así y quedan
+documentados en `src/lsm/segmentation.py`:
+
+1. **`STABLE → TRACKING` cuando la mano vuelve a moverse.** Sin esta arista, una
+   ventana que se estabilizó y no llegó a emitir se quedaría estable para siempre.
+2. **`→ IDLE` desde cualquier estado al perder la mano**, no solo desde TRACKING:
+   la mano puede desaparecer con la ventana ya estable o durante el cooldown.
+3. **Qué hacer cuando la clasificación devuelve `UNKNOWN` o baja confianza.** Es
+   la decisión con más consecuencias. Si un rechazo no cuesta nada, la máquina se
+   queda en STABLE reclasificando la misma ventana en cada frame: treinta llamadas
+   por segundo al clasificador para volver a rechazarla. Si cuesta lo mismo que
+   una emisión, una letra que quedó apenas bajo el umbral obliga a rehacer la seña
+   completa.
+
+   **Se resuelve con dos cooldowns distintos**: `emit_cooldown_frames` tras emitir
+   y `reject_cooldown_frames`, más corto, tras rechazar. El rechazo no cambia de
+   estado —la mano sigue quieta y la ventana sigue siendo estable—, solo suspende
+   la clasificación unos frames. `config.py` valida que el cooldown de rechazo no
+   supere al de emisión.
+
+Comportamiento conocido y aceptado: con la mano quieta, la letra se re-emite cada
+`emit_cooldown_frames + stable_frames` frames. El cooldown acota la repetición
+pero no la elimina. Eliminarla exigiría pedir movimiento explícito entre letras,
+que es una arista nueva en este diagrama; si las pruebas en vivo de la Fase 3
+muestran que molesta, se propone aquí y se registra en un ADR.
+
 ### 4.3 Estáticas vs dinámicas: dos clasificadores, una interfaz
 
 **Interfaz común (`classifiers/base.py`):**
@@ -182,8 +211,8 @@ mucho durante las pruebas.
 ```python
 class Classifier(Protocol):
     def fit(self, samples: list[Sample]) -> None: ...
-    def predict(self, seq: Sequence) -> Prediction: ...   # incluye confianza
-    def export(self) -> dict: ...                          # JSON portable a JS
+    def predict(self, seq: Sequence) -> Prediction: ...  # incluye confianza
+    def export(self) -> dict: ...  # JSON portable a JS
 ```
 
 **Implementaciones:**

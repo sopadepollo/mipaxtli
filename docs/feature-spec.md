@@ -177,6 +177,19 @@ F = mean_t( f_t )        ∈ ℝ⁴²     # vector de forma
   antes de clasificar. Sirve además como criterio de aceptación durante la captura
   del dataset.
 
+**`std` es la desviación poblacional (ddof = 0).** Explícitamente:
+
+```
+media_j = ( Σ_t f_t[j] ) / T                    # suma en orden temporal ascendente
+var_j   = ( Σ_t (f_t[j] - media_j)² ) / T       # divide entre T, no entre T-1
+σ       = ( Σ_j sqrt(var_j) ) / 42              # suma en orden de índice ascendente
+```
+
+Fijarlo importa más de lo que parece: σ no viaja en los golden vectors por frame,
+así que si Python usara poblacional y TypeScript muestral, ningún test lo
+detectaría y la app web rechazaría ventanas que en escritorio pasaban. Por eso los
+`sequence_cases` de `golden_features.json` incluyen σ como valor esperado.
+
 ---
 
 ## 3. Agregación de secuencia — señas dinámicas
@@ -213,6 +226,26 @@ del DTW.
 
 Sean T_src frames válidos. Tiempos origen s_i = i / (T_src − 1) para i ∈ [0, T_src−1]. Tiempos destino u_j = j / 23 para j ∈ [0, 23]. Interpolación lineal componente a componente sobre f_t y τ_t por separado. Los extremos se preservan exactamente: u_0 → s_0 y u_23 → s_{T_src−1}. Si T_src == 1, se replica el frame. Si T_src < config.dtw.min_source_frames, la secuencia se rechaza en vez de interpolarse.
 
+**Orden de operaciones del mapeo**, obligatorio para la paridad numérica:
+
+```
+pos_j = ( j · (T_src − 1) ) / (T_ref − 1)        # el producto ANTES que la división
+i     = floor(pos_j)
+frac  = pos_j - i
+out_j = rows[i] + frac · (rows[i+1] - rows[i])   # si i ≥ T_src-1, out_j = rows[T_src-1]
+```
+
+Escrito como `(j / (T_ref − 1)) · (T_src − 1)` el resultado es matemáticamente el
+mismo pero arrastra el redondeo del cociente intermedio: con `T_src = T_ref = 24`,
+`(7/23)·23` no da exactamente `7`, y filas que deberían quedarse quietas se
+desplazan una fracción de índice. La forma de arriba sí devuelve el índice exacto
+en ese caso.
+
+El peso `w_τ` del §3.3 se aplica **después** de interpolar, nunca antes.
+
+La ponderación y el remuestreo se aplican a los canales por separado: primero se
+remuestrea `f_t`, luego `τ_t`, y solo entonces se concatenan.
+
 ### 3.3 Vector por frame para el clasificador dinámico
 
 ```
@@ -242,6 +275,12 @@ Media móvil exponencial sobre los landmarks crudos, **antes del paso 1**:
 ```
 p̃_t = α · p_t + (1 - α) · p̃_{t-1}
 ```
+
+con `p̃_0 = p_0`: la serie arranca en el primer frame observado de la secuencia.
+Cualquier otra inicialización —arrancar en cero, por ejemplo— inventaría un
+desplazamiento desde el origen del encuadre que nadie ejecutó, y contaminaría el
+canal de trayectoria del §3.1. El estado se reinicia en cada secuencia: un frame
+inválido interrumpe la secuencia (§0.3) y con ella la media móvil.
 
 `α = config.smoothing.alpha`, por defecto `1.0` (desactivado). Valores menores
 reducen el jitter de MediaPipe a costa de latencia y de emborronar los movimientos
@@ -309,6 +348,53 @@ corre.
 
 El archivo lo genera `make golden` desde la implementación de Python, que es la
 referencia normativa.
+
+### 5.2 Campos del archivo
+
+El esquema del §5.1 se mantiene y se completa con lo que un frame suelto no puede
+expresar. Cada caso de `cases` lleva:
+
+| Campo | Significado |
+|---|---|
+| `id` | Identificador estable del caso. |
+| `description` | Qué representa la entrada. |
+| `validates` | Qué paso del contrato verifica. Un golden vector sin explicación es un número mágico con formato JSON. |
+| `input` | `width`, `height`, `handedness` y los 21 landmarks. |
+| `expected_features` | Los 42 valores, o `null` si el frame debe rechazarse. |
+| `expected_invalid_reason` | Motivo tipado del rechazo (`SCALE_TOO_SMALL`), o `null`. |
+| `same_features_as` | Opcional: `id` de otro caso cuyas features deben coincidir dentro de la tolerancia. Codifica los pares de invariancia. |
+
+**Los frames inválidos se representan con un centinela explícito**
+(`expected_features: null` más `expected_invalid_reason`), nunca por ausencia del
+campo: un caso al que le falta una clave se confunde con un archivo truncado.
+
+### 5.3 `sequence_cases`
+
+Bloque hermano de `cases`. Cubre lo que el §5.1 no alcanza: el canal de
+trayectoria (§3.1), el remuestreo (§3.2), la ponderación de `g_t` (§3.3), la
+dispersión σ (§2) y las secuencias interrumpidas (§0.3).
+
+Cada caso lleva la secuencia fuente completa —de longitud arbitraria y con los
+huecos marcados con `{"valid": false, "reason": ...}`— y, en `expected.runs`, una
+entrada por cada secuencia válida máxima con:
+
+| Campo | Significado |
+|---|---|
+| `length` | Frames de la secuencia válida. |
+| `frame_features` | `f_t` de cada frame. |
+| `static_features`, `dispersion` | `F` y σ del §2. |
+| `mean_scale`, `trajectory` | `s̄` y `τ_t` del §3.1, sin remuestrear. |
+| `resampled_trajectory` | `τ` tras el remuestreo del §3.2, sin ponderar. |
+| `dynamic_rows` | `g_t` final: 24 filas de 44 componentes. |
+| `dynamic_unavailable_reason` | `TOO_FEW_SOURCE_FRAMES` si la secuencia se rechazó para el canal dinámico; en ese caso los dos campos anteriores van en `null`. |
+
+La cobertura incluye **la misma interrupción al inicio, en medio y al final**,
+porque los tres casos se comportan distinto y no basta con probar uno:
+
+- al inicio, el origen de `τ` se mueve al primer frame válido y el trazo restante
+  se mide desde otro punto;
+- al final, la secuencia simplemente se corta antes y `τ` conserva su origen;
+- en medio quedan **dos** secuencias, no una con un salto.
 
 ---
 
