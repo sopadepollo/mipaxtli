@@ -1,0 +1,88 @@
+# Configuración del traductor de deletreo manual LSM.
+#
+# Todos los umbrales del sistema viven aquí. El esquema y los rangos válidos
+# están en `src/lsm/config.py`; un campo desconocido o fuera de rango hace fallar
+# la carga en vez de caer al valor por defecto en silencio.
+#
+# Los valores de este archivo son exactamente los de fábrica: sirve como
+# documentación ejecutable y como punto de partida para calibrar. Al ajustar
+# cualquiera de ellos, anotar en la bitácora de la sesión con qué dataset y con
+# qué persona firmante se calibró.
+#
+# Lo que NO se configura aquí: las constantes del contrato de features (42
+# componentes, T_ref = 24, MIN_SCALE = 1e-6, FEATURE_SPEC_VERSION). Cambiarlas
+# rompe la paridad con la implementación de TypeScript, así que viven en
+# `src/lsm/features.py` y su modificación exige incrementar la versión del spec.
+
+# Calidad de la ventana antes de clasificar (feature-spec.md §2).
+quality:
+  # σ = dispersión media por componente dentro de la ventana, en unidades de mano.
+  # Por encima de este valor la ventana se considera inestable: la mano se estaba
+  # moviendo o el detector saltó, y clasificarla produce basura.
+  # Subirlo acepta señas más temblorosas; bajarlo exige más quietud.
+  max_dispersion: 0.08
+
+# Parámetros ajustables de la extracción (feature-spec.md §3.3).
+features:
+  # w_τ: cuánto pesa el canal de trayectoria (2 componentes) frente al de forma
+  # (42). Con w_τ = 0 las letras dinámicas se vuelven indistinguibles de sus
+  # equivalentes estáticas: J colapsa sobre I. Subirlo hace que el trazo domine
+  # sobre la configuración de los dedos.
+  # 4.0 es un punto de partida razonado, no medido. Ajustar con datos reales.
+  trajectory_weight: 4.0
+
+# Suavizado temporal opcional sobre landmarks crudos (feature-spec.md §4).
+smoothing:
+  # α = 1.0 desactiva el suavizado (cada frame se usa tal cual). Valores menores
+  # reducen el jitter de MediaPipe a costa de latencia y de emborronar los
+  # movimientos rápidos, lo que perjudica justo a las letras con movimiento.
+  # Si se activa aquí, hay que activarlo idénticamente en la implementación web.
+  alpha: 1.0
+
+# Clasificador dinámico (feature-spec.md §3.2 y §3.4).
+dtw:
+  # Radio de la ventana de Sakoe-Chiba sobre secuencias de 24 frames. Acota el
+  # costo del DTW y evita alineaciones absurdas entre extremos de la seña.
+  band_radius: 6
+  # Mínimo de frames válidos para remuestrear a T_ref = 24. Por debajo la
+  # secuencia se rechaza: estirar 2 frames a 24 inventa una trayectoria que nadie
+  # ejecutó.
+  min_source_frames: 4
+
+# Máquina de estados de segmentación (ARQUITECTURA.md §4.2).
+segmentation:
+  # Buffer circular de frames recientes. La ventana que se clasifica sale de aquí.
+  # A 30 fps, 24 frames son unos 800 ms.
+  buffer_size: 24
+
+  # detection_score mínimo para aceptar el frame del detector. Por debajo, el
+  # frame se marca inválido e interrumpe la secuencia.
+  min_detection_score: 0.5
+
+  # Velocidad por debajo de la cual se considera que la mano está quieta, en
+  # unidades de mano por frame (ver `lsm.features.frame_velocities`). Es
+  # invariante a la distancia a la cámara: 0.02 significa "cada landmark se movió
+  # menos del 2% del largo muñeca-nudillo entre frame y frame".
+  velocity_threshold: 0.02
+
+  # Frames consecutivos por debajo del umbral de velocidad para pasar de TRACKING
+  # a STABLE. Subirlo reduce emisiones espurias durante el viaje de una letra a
+  # otra; bajarlo hace el deletreo más ágil.
+  stable_frames: 5
+
+  # Confianza mínima para emitir. Por debajo se emite UNKNOWN y no se agrega nada
+  # al texto. Ver ARQUITECTURA.md §4.4.
+  min_confidence: 0.6
+
+  # Cooldown tras emitir una letra, para no repetirla mientras la mano sigue
+  # quieta. A 30 fps, 12 frames son 400 ms.
+  emit_cooldown_frames: 12
+
+  # Cooldown tras un rechazo. Deliberadamente más corto que el de emisión: un
+  # rechazo no debe castigar tanto como un acierto, o una letra que quedó apenas
+  # bajo el umbral obligaría a rehacer la seña completa. Su otra función es
+  # impedir que la máquina reclasifique la misma ventana en cada frame.
+  reject_cooldown_frames: 4
+
+  # Frames consecutivos sin mano válida que llevan de vuelta a IDLE.
+  missing_frames_to_idle: 8
