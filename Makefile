@@ -4,11 +4,12 @@
 
 UV ?= uv
 
-.PHONY: help setup test lint format golden docker-test capture train eval demo
+.PHONY: help setup test test-nucleo lint format golden docker-test capture train eval demo
 
 help:
 	@echo "setup        instala dependencias con uv"
 	@echo "test         ruff + mypy strict + pytest (sin camara, sin dataset)"
+	@echo "test-nucleo  igual, saltando los tests del glosario en rojo"
 	@echo "lint         solo ruff: check y verificacion de formato"
 	@echo "format       aplica formato y correcciones automaticas"
 	@echo "golden       regenera tests/fixtures/golden_features.json"
@@ -19,9 +20,19 @@ setup:
 
 # El orden es deliberado: lo barato primero. Un error de formato no debería
 # esperar a que corra la suite entera.
+#
+# ESTE OBJETIVO ESTA EN ROJO A PROPOSITO. Los tests marcados `glosario` fallan
+# hasta que docs/glosario-lsm.md este completo y verificado contra la fuente
+# primaria; es la senal de que la Fase 1 no puede empezar. Ver el README.
 test: lint
 	$(UV) run mypy
 	$(UV) run pytest
+
+# La suite sin los tests que bloquean la Fase 1, para poder trabajar en el nucleo
+# mientras el glosario sigue pendiente. Este si debe pasar limpio siempre.
+test-nucleo: lint
+	$(UV) run mypy
+	$(UV) run pytest -m "not glosario"
 
 lint:
 	$(UV) run ruff check .

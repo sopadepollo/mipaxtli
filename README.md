@@ -31,8 +31,9 @@ Antes de tocar código, en este orden:
 
 1. `CLAUDE.md` — reglas no negociables del repositorio.
 2. `docs/ARQUITECTURA.md` — fuente de verdad sobre el diseño.
-3. `docs/feature-spec.md` — **contrato** de la extracción de features. Cualquier
-   implementación (Python, TypeScript) debe reproducirlo dentro de `1e-6`.
+3. `docs/feature-spec.md` — **contrato** de la extracción de features (§1-§5) y de
+   la segmentación (§6, versionada aparte). Cualquier implementación, Python o
+   TypeScript, debe reproducirlo dentro de `1e-6`.
 4. `docs/adr/` — decisiones de arquitectura y por qué se tomaron.
 5. `docs/glosario-lsm.md` — qué letras se reconocen y cuáles llevan movimiento.
 
@@ -62,6 +63,19 @@ uv run pytest
 uv run mypy
 uv run ruff check . && uv run ruff format --check .
 uv run lsm-golden
+```
+
+### La suite está en rojo a propósito
+
+Los tests marcados `glosario` fallan hasta que `docs/glosario-lsm.md` esté completo
+y verificado contra la fuente primaria. **Es la señal de que la Fase 1 no puede
+empezar**: capturar dataset con un glosario incompleto significa grabar veinte
+repeticiones por letra de una seña que quizá esté mal.
+
+Para trabajar en el núcleo mientras tanto:
+
+```bash
+uv run pytest -m "not glosario"
 ```
 
 En Docker (sin cámara, para tests y futuro entrenamiento):
