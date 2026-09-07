@@ -1,0 +1,356 @@
+"""Tipos base del traductor de deletreo manual de LSM.
+
+Regla no negociable (`CLAUDE.md`, `ARQUITECTURA.md` §2): **el tipo base de entrada
+es una secuencia temporal `(T, 21, 3)`, nunca un frame suelto.** Una seña estática
+es una secuencia corta y estable; una dinámica es una secuencia que varía. Ambas
+recorren la misma tubería.
+
+Por eso este módulo no expone ningún tipo pensado para viajar solo por la API
+pública en lugar de una secuencia: `RawFrame` existe para poblar una `Sequence`,
+no para clasificarse por su cuenta.
+
+Este módulo es código puro: sin OpenCV, sin MediaPipe, sin disco, sin cámara.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from enum import IntEnum, StrEnum
+from typing import Final, TypeAlias
+
+# --------------------------------------------------------------------------- #
+# Constantes estructurales
+# --------------------------------------------------------------------------- #
+
+#: Landmarks que entrega MediaPipe Hands por mano (`feature-spec.md` §0.1).
+NUM_LANDMARKS: Final = 21
+
+#: Dimensión del vector aplanado del paso 7: 21 landmarks × (x, y), sin z.
+NUM_FEATURES: Final = 42
+
+#: Etiqueta reservada para la clase de rechazo (`ARQUITECTURA.md` §4.4).
+UNKNOWN_LABEL: Final = "UNKNOWN"
+
+#: Etiqueta de la clase negativa explícita del dataset (`glosario-lsm.md` §4).
+NEGATIVE_LABEL: Final = "NONE"
+
+
+class LandmarkIndex(IntEnum):
+    """Índices de los 21 landmarks de MediaPipe Hands.
+
+    El orden es normativo: `feature-spec.md` §0.1 y el paso 7 dependen de él, y la
+    reimplementación en TypeScript debe usar exactamente la misma numeración.
+    """
+
+    WRIST = 0
+
+    THUMB_CMC = 1
+    THUMB_MCP = 2
+    THUMB_IP = 3
+    THUMB_TIP = 4
+
+    INDEX_MCP = 5
+    INDEX_PIP = 6
+    INDEX_DIP = 7
+    INDEX_TIP = 8
+
+    MIDDLE_MCP = 9
+    MIDDLE_PIP = 10
+    MIDDLE_DIP = 11
+    MIDDLE_TIP = 12
+
+    RING_MCP = 13
+    RING_PIP = 14
+    RING_DIP = 15
+    RING_TIP = 16
+
+    PINKY_MCP = 17
+    PINKY_PIP = 18
+    PINKY_DIP = 19
+    PINKY_TIP = 20
+
+
+class Handedness(StrEnum):
+    """Lateralidad reportada por el detector, *antes* de canonizar.
+
+    Vale la de la mano real: el frame que se alimenta al detector nunca va
+    espejado (`feature-spec.md` §0.3).
+    """
+
+    LEFT = "LEFT"
+    RIGHT = "RIGHT"
+
+
+class Lighting(StrEnum):
+    """Condición de iluminación de la sesión de captura (`ARQUITECTURA.md` §4.7).
+
+    Taxonomía fijada en `docs/dataset-schema.md`. Se anota a mano al iniciar la
+    sesión; no se estima desde la imagen.
+    """
+
+    DIM = "DIM"
+    INDOOR = "INDOOR"
+    BRIGHT = "BRIGHT"
+    BACKLIT = "BACKLIT"
+    MIXED = "MIXED"
+
+
+class Distance(StrEnum):
+    """Distancia aproximada de la mano a la cámara (`ARQUITECTURA.md` §4.7).
+
+    Categórica y no métrica a propósito: nadie va a medir con cinta durante la
+    captura, y lo que interesa es cubrir el rango, no cuantificarlo.
+    """
+
+    NEAR = "NEAR"
+    MEDIUM = "MEDIUM"
+    FAR = "FAR"
+
+
+class InvalidReason(StrEnum):
+    """Por qué un frame no puede entrar a la tubería.
+
+    Es un tipo cerrado y no `None`: un hueco silencioso se propaga sin dejar
+    rastro. El motivo importa porque cambia lo que hace la máquina de estados y
+    lo que se escribe en los golden vectors.
+    """
+
+    #: El detector no encontró ninguna mano en el frame.
+    NO_HAND = "NO_HAND"
+    #: `detection_score` por debajo del mínimo configurado.
+    LOW_DETECTION_SCORE = "LOW_DETECTION_SCORE"
+    #: Paso 4: la norma de p_9 quedó por debajo de MIN_SCALE.
+    SCALE_TOO_SMALL = "SCALE_TOO_SMALL"
+
+
+# --------------------------------------------------------------------------- #
+# Puntos y frames
+# --------------------------------------------------------------------------- #
+
+#: Punto 3D intermedio de la tubería. Se usa `tuple` y no una clase porque los
+#: pasos de `feature-spec.md` §1 son aritmética pura y el contrato prohíbe
+#: reordenar operaciones: cuanta menos indirección, más fácil de auditar.
+Point3: TypeAlias = tuple[float, float, float]
+Points3: TypeAlias = tuple[Point3, ...]
+Point2: TypeAlias = tuple[float, float]
+Points2: TypeAlias = tuple[Point2, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Landmark:
+    """Un landmark crudo de MediaPipe, en coordenadas normalizadas al frame.
+
+    `x` va normalizado por el ancho, `y` por el alto y con el eje apuntando hacia
+    abajo (convención de imagen), `z` es profundidad relativa a la muñeca. Los
+    valores pueden salirse de `[0, 1]`: MediaPipe extrapola fuera del encuadre y
+    eso no es un error.
+    """
+
+    x: float
+    y: float
+    z: float
+
+    def as_tuple(self) -> Point3:
+        return (self.x, self.y, self.z)
+
+
+@dataclass(frozen=True, slots=True)
+class RawFrame:
+    """Un frame válido: exactamente una mano, con sus metadatos de captura.
+
+    Si se detectaron varias manos, quien construye el frame ya se quedó con la de
+    mayor `detection_score` (`feature-spec.md` §0.3): el alfabeto dactilológico de
+    LSM es monomanual.
+    """
+
+    landmarks: tuple[Landmark, ...]
+    width: int
+    height: int
+    handedness: Handedness
+    handedness_score: float
+    detection_score: float
+
+    def __post_init__(self) -> None:
+        if len(self.landmarks) != NUM_LANDMARKS:
+            msg = f"un frame lleva {NUM_LANDMARKS} landmarks, no {len(self.landmarks)}"
+            raise ValueError(msg)
+        if self.width <= 0 or self.height <= 0:
+            msg = f"dimensiones de frame inválidas: {self.width}x{self.height}"
+            raise ValueError(msg)
+        for name, score in (
+            ("handedness_score", self.handedness_score),
+            ("detection_score", self.detection_score),
+        ):
+            if not 0.0 <= score <= 1.0:
+                raise ValueError(f"{name} fuera de [0, 1]: {score}")
+
+    @property
+    def aspect_ratio(self) -> float:
+        """`a = width / height`, el factor del paso 1 de `feature-spec.md` §1."""
+        return self.width / self.height
+
+    def points(self) -> Points3:
+        """Landmarks como tuplas, en el orden de `LandmarkIndex`."""
+        return tuple(landmark.as_tuple() for landmark in self.landmarks)
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidFrame:
+    """Marcador explícito de frame inválido.
+
+    No se usa `None`: `feature-spec.md` §0.3 exige que los frames inválidos
+    **interrumpan** la secuencia en vez de interpolarse, y para eso hay que poder
+    verlos en el flujo.
+    """
+
+    reason: InvalidReason
+    detail: str = ""
+
+
+#: Lo que produce el detector para un frame de video: mano válida o marcador.
+FrameSlot: TypeAlias = RawFrame | InvalidFrame
+
+#: Flujo crudo de frames tal como sale del detector, huecos incluidos.
+FrameStream: TypeAlias = tuple[FrameSlot, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Sequence:
+    """El tipo base del sistema: `(T, 21, 3)` frames válidos y consecutivos.
+
+    Una `Sequence` no contiene huecos por construcción. Partir un `FrameStream`
+    con marcadores inválidos en sus secuencias válidas máximas es trabajo de
+    `lsm.features.split_valid_runs`.
+    """
+
+    frames: tuple[RawFrame, ...]
+
+    def __post_init__(self) -> None:
+        if not self.frames:
+            raise ValueError("una Sequence necesita al menos un frame válido")
+
+    def __len__(self) -> int:
+        return len(self.frames)
+
+    @property
+    def shape(self) -> tuple[int, int, int]:
+        """`(T, 21, 3)`."""
+        return (len(self.frames), NUM_LANDMARKS, 3)
+
+    def window(self, start: int, stop: int) -> Sequence:
+        """Sub-secuencia `[start, stop)`. Devuelve `Sequence`, nunca un frame."""
+        return Sequence(frames=self.frames[start:stop])
+
+
+# --------------------------------------------------------------------------- #
+# Salidas de la tubería
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureVector:
+    """Vector aplanado de 42 componentes del paso 7 de `feature-spec.md` §1.
+
+    Lleva pegada su `spec_version`: un modelo entrenado con otra versión de la
+    especificación debe rechazarse al cargarse, no ejecutarse en silencio
+    (`ARQUITECTURA.md` §4.6).
+    """
+
+    values: tuple[float, ...]
+    spec_version: int
+
+    def __post_init__(self) -> None:
+        if len(self.values) != NUM_FEATURES:
+            msg = (
+                f"el vector de features lleva {NUM_FEATURES} componentes, "
+                f"no {len(self.values)}"
+            )
+            raise ValueError(msg)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+
+@dataclass(frozen=True, slots=True)
+class TrajectoryChannel:
+    """Canal de trayectoria de `feature-spec.md` §3.1.
+
+    Es la razón de ser del §3: el paso 3 destruye a propósito la posición de la
+    mano en el encuadre, y sin este canal una J y una I son indistinguibles.
+    `points[0]` es siempre `(0.0, 0.0)`: el origen es la muñeca del primer frame.
+    """
+
+    points: Points2
+    mean_scale: float
+
+    def __post_init__(self) -> None:
+        if not self.points:
+            raise ValueError("el canal de trayectoria necesita al menos un punto")
+        if self.mean_scale <= 0.0:
+            raise ValueError(f"escala media no positiva: {self.mean_scale}")
+
+    def __len__(self) -> int:
+        return len(self.points)
+
+
+@dataclass(frozen=True, slots=True)
+class Prediction:
+    """Resultado de un clasificador: etiqueta y confianza.
+
+    Un clasificador de 27 clases siempre devuelve una de las 27, aunque la persona
+    se esté rascando la nariz. Por eso `UNKNOWN` es un valor de primera clase y no
+    la ausencia de resultado (`ARQUITECTURA.md` §4.4).
+    """
+
+    label: str
+    confidence: float
+
+    def __post_init__(self) -> None:
+        if not self.label:
+            raise ValueError("una Prediction necesita etiqueta")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"confianza fuera de [0, 1]: {self.confidence}")
+
+    @property
+    def is_unknown(self) -> bool:
+        return self.label == UNKNOWN_LABEL
+
+    @classmethod
+    def unknown(cls, confidence: float = 0.0) -> Prediction:
+        return cls(label=UNKNOWN_LABEL, confidence=confidence)
+
+
+@dataclass(frozen=True, slots=True)
+class Sample:
+    """Una secuencia etiquetada con sus metadatos (`ARQUITECTURA.md` §4.7).
+
+    Los metadatos no son decorativos: la validación es leave-one-signer-out y sin
+    `signer_id` ni `session_id` no se puede construir el split. Un split aleatorio
+    de frames mezcla frames de la misma grabación entre train y test y da métricas
+    infladas.
+
+    Se guarda la secuencia **cruda**, no las features: si cambia la normalización
+    se re-deriva sin volver a grabar.
+    """
+
+    sequence: Sequence
+    label: str
+    signer_id: str
+    session_id: str
+    timestamp: datetime
+    handedness: Handedness
+    lighting: Lighting
+    distance: Distance
+
+    def __post_init__(self) -> None:
+        if not self.label:
+            raise ValueError("una Sample necesita etiqueta")
+        for name, value in (
+            ("signer_id", self.signer_id),
+            ("session_id", self.session_id),
+        ):
+            if not value:
+                raise ValueError(f"{name} vacío: rompe leave-one-signer-out")
+        if self.timestamp.tzinfo is None:
+            raise ValueError("timestamp debe llevar zona horaria (ISO-8601 con offset)")
