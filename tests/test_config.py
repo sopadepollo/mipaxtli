@@ -41,7 +41,7 @@ def test_la_configuracion_es_inmutable() -> None:
     config = Config()
 
     with pytest.raises(ValidationError):
-        config.smoothing.alpha = 0.5  # type: ignore[misc]
+        config.smoothing.alpha = 0.5
 
 
 def test_alpha_de_suavizado_solo_admite_el_intervalo_semiabierto() -> None:

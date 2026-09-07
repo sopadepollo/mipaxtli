@@ -83,7 +83,7 @@ class SegmentationConfig(_Section):
     min_detection_score: float = Field(default=0.5, gt=0.0, le=1.0)
 
     #: Velocidad por debajo de la cual se considera que la mano está quieta.
-    #: Unidades de mano por frame; ver `lsm.features.frame_velocities`.
+    #: Unidades de mano por frame; ver `lsm.features.SequenceFeatures.velocities`.
     velocity_threshold: float = Field(default=0.02, gt=0.0, le=100.0)
 
     #: Cuántos frames consecutivos por debajo del umbral hacen falta para pasar de
@@ -145,6 +145,8 @@ def load_config(path: Path | str) -> Config:
     if parsed is None:
         parsed = {}
     if not isinstance(parsed, dict):
-        msg = f"{path}: se esperaba un mapeo en la raíz, se leyó {type(parsed).__name__}"
+        msg = (
+            f"{path}: se esperaba un mapeo en la raíz, se leyó {type(parsed).__name__}"
+        )
         raise ValueError(msg)
     return Config.model_validate(parsed)

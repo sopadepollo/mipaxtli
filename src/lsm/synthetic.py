@@ -87,7 +87,9 @@ def translated(points: Points3, dx: float, dy: float) -> Points3:
     return tuple((x + dx, y + dy, z) for x, y, z in points)
 
 
-def scaled(points: Points3, factor: float, center: tuple[float, float] | None = None) -> Points3:
+def scaled(
+    points: Points3, factor: float, center: tuple[float, float] | None = None
+) -> Points3:
     """Acerca o aleja la mano de la cámara. No cambia la seña.
 
     `factor = 2.0` equivale a la misma mano al doble de tamaño aparente, es decir,
@@ -95,11 +97,14 @@ def scaled(points: Points3, factor: float, center: tuple[float, float] | None = 
     """
     cx, cy = center if center is not None else (points[0][0], points[0][1])
     return tuple(
-        (cx + (x - cx) * factor, cy + (y - cy) * factor, z * factor) for x, y, z in points
+        (cx + (x - cx) * factor, cy + (y - cy) * factor, z * factor)
+        for x, y, z in points
     )
 
 
-def rotated(points: Points3, degrees: float, center: tuple[float, float] | None = None) -> Points3:
+def rotated(
+    points: Points3, degrees: float, center: tuple[float, float] | None = None
+) -> Points3:
     """Inclina la muñeca. No cambia la seña.
 
     Rotación en el plano de la imagen alrededor de `center` (por defecto, la
@@ -115,7 +120,9 @@ def rotated(points: Points3, degrees: float, center: tuple[float, float] | None 
     for x, y, z in points:
         dx = x - cx
         dy = y - cy
-        rotated_points.append((cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a, z))
+        rotated_points.append(
+            (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a, z)
+        )
     return tuple(rotated_points)
 
 
@@ -225,7 +232,9 @@ def moving_sequence(
     return Sequence(frames=frames)
 
 
-def arc_offsets(count: int, *, width_px: float = 60.0, depth_px: float = 90.0) -> tuple[tuple[float, float], ...]:
+def arc_offsets(
+    count: int, *, width_px: float = 60.0, depth_px: float = 90.0
+) -> tuple[tuple[float, float], ...]:
     """Trazo en forma de gancho, como el de la J: baja y regresa en curva.
 
     Determinista y sin aleatoriedad: es entrada de golden vectors.

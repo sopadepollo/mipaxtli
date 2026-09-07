@@ -25,6 +25,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import pairwise
 from typing import Final, TypeAlias
 
 from lsm.config import Config
@@ -34,6 +35,7 @@ from lsm.types import (
     FrameStream,
     Handedness,
     InvalidReason,
+    Landmark,
     LandmarkIndex,
     Point2,
     Points2,
@@ -322,8 +324,6 @@ def smooth_sequence(sequence: Sequence, alpha: float) -> Sequence:
 
 def _with_points(frame: RawFrame, points: Points3) -> RawFrame:
     """Copia un frame cambiándole los landmarks y conservando los metadatos."""
-    from lsm.types import Landmark  # noqa: PLC0415 — evita un ciclo de import innecesario
-
     return RawFrame(
         landmarks=tuple(Landmark(x=x, y=y, z=z) for x, y, z in points),
         width=frame.width,
@@ -496,7 +496,9 @@ def mean_displacement(before: Points3, after: Points3) -> float:
     return total / len(before)
 
 
-def _velocities(geometries: tuple[_FrameGeometry, ...], mean_scale: float) -> tuple[float, ...]:
+def _velocities(
+    geometries: tuple[_FrameGeometry, ...], mean_scale: float
+) -> tuple[float, ...]:
     """Velocidad por par de frames consecutivos, en unidades de mano por frame.
 
     Se mide sobre los puntos del paso 2 —sin trasladar—, de modo que cuenta tanto
@@ -510,7 +512,7 @@ def _velocities(geometries: tuple[_FrameGeometry, ...], mean_scale: float) -> tu
     """
     return tuple(
         mean_displacement(previous.canonical, current.canonical) / mean_scale
-        for previous, current in zip(geometries, geometries[1:], strict=False)
+        for previous, current in pairwise(geometries)
     )
 
 

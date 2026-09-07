@@ -47,9 +47,9 @@ def _frame(width: int = 1280, height: int = 720) -> RawFrame:
 
 
 def test_los_indices_de_landmark_siguen_la_numeracion_de_mediapipe() -> None:
-    assert LandmarkIndex.WRIST == 0
-    assert LandmarkIndex.MIDDLE_MCP == 9
-    assert LandmarkIndex.PINKY_TIP == 20
+    assert int(LandmarkIndex.WRIST) == 0
+    assert int(LandmarkIndex.MIDDLE_MCP) == 9
+    assert int(LandmarkIndex.PINKY_TIP) == 20
     assert len(LandmarkIndex) == NUM_LANDMARKS
 
 
@@ -146,7 +146,7 @@ def test_una_muestra_exige_timestamp_con_zona_horaria() -> None:
             label="A",
             signer_id="signer_01",
             session_id="s1",
-            timestamp=datetime(2026, 3, 10, 12, 0, 0),  # noqa: DTZ001
+            timestamp=datetime(2026, 3, 10, 12, 0, 0),
             handedness=Handedness.RIGHT,
             lighting=Lighting.INDOOR,
             distance=Distance.MEDIUM,

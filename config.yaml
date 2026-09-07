@@ -60,7 +60,7 @@ segmentation:
   min_detection_score: 0.5
 
   # Velocidad por debajo de la cual se considera que la mano está quieta, en
-  # unidades de mano por frame (ver `lsm.features.frame_velocities`). Es
+  # unidades de mano por frame (ver `lsm.features.SequenceFeatures.velocities`). Es
   # invariante a la distancia a la cámara: 0.02 significa "cada landmark se movió
   # menos del 2% del largo muñeca-nudillo entre frame y frame".
   velocity_threshold: 0.02

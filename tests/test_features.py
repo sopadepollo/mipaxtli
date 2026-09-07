@@ -53,6 +53,7 @@ from lsm.synthetic import (
 )
 from lsm.types import (
     NUM_FEATURES,
+    FrameStream,
     Handedness,
     InvalidFrame,
     InvalidReason,
@@ -196,22 +197,20 @@ def test_invariancia_de_escala_la_misma_sena_al_doble_de_tamano() -> None:
 
 
 def test_invariancia_de_escala_a_la_mitad_de_tamano() -> None:
-    far = still_sequence(scaled(translated(canonical_hand(), 640.0, 400.0), 0.5), length=6)
+    far = still_sequence(
+        scaled(translated(canonical_hand(), 640.0, 400.0), 0.5), length=6
+    )
 
     assert_close(features_of(far), features_of(base_sequence()))
 
 
 @pytest.mark.parametrize(
-    ("corner", "position"),
-    [
-        ("superior_izquierda", (120.0, 260.0)),
-        ("superior_derecha", (1160.0, 260.0)),
-        ("inferior_izquierda", (120.0, 660.0)),
-        ("inferior_derecha", (1160.0, 660.0)),
-    ],
+    "position",
+    [(120.0, 260.0), (1160.0, 260.0), (120.0, 660.0), (1160.0, 660.0)],
+    ids=["arriba_izq", "arriba_der", "abajo_izq", "abajo_der"],
 )
 def test_invariancia_de_posicion_en_las_cuatro_esquinas(
-    corner: str, position: tuple[float, float]
+    position: tuple[float, float],
 ) -> None:
     """Paso 3. Dónde esté la mano en el encuadre no cambia qué letra es."""
     moved = still_sequence(translated(canonical_hand(), *position), length=6)
@@ -320,7 +319,7 @@ def test_landmarks_fuera_de_cero_uno_no_rompen_nada() -> None:
 
 
 def test_cero_manos_detectadas_produce_un_marcador_no_un_none() -> None:
-    stream = (InvalidFrame(reason=InvalidReason.NO_HAND),)
+    stream: FrameStream = (InvalidFrame(reason=InvalidReason.NO_HAND),)
 
     assert split_valid_runs(stream) == ()
 
@@ -332,14 +331,18 @@ def test_cero_manos_detectadas_produce_un_marcador_no_un_none() -> None:
 
 def _stream_frames(count: int) -> tuple[RawFrame, ...]:
     return tuple(
-        to_frame(translated(canonical_hand(), 600.0 + 12.0 * i, 400.0), width=1280, height=720)
+        to_frame(
+            translated(canonical_hand(), 600.0 + 12.0 * i, 400.0),
+            width=1280,
+            height=720,
+        )
         for i in range(count)
     )
 
 
 def test_un_frame_invalido_al_inicio_recorta_la_secuencia() -> None:
     frames = _stream_frames(5)
-    stream = (InvalidFrame(reason=InvalidReason.NO_HAND), *frames)
+    stream: FrameStream = (InvalidFrame(reason=InvalidReason.NO_HAND), *frames)
 
     runs = split_valid_runs(stream)
 
@@ -349,7 +352,7 @@ def test_un_frame_invalido_al_inicio_recorta_la_secuencia() -> None:
 
 def test_un_frame_invalido_al_final_recorta_la_secuencia() -> None:
     frames = _stream_frames(5)
-    stream = (*frames, InvalidFrame(reason=InvalidReason.NO_HAND))
+    stream: FrameStream = (*frames, InvalidFrame(reason=InvalidReason.NO_HAND))
 
     runs = split_valid_runs(stream)
 
@@ -360,7 +363,11 @@ def test_un_frame_invalido_al_final_recorta_la_secuencia() -> None:
 def test_un_frame_invalido_en_medio_parte_la_secuencia_en_dos() -> None:
     """§0.3: los frames inválidos no se interpolan, interrumpen la secuencia."""
     frames = _stream_frames(6)
-    stream = (*frames[:3], InvalidFrame(reason=InvalidReason.NO_HAND), *frames[3:])
+    stream: FrameStream = (
+        *frames[:3],
+        InvalidFrame(reason=InvalidReason.NO_HAND),
+        *frames[3:],
+    )
 
     runs = split_valid_runs(stream)
 
@@ -404,7 +411,9 @@ def test_una_sena_estable_tiene_dispersion_practicamente_cero() -> None:
 def test_la_dispersion_usa_desviacion_poblacional_ddof_cero() -> None:
     """Fijado explícitamente: σ no viaja en los golden vectors de un frame, así
     que una discrepancia ddof=0 / ddof=1 con TypeScript sería invisible."""
-    open_frame = to_frame(translated(canonical_hand(), 640.0, 400.0), width=1280, height=720)
+    open_frame = to_frame(
+        translated(canonical_hand(), 640.0, 400.0), width=1280, height=720
+    )
     fist_frame = to_frame(translated(fist_hand(), 640.0, 400.0), width=1280, height=720)
     sequence = Sequence(frames=(open_frame, fist_frame))
 
@@ -419,7 +428,9 @@ def test_la_dispersion_usa_desviacion_poblacional_ddof_cero() -> None:
 
 
 def test_el_vector_de_forma_es_el_promedio_temporal() -> None:
-    open_frame = to_frame(translated(canonical_hand(), 640.0, 400.0), width=1280, height=720)
+    open_frame = to_frame(
+        translated(canonical_hand(), 640.0, 400.0), width=1280, height=720
+    )
     fist_frame = to_frame(translated(fist_hand(), 640.0, 400.0), width=1280, height=720)
     sequence = Sequence(frames=(open_frame, fist_frame))
 
@@ -488,14 +499,18 @@ def test_la_trayectoria_captura_el_movimiento_que_el_paso_3_destruye() -> None:
 
 def test_la_trayectoria_es_invariante_a_la_posicion_en_el_encuadre() -> None:
     offsets = arc_offsets(8)
-    centered = extract_sequence_features(moving_sequence(canonical_hand(), offsets), CONFIG)
+    centered = extract_sequence_features(
+        moving_sequence(canonical_hand(), offsets), CONFIG
+    )
     cornered = extract_sequence_features(
         moving_sequence(translated(canonical_hand(), 420.0, 180.0), offsets), CONFIG
     )
     assert isinstance(centered, SequenceFeatures)
     assert isinstance(cornered, SequenceFeatures)
 
-    for a, b in zip(centered.trajectory.points, cornered.trajectory.points, strict=True):
+    for a, b in zip(
+        centered.trajectory.points, cornered.trajectory.points, strict=True
+    ):
         assert a[0] == pytest.approx(b[0], abs=TOL)
         assert a[1] == pytest.approx(b[1], abs=TOL)
 
