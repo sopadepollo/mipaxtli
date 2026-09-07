@@ -1,5 +1,5 @@
 # Datos y modelos: nunca al repositorio.
-data/
+data/*
 !data/.gitkeep
 
 # Assets binarios grandes de la dirección texto → señas (Fase 4).

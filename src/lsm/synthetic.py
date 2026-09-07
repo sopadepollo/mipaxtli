@@ -183,10 +183,6 @@ def to_frame(
     )
 
 
-def to_sequence(frames: tuple[RawFrame, ...]) -> Sequence:
-    return Sequence(frames=frames)
-
-
 def still_sequence(
     points_px: Points3,
     *,
