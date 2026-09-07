@@ -1,0 +1,50 @@
+# Servicios sin cámara: tests y entrenamiento.
+#
+# La captura y la demo en vivo NO están aquí, y es a propósito: necesitan webcam
+# y en Windows y macOS eso no funciona dentro del contenedor. Ver README.md.
+
+name: lsm-translator
+
+services:
+  # Criterio de aceptación de la Fase 0: ruff + mypy strict + pytest, sin cámara,
+  # sin MediaPipe y sin dataset.
+  #   docker compose -f docker/docker-compose.yml run --rm test
+  test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    # Sin volúmenes: se testea exactamente lo que quedó en la imagen, que es lo
+    # que hace reproducible el resultado de CI.
+    command: ["sh", "-c", "ruff check . && ruff format --check . && mypy && pytest"]
+
+  # Igual que `test` pero montando el código, para iterar sin reconstruir.
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../src:/app/src:ro
+      - ../tests:/app/tests:ro
+      - ../config.yaml:/app/config.yaml:ro
+    command: ["pytest", "-q"]
+
+  # Entrenamiento y evaluación (Fase 2). El dataset y los modelos se montan desde
+  # el host: `data/` está en .gitignore y no debe entrar a la imagen.
+  train:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../data:/app/data
+      - ../config.yaml:/app/config.yaml:ro
+    command: ["sh", "-c", "echo 'make train llega en la Fase 2' && exit 1"]
+
+  # Regenera los golden vectors dentro del contenedor, para comprobar que no
+  # dependen del sistema operativo ni de la versión de Python del host.
+  golden:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../tests/fixtures:/app/tests/fixtures
+    command: ["lsm-golden"]

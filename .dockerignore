@@ -1,0 +1,15 @@
+.git/
+.venv/
+data/
+web/
+assets/signs/*.webp
+assets/signs/*.gif
+assets/signs/*.mp4
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.env
+*:Zone.Identifier
