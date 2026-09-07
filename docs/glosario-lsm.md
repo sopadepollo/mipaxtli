@@ -99,6 +99,66 @@ matriz de confusión de la Fase 2.
 |Y|Y|false||—||19|
 |Z|Z|true||se dibuja la letra z||19|
 
+### PENDIENTE-HUMANO — inconsistencias detectadas en la tabla
+
+Estas las levantó la revisión automática de la Fase 0 (`tests/test_vocabulary.py`)
+o la lectura de la tabla. **Ninguna se puede resolver sin abrir el PDF**: son
+decisiones sobre la lengua, no sobre el código. Cada una lleva dónde verificar.
+
+**PENDIENTE-HUMANO 1 — `confundible_con` es asimétrico en cuatro pares.**
+Si X se confunde con Y, Y se confunde con X: la confusión no tiene sentido de la
+marcha. Hoy faltan las vueltas de:
+
+- `D` lista a `R`, pero `R` solo lista a `U`.
+- `L` lista a `E`, y `DOBLE_L` también, pero `E` solo lista a `A`.
+- `ENIE` lista a `N`, pero `N` solo lista a `M`.
+
+Decidir en cada caso si falta la vuelta o si sobra la ida. Importa porque esta
+columna es la hipótesis previa contra la que se contrastará la matriz de confusión
+real en la Fase 2, y una relación asimétrica hace que el par se revise en una
+dirección y no en la otra. Verificar pp. 15-18.
+
+**PENDIENTE-HUMANO 2 — `DOBLE_L` y `DOBLE_R` marcadas estáticas y sin listar a
+`L` ni a `R` como confundibles.**
+Es sospechoso: lo habitual en un dígrafo es ser la letra base más un movimiento o
+una repetición, y en ese caso serían dinámicas y confundibles con su base. Si de
+verdad son estáticas y distintas, conviene anotar por qué. Verificar pp. 16 y 18.
+
+**PENDIENTE-HUMANO 3 — `K` tiene dirección ambigua.**
+La trayectoria dice "izquierda a derecha o derecha a izquierda". Dos direcciones
+opuestas producen firmas de τ **inversas** para la misma etiqueta, y el DTW las
+tratará como dos señas distintas: entrenar con ambas mezcladas degrada la clase.
+Hay que decidir una de dos:
+
+- una dirección canónica única, y grabar solo esa; o
+- seña indiferente a la dirección, y en la Fase 5 guardar plantillas espejadas
+  para las dos.
+
+Verificar p. 16 y anotar la decisión aquí y en un ADR.
+
+**PENDIENTE-HUMANO 4 — las confusiones de letras dinámicas hay que evaluarlas en
+dos ejes, forma Y trazo.**
+`ENIE` y `Q` comparten trayectoria ("rotación de ida y vuelta") pero `Q` tiene
+`confundible_con` vacío. `K` y `X` comparten desplazamiento horizontal y tampoco
+se listan entre sí. Dos letras pueden separarse bien por configuración de mano y
+mal por recorrido, o al revés; la columna actual solo contempla lo primero.
+Considerar anotar la confusión de trazo por separado. Verificar pp. 16-19.
+
+**PENDIENTE-HUMANO 5 — `CH` ausente sin justificación.**
+La tabla incluye `LL` y `RR` pero no `CH`, que fue dígrafo del español hasta 1994 y
+aparece en varios alfabetos dactilológicos. Si la fuente primaria no lo trae,
+anotarlo explícitamente; si lo trae, falta la fila. Verificar pp. 15-19.
+
+**PENDIENTE-HUMANO 6 — `Z` traza tres segmentos.**
+Es un recorrido mucho más largo que el del resto de las letras dinámicas. Riesgo
+conocido: con `config.dtw.band_radius = 6` sobre 24 frames, la banda de
+Sakoe-Chiba puede quedar corta para alinear una seña que ocupa toda la ventana, y
+la `Z` saldría peor que las demás sin motivo aparente. **No cambiar el valor
+ahora** —se calibra con datos reales en la Fase 2—, solo mirar la `Z` aparte al
+leer la primera matriz de confusión.
+
+\---
+
 **Al llenar, prestar atención especial a:**
 
 * Las letras de configuración de puño cerrado con variación de pulgar. Son las que

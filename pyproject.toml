@@ -54,3 +54,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+markers = [
+    "glosario: valida el contenido de docs/glosario-lsm.md. Estos tests estan en rojo a proposito hasta que el equipo humano complete el glosario contra la fuente primaria; bloquean la Fase 1. Para trabajar en el nucleo: pytest -m 'not glosario'",
+]
