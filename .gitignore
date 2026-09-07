@@ -1,0 +1,23 @@
+# Datos y modelos: nunca al repositorio.
+data/
+!data/.gitkeep
+
+# Assets binarios grandes de la dirección texto → señas (Fase 4).
+assets/signs/*.webp
+assets/signs/*.gif
+assets/signs/*.mp4
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Entorno
+.env
+
+# Artefactos de descarga de Windows (alternate data streams de NTFS).
+*:Zone.Identifier
