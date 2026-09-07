@@ -61,6 +61,16 @@ def always(prediction: Prediction) -> Classify:
     return classify
 
 
+def responses(*predictions: Prediction) -> Classify:
+    """Devuelve las predicciones en orden; la última se repite indefinidamente."""
+    pending = list(predictions)
+
+    def classify(sequence: Sequence) -> Prediction:  # noqa: ARG001 — doble de pruebas
+        return pending.pop(0) if len(pending) > 1 else pending[0]
+
+    return classify
+
+
 def still_frames(
     count: int, *, at: tuple[float, float] = (640.0, 400.0)
 ) -> list[FrameSlot]:
@@ -249,14 +259,64 @@ def test_el_rechazo_cuesta_menos_que_la_emision() -> None:
     assert rejections > emissions
 
 
-def test_el_cooldown_espacia_las_emisiones_con_la_mano_quieta() -> None:
-    """Comportamiento documentado: con la mano quieta la letra se re-emite cada
-    `emit_cooldown_frames + stable_frames` frames. El cooldown acota la
-    repetición; eliminarla exigiría pedir movimiento entre letras, y eso cambia
-    el diagrama de §4.2."""
+# --------------------------------------------------------------------------- #
+# Regla de letras dobles
+# --------------------------------------------------------------------------- #
+
+
+def test_sostener_la_sena_no_repite_la_letra() -> None:
+    """Sin el cerrojo de repetición, mantener la mano quieta veinte frames escribe
+    "AAAA": la ventana se reestabiliza tras cada cooldown y vuelve a emitir."""
     events = run(still_frames(20))
 
-    assert emitted(events) == ["A", "A", "A", "A"]
+    assert emitted(events) == ["A"]
+
+
+def test_una_letra_distinta_sale_sin_pedir_rebote() -> None:
+    """Deletrear "casa" no puede exigir sacudir la mano entre cada par de letras."""
+    events = run(still_frames(20), responses(CONFIDENT_A, Prediction("B", 0.95)))
+
+    assert emitted(events) == ["A", "B"]
+
+
+def test_un_rebote_permite_la_letra_doble() -> None:
+    """ "carro" y "llave" necesitan emitir dos veces seguidas la misma letra."""
+    events = run([*still_frames(3), *moving_frames(3), *still_frames(6)])
+
+    assert emitted(events) == ["A", "A"]
+
+
+def test_perder_la_mano_tambien_libera_el_cerrojo() -> None:
+    events = run([*still_frames(3), *missing_frames(3), *still_frames(4)])
+
+    assert emitted(events) == ["A", "A"]
+
+
+def test_la_repeticion_bloqueada_se_reporta_con_su_propio_motivo() -> None:
+    """No es lo mismo que una confianza baja: el clasificador acertó, lo que falta
+    es el rebote. Quien depure la demo necesita poder distinguirlos."""
+    events = run(still_frames(20))
+
+    assert any(
+        isinstance(event, WindowRejected)
+        and event.reason is RejectionReason.REPEATED_LETTER
+        for event in events
+    )
+
+
+def test_el_rebote_dentro_del_cooldown_tambien_cuenta() -> None:
+    """El movimiento se evalúa en todos los estados, también durante EMIT.
+
+    Si el rebote cayera entero dentro del cooldown y no se mirara, el cerrojo no se
+    liberaría y la segunda letra quedaría bloqueada sin que quien firma pueda hacer
+    nada al respecto.
+    """
+    cooldown = CONFIG.segmentation.emit_cooldown_frames
+    stream = [*still_frames(3), *moving_frames(cooldown), *still_frames(4)]
+
+    events = run(stream)
+
+    assert emitted(events) == ["A", "A"]
 
 
 def test_una_ventana_inestable_se_rechaza_antes_de_clasificar() -> None:

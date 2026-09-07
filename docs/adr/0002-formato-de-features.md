@@ -76,11 +76,21 @@ Python/TypeScript imposible de rastrear tres semanas después:
   escritorio pasaban. Los `sequence_cases` del archivo de golden vectors incluyen
   σ como valor esperado, precisamente para cerrar ese agujero.
 - **Mapeo de índices del remuestreo:** `pos_j = (j · (T_src − 1)) / (T_ref − 1)`,
-  con el producto **antes** que la división. Escrito como
-  `(j / (T_ref − 1)) · (T_src − 1)` arrastra el redondeo del cociente intermedio y
-  desplaza filas que deberían quedarse quietas cuando `T_src = T_ref`.
+  con el producto **antes** que la división. La forma correcta hace un solo
+  redondeo —el numerador es un entero exacto— y la alternativa
+  `(j / (T_ref − 1)) · (T_src − 1)` hace dos, con lo que `pos_j` puede caer del
+  lado equivocado de un entero. Con `T_ref = 24` y `T_src` entre 2 y 200 las dos
+  formas difieren en 970 índices y en 7 de ellos cambia el `floor()`. La §3.2
+  documenta el detalle.
 - **Inicialización del suavizado:** `p̃_0 = p_0`. Arrancar en cero inventaría un
   movimiento desde el origen del encuadre que nadie ejecutó.
+
+**Lo que quedó fuera de este contrato.** La velocidad que consume la máquina de
+estados se calcula en `features.py`, porque necesita los intermedios geométricos
+del §1, pero **no está bajo `FEATURE_SPEC_VERSION`**: la versiona
+`SEGMENTATION_SPEC_VERSION` y la define la §6. La razón y el riesgo que arrastra
+—que ese umbral no puede usarse para enrutar letras dinámicas— están en
+`docs/adr/0004-contrato-de-segmentacion.md`.
 
 ## Alternativas consideradas
 

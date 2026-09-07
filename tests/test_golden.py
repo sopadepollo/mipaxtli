@@ -19,6 +19,8 @@ from typing import Any
 
 import pytest
 
+import lsm.features
+import lsm.segmentation
 from lsm.cli.golden import BASE_ID, MINIMUM_CASES
 from lsm.config import Config
 from lsm.features import (
@@ -29,6 +31,7 @@ from lsm.features import (
     extract_sequence_features,
     split_valid_runs,
 )
+from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.types import (
     FrameSlot,
     FrameStream,
@@ -94,7 +97,16 @@ def assert_vectors_close(
 
 def test_el_archivo_declara_la_version_del_spec(document: dict[str, Any]) -> None:
     assert document["feature_spec_version"] == FEATURE_SPEC_VERSION
+    assert document["segmentation_spec_version"] == SEGMENTATION_SPEC_VERSION
     assert document["tolerance"] == 1e-6
+
+
+def test_las_dos_versiones_de_contrato_viven_en_modulos_distintos() -> None:
+    """Se incrementan por motivos distintos: cambiar cómo se mide la velocidad no
+    puede obligar a reentrenar los modelos, y para que eso siga siendo cierto las
+    dos constantes no pueden acabar siendo la misma."""
+    assert "SEGMENTATION_SPEC_VERSION" not in vars(lsm.features)
+    assert "FEATURE_SPEC_VERSION" not in vars(lsm.segmentation)
 
 
 def test_cubre_la_cobertura_minima_obligatoria(document: dict[str, Any]) -> None:
@@ -219,6 +231,14 @@ def test_cada_caso_de_secuencia_reproduce_su_salida(document: dict[str, Any]) ->
             ):
                 assert_vectors_close(point, expected_point, tolerance, case["id"])
 
+            # §6: el contrato de segmentación viaja en el mismo archivo.
+            assert_vectors_close(
+                outcome.scales, expected_run["scales"], tolerance, case["id"]
+            )
+            assert_vectors_close(
+                outcome.velocities, expected_run["velocities"], tolerance, case["id"]
+            )
+
             if expected_run["dynamic_rows"] is None:
                 assert isinstance(outcome.dynamic, DynamicUnavailable), case["id"]
                 assert (
@@ -320,3 +340,37 @@ def test_una_secuencia_corta_no_produce_canal_dinamico(
     assert run["dynamic_rows"] is None
     assert run["dynamic_unavailable_reason"] == "TOO_FEW_SOURCE_FRAMES"
     assert run["frame_features"], "las features estáticas sí deben estar"
+
+
+def test_la_velocidad_de_una_mano_quieta_es_cero(document: dict[str, Any]) -> None:
+    """§6 verificable desde TypeScript sin tener que montar la máquina de estados."""
+    by_id = {case["id"]: case for case in document["sequence_cases"]}
+    run = by_id["still_sequence"]["expected"]["runs"][0]
+
+    assert run["velocities"]
+    assert all(velocity == 0.0 for velocity in run["velocities"])
+
+
+def test_la_velocidad_de_un_trazo_no_es_cero(document: dict[str, Any]) -> None:
+    by_id = {case["id"]: case for case in document["sequence_cases"]}
+    run = by_id["trajectory_arc"]["expected"]["runs"][0]
+
+    assert min(run["velocities"]) > 0.0
+
+
+def test_la_velocidad_no_depende_de_la_distancia_a_la_camara(
+    document: dict[str, Any],
+) -> None:
+    """El mismo trazo ejecutado más cerca: mano al doble, recorrido al doble."""
+    by_id = {case["id"]: case for case in document["sequence_cases"]}
+    far = by_id["trajectory_arc"]["expected"]["runs"][0]
+    near = by_id["trajectory_arc_closer"]["expected"]["runs"][0]
+
+    assert_vectors_close(far["velocities"], near["velocities"], 1e-9, "velocidad")
+
+
+def test_hay_una_velocidad_por_cada_par_de_frames(document: dict[str, Any]) -> None:
+    for case in document["sequence_cases"]:
+        for run in case["expected"]["runs"]:
+            assert len(run["scales"]) == run["length"], case["id"]
+            assert len(run["velocities"]) == run["length"] - 1, case["id"]

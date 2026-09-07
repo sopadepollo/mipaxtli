@@ -44,6 +44,7 @@ from lsm.features import (
     split_valid_runs,
 )
 from lsm.io.hands import dump_frame_stream
+from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.synthetic import (
     arc_offsets,
     canonical_hand,
@@ -458,6 +459,9 @@ def _run_expectation(features: SequenceFeatures, length: int) -> dict[str, Any]:
         "static_features": list(features.static.shape.values),
         "mean_scale": features.trajectory.mean_scale,
         "trajectory": [list(point) for point in features.trajectory.points],
+        # §6: contrato de segmentación, versionado aparte de las features.
+        "scales": list(features.scales),
+        "velocities": list(features.velocities),
     }
     if isinstance(dynamic, DynamicUnavailable):
         payload["dynamic_unavailable_reason"] = str(dynamic.reason)
@@ -509,6 +513,7 @@ def build_document(config: Config) -> dict[str, Any]:
 
     return {
         "feature_spec_version": FEATURE_SPEC_VERSION,
+        "segmentation_spec_version": SEGMENTATION_SPEC_VERSION,
         "tolerance": TOLERANCE,
         "generated_by": "lsm.cli.golden — Python es la referencia normativa",
         "config": {

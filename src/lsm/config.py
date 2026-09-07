@@ -83,7 +83,7 @@ class SegmentationConfig(_Section):
     min_detection_score: float = Field(default=0.5, gt=0.0, le=1.0)
 
     #: Velocidad por debajo de la cual se considera que la mano está quieta.
-    #: Unidades de mano por frame; ver `lsm.features.SequenceFeatures.velocities`.
+    #: Unidades de mano por frame; definida en `docs/feature-spec.md` §6.
     velocity_threshold: float = Field(default=0.02, gt=0.0, le=100.0)
 
     #: Cuántos frames consecutivos por debajo del umbral hacen falta para pasar de

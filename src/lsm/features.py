@@ -112,8 +112,12 @@ class SequenceFeatures:
     static: StaticFeatures
     trajectory: TrajectoryChannel
     dynamic: DynamicFeatures | DynamicUnavailable
-    #: Velocidad entre frames consecutivos, en unidades de mano por frame.
-    #: Longitud `T - 1`. Insumo de la máquina de estados, no del clasificador.
+    #: s_t del paso 4 por frame, en las unidades corregidas del paso 1. Para
+    #: pasarlas a píxeles, `scale_to_pixels`.
+    scales: tuple[float, ...]
+    #: Velocidad entre frames consecutivos, en unidades de mano por frame
+    #: (`feature-spec.md` §6). Longitud `T - 1`. Insumo de la máquina de estados,
+    #: no del clasificador: la versiona SEGMENTATION_SPEC_VERSION.
     velocities: tuple[float, ...]
     spec_version: int
 
@@ -419,10 +423,25 @@ def resample(
         i = floor(pos_j);  frac = pos_j − i
         out_j = rows[i] + frac · (rows[i+1] − rows[i])
 
-    El producto va **antes** que la división a propósito: `(j·(T−1))/(L−1)`
-    devuelve el índice exacto cuando `T == L`, mientras que `(j/(L−1))·(T−1)`
-    arrastra el redondeo del cociente intermedio y desplaza filas que deberían
-    quedarse quietas. Los extremos se preservan exactamente en ambos casos.
+    El producto va **antes** que la división, y no es cosmética.
+    `(j·(T_src−1))/(T_ref−1)` hace **un solo redondeo**: el numerador es un entero
+    exacto en float64 para cualquier tamaño realista, así que la única operación
+    inexacta es la división. `(j/(T_ref−1))·(T_src−1)` hace **dos**: redondea el
+    cociente y vuelve a redondear el producto, con lo que el error puede duplicarse
+    y, lo que importa, dejar `pos_j` en el lado equivocado de un entero.
+
+    No es teórico. Con `T_ref = 24` y `T_src` entre 2 y 200 las dos formas difieren
+    en 970 índices, y en 7 de ellos cambia el `floor()`, que es cuando de verdad se
+    lee otra fila. Uno de esos siete es `T_src = T_ref = 24`, `j = 13`: la forma
+    correcta da `13.0` y la otra `12.999999999999998`, de modo que la fila 13 se
+    reconstruye interpolando entre la 12 y la 13 en vez de copiarse.
+
+    Ese caso concreto vale la pena recordarlo: alguien que "simplifique" esta
+    expresión probablemente la comprobará con una secuencia de 24 frames, que es el
+    tamaño que más aparece, y aun así se romperá — solo que en el índice 13 y por
+    2e-15, muy por debajo de la tolerancia de 1e-6 del contrato. Lo detecta
+    `test_una_secuencia_ya_de_24_frames_se_remuestrea_a_si_misma`, que exige
+    igualdad exacta y no aproximada.
 
     Con una sola fila de origen se replica: no hay trayectoria que interpolar.
     """
@@ -496,24 +515,45 @@ def mean_displacement(before: Points3, after: Points3) -> float:
     return total / len(before)
 
 
-def _velocities(
-    geometries: tuple[_FrameGeometry, ...], mean_scale: float
-) -> tuple[float, ...]:
-    """Velocidad por par de frames consecutivos, en unidades de mano por frame.
+def _velocities(geometries: tuple[_FrameGeometry, ...]) -> tuple[float, ...]:
+    """Velocidad por par de frames consecutivos (`feature-spec.md` §6).
+
+    **Esta función no pertenece al contrato de features.** La versiona
+    `lsm.segmentation.SEGMENTATION_SPEC_VERSION`, no `FEATURE_SPEC_VERSION`: no
+    entra en el vector que consume el clasificador y cambiar su definición no
+    invalida ningún modelo entrenado. Vive aquí porque necesita los intermedios
+    geométricos del §1, no porque sea parte de ellos.
 
     Se mide sobre los puntos del paso 2 —sin trasladar—, de modo que cuenta tanto
-    el cambio de configuración de la mano como su desplazamiento por el encuadre:
-    la máquina de estados necesita saber que la mano está quieta, no solo que su
-    forma no cambió. Dividir por `s̄` la hace invariante a la distancia: la misma
-    seña ejecutada más cerca de la cámara no parece más rápida.
+    el desplazamiento de la mano por el encuadre como el cambio de configuración de
+    los dedos. Ver el §6 para la consecuencia de eso en las señas dinámicas.
 
-    Esta función no forma parte del vector de features, pero sí del contrato con
-    la implementación web: `segmentation.ts` tiene que medir la velocidad igual.
+    La escala divisora es la **media del par**, `(s_{t-1} + s_t) / 2`, y no la `s̄`
+    de la ventana. La diferencia importa: con `s̄`, el mismo par de frames da
+    velocidades distintas según qué otros frames haya en el buffer en ese momento,
+    así que una implementación incremental —que es la natural en TypeScript:
+    guardar el frame anterior y calcular al llegar el siguiente— no coincidiría con
+    una que recorre la ventana. Con la media del par, el valor de un par depende
+    solo de ese par.
     """
     return tuple(
-        mean_displacement(previous.canonical, current.canonical) / mean_scale
+        mean_displacement(previous.canonical, current.canonical)
+        / ((previous.scale + current.scale) / 2.0)
         for previous, current in pairwise(geometries)
     )
+
+
+def scale_to_pixels(scale: float, frame_height: int) -> float:
+    """Convierte la escala del paso 4 a píxeles.
+
+    Tras el paso 1 las coordenadas quedan en unidades de "píxel dividido por el
+    alto del frame" —`x·a = (px/ancho)·(ancho/alto) = px/alto`—, de modo que
+    multiplicar por el alto devuelve la medida a píxeles.
+
+    Sirve para el metadato objetivo de distancia del dataset: la escala en píxeles
+    es el número que `Distance.NEAR/MEDIUM/FAR` discretiza a ojo.
+    """
+    return scale * frame_height
 
 
 # --------------------------------------------------------------------------- #
@@ -542,7 +582,8 @@ def extract_sequence_features(sequence: Sequence, config: Config) -> ExtractionO
         static=aggregate_static(frame_vectors),
         trajectory=trajectory,
         dynamic=_dynamic_features(frame_vectors, trajectory, config),
-        velocities=_velocities(geometries, trajectory.mean_scale),
+        scales=tuple(geometry.scale for geometry in geometries),
+        velocities=_velocities(geometries),
         spec_version=FEATURE_SPEC_VERSION,
     )
 

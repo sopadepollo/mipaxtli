@@ -384,6 +384,8 @@ entrada por cada secuencia válida máxima con:
 | `frame_features` | `f_t` de cada frame. |
 | `static_features`, `dispersion` | `F` y σ del §2. |
 | `mean_scale`, `trajectory` | `s̄` y `τ_t` del §3.1, sin remuestrear. |
+| `scales` | `s_t` del paso 4 por frame, en las unidades corregidas del paso 1. |
+| `velocities` | `v_t` del §6, longitud `T − 1`. Es lo que `segmentation.ts` debe reproducir. |
 | `resampled_trajectory` | `τ` tras el remuestreo del §3.2, sin ponderar. |
 | `dynamic_rows` | `g_t` final: 24 filas de 44 componentes. |
 | `dynamic_unavailable_reason` | `TOO_FEW_SOURCE_FRAMES` si la secuencia se rechazó para el canal dinámico; en ese caso los dos campos anteriores van en `null`. |
@@ -395,6 +397,90 @@ porque los tres casos se comportan distinto y no basta con probar uno:
   se mide desde otro punto;
 - al final, la secuencia simplemente se corta antes y `τ` conserva su origen;
 - en medio quedan **dos** secuencias, no una con un salto.
+
+---
+
+## 6. Velocidad y estabilidad — contrato de segmentación
+
+**`SEGMENTATION_SPEC_VERSION = 1`** (`src/lsm/segmentation.py`).
+
+Esta sección **no está bajo `FEATURE_SPEC_VERSION`** y se versiona aparte. Las dos
+cosas cambian por motivos distintos: el vector de features cambia cuando cambia lo
+que consume el clasificador, y entonces hay que reentrenar y rechazar los modelos
+viejos; la segmentación cambia cuando se ajusta cómo se decide que una mano está
+quieta, y eso no invalida ningún modelo. Acoplarlas obligaría a reentrenar cada vez
+que se afina un umbral, lo cual es absurdo.
+
+`segmentation.ts` deberá reproducir esta sección igual que `features.ts` reproduce
+las §1 a §5. Los valores esperados viajan en los `sequence_cases` de
+`golden_features.json`, en los campos `scales` y `velocities`.
+
+### 6.1 Velocidad entre frames
+
+Entrada: dos frames válidos y consecutivos de la misma secuencia. Sea `q_t` el
+conjunto de puntos del frame `t` **tras el paso 2** —relación de aspecto corregida,
+`y` invertida y lateralidad canonizada— y `s_t` la escala del paso 4 de ese frame.
+
+```
+d_t   = ( Σ_i ‖ q_{t,i} - q_{t-1,i} ‖₂ ) / 21      # i ascendente, en 2D: z se ignora
+s_par = ( s_{t-1} + s_t ) / 2
+v_t   = d_t / s_par
+```
+
+- `‖·‖₂` es la norma euclidiana en el plano XY. `z` se ignora por la misma razón
+  que en el paso 4: es ruido.
+- La suma recorre los landmarks en orden de índice ascendente y divide al final,
+  igual que el §5.4 exige para el promedio del §2.
+- Una ventana de `T` frames produce `T - 1` velocidades. La máquina de estados usa
+  la del último par.
+- `q_t` **no está trasladado ni escalado**: es el paso 2, no el 5.
+
+### 6.2 Por qué la escala del par y no otra
+
+Las tres opciones —`s_t`, `s_{t-1}` o la `s̄` de la ventana— dan números distintos
+en cuanto la mano se acerca o se aleja de la cámara, así que la paridad depende de
+fijar una. **Se usa la media del par, `(s_{t-1} + s_t) / 2`.**
+
+Contra la `s̄` de la ventana: con ella, el mismo par de frames produce velocidades
+distintas según qué otros frames haya en el buffer en ese instante. Una
+implementación incremental —guardar el frame anterior y calcular al llegar el
+siguiente, que es la forma natural de escribirlo en TypeScript sobre un stream— no
+coincidiría con una que recorre la ventana entera, y la discrepancia dependería del
+estado del buffer, que es la peor clase de discrepancia para depurar. Con la media
+del par, el valor de un par depende solo de ese par.
+
+Contra `s_t` o `s_{t-1}` a secas: funcionan y son locales al par, pero son
+asimétricas. La media no depende de en qué dirección se recorra el tiempo, que es
+una propiedad barata y conviene tener.
+
+Dividir por una escala —cualquiera de las tres— es lo que hace la velocidad
+invariante a la distancia: la misma seña ejecutada más cerca de la cámara recorre
+más píxeles por frame, pero no es más rápida.
+
+### 6.3 Consecuencia: esto no sirve para enrutar estáticas contra dinámicas
+
+`q_t` no está trasladado, así que `v_t` mide **dos cosas a la vez**: cuánto se
+desplazó la mano por el encuadre y cuánto cambió la configuración de los dedos.
+
+Para las letras estáticas es exactamente lo que se quiere: la ventana solo es
+estable si la mano ni viajó ni siguió acomodando los dedos.
+
+**Para las dinámicas es una trampa.** En una J, una Ñ o una Z el movimiento *es* la
+seña, así que `v_t` se mantiene alta mientras se ejecuta y el criterio de
+estabilidad no se cumple nunca. Una máquina de estados que solo espere a
+`v_t < umbral` jamás emitirá una letra dinámica: se quedará en TRACKING hasta que
+la persona termine el trazo y se detenga, y para entonces la ventana ya contiene el
+final del movimiento y no el trazo completo.
+
+De ahí la consecuencia que importa registrar ahora: **el enrutamiento entre el
+clasificador estático y el dinámico de la Fase 5 no puede colgar de este mismo
+umbral.** Necesitará su propio criterio —energía de movimiento sostenida con
+patrón, no ruido, como apunta `ARQUITECTURA.md` §4.2— y muy probablemente un camino
+distinto por la máquina de estados: capturar la ventana completa mientras hay
+movimiento coherente, en vez de esperar a que se detenga.
+
+No se resuelve aquí. Se deja escrito para no descubrirlo en la Fase 5 con el
+dataset ya grabado. Ver `docs/adr/0004-contrato-de-segmentacion.md`.
 
 ---
 

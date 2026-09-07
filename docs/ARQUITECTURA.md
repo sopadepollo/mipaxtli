@@ -198,11 +198,51 @@ documentados en `src/lsm/segmentation.py`:
    la clasificación unos frames. `config.py` valida que el cooldown de rechazo no
    supere al de emisión.
 
-Comportamiento conocido y aceptado: con la mano quieta, la letra se re-emite cada
-`emit_cooldown_frames + stable_frames` frames. El cooldown acota la repetición
-pero no la elimina. Eliminarla exigiría pedir movimiento explícito entre letras,
-que es una arista nueva en este diagrama; si las pruebas en vivo de la Fase 3
-muestran que molesta, se propone aquí y se registra en un ADR.
+#### Regla de letras dobles
+
+Resuelta en la Fase 0, tras comprobar que sin ella sostener la seña escribe la
+misma letra una y otra vez:
+
+> **Una letra distinta a la anterior se emite en cuanto la ventana vuelve a ser
+> estable. Para repetir la misma letra se exige haber salido de STABLE primero.**
+
+"Salir de STABLE" significa aquí que la mano se movió por encima de
+`velocity_threshold`, o que se perdió la detección. No cuenta la salida automática
+hacia EMIT al emitir, porque entonces la regla no restringiría nada.
+
+El porqué de las dos mitades:
+
+- **Pedir movimiento entre todas las letras no es viable.** Deletrear "casa"
+  convertiría el ejercicio en sacudir la mano entre cada par de letras.
+- **Pedirlo entre letras iguales sí.** "carro" y "llave" necesitan emitir dos veces
+  seguidas la misma letra, y en dactilología real los dobles ya se marcan con un
+  rebote pequeño. La regla coincide con lo que la gente hace de todos modos.
+
+En `segmentation.py` el cerrojo es `pending_repeat`: se pone al emitir, se libera
+con el primer frame que supere el umbral de velocidad —el rebote— o al perder la
+mano, y mientras está puesto una predicción con la misma etiqueta produce
+`WindowRejected(REPEATED_LETTER)` en vez de una emisión. La velocidad se evalúa en
+todos los estados, incluido el cooldown de EMIT: si el rebote cayera entero dentro
+del cooldown y no se mirara, la segunda letra quedaría bloqueada sin que quien
+firma pueda hacer nada.
+
+El `emit_cooldown_frames` sigue existiendo y resuelve otro problema: no emitir
+treinta veces por segundo mientras la ventana sigue estable.
+
+Esto es solo la lógica de estados. Cómo se acumulan las letras en palabras, y en
+particular qué se hace con los dígrafos LL y RR —¿"RR" es un símbolo o dos "R"
+consecutivas?—, es `spelling.py` y llega en la Fase 3.
+
+#### El umbral de velocidad no sirve para enrutar dinámicas
+
+`docs/feature-spec.md` §6 define cómo se mide la velocidad y la versiona aparte,
+con `SEGMENTATION_SPEC_VERSION`. Ahí queda registrada una consecuencia que afecta
+directamente a la Fase 5: como la velocidad se mide sobre puntos sin trasladar,
+captura tanto el desplazamiento de la mano como el cambio de configuración de los
+dedos, y en una letra dinámica el movimiento **es** la seña. El criterio de
+estabilidad nunca se cumplirá mientras se ejecuta una J o una Z, así que el
+enrutamiento estático/dinámico necesitará su propio criterio y probablemente un
+camino distinto por esta máquina. Ver `docs/adr/0004-contrato-de-segmentacion.md`.
 
 ### 4.3 Estáticas vs dinámicas: dos clasificadores, una interfaz
 
