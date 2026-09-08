@@ -5,12 +5,14 @@ referencia normativa para las personas; este módulo lo es para el código, y
 `tests/test_vocabulary.py` verifica que los dos digan lo mismo. Sin esa
 verificación habría dos fuentes de verdad, que es lo mismo que no tener ninguna.
 
-**Este módulo transcribe el glosario tal como está, errores incluidos.** Hoy la
-tabla tiene relaciones `confundible_con` asimétricas y las 29 descripciones
-vacías. No se corrigen aquí: son decisiones que exigen consultar las páginas 15-19
-de *Manos con voz*, y falsearlas en código sería peor que dejarlas en rojo. Los
-tests marcados `glosario` fallan a propósito hasta que el equipo humano las
-resuelva contra la fuente primaria.
+**Este módulo transcribe el glosario tal como está.** No corrige ni completa nada
+por su cuenta: si la tabla tuviera un hueco o una incoherencia, aquí se reflejaría
+igual y los tests marcados `glosario` lo dirían. Rellenarlo desde el código sería
+inventar LSM, que es exactamente lo que este proyecto no debe hacer.
+
+Las descripciones se guardan como prosa. Los `<br />` del Markdown son saltos de
+línea de la tabla, no parte del texto: la tabla los necesita porque una celda no
+puede contener saltos reales.
 
 Advertencia que vale repetir: **LSM no es ASL.** Casi todo el material que circula
 en internet como "abecedario en lengua de señas" es estadounidense. Cada fila lleva
@@ -119,20 +121,107 @@ def _spec(
 
 
 _LETTERS: Final = (
-    _spec(Label.A, "A", confundible=(Label.E,), pagina=15),
-    _spec(Label.B, "B", confundible=(Label.F,), pagina=15),
-    _spec(Label.C, "C", confundible=(Label.O,), pagina=15),
-    _spec(Label.D, "D", confundible=(Label.U, Label.R), pagina=15),
-    _spec(Label.E, "E", confundible=(Label.A,), pagina=15),
-    _spec(Label.F, "F", confundible=(Label.B,), pagina=15),
-    _spec(Label.G, "G", confundible=(Label.H,), pagina=16),
-    _spec(Label.H, "H", confundible=(Label.G,), pagina=16),
-    _spec(Label.I, "I", confundible=(Label.J,), pagina=16),
+    _spec(
+        Label.A,
+        "A",
+        descripcion=(
+            "Mano cerrada, se muestran las uñas y se estira el dedo pulgar "
+            "hacia un lado. La palma mira al frente"
+        ),
+        confundible=(Label.E, Label.L, Label.DOBLE_L),
+        pagina=15,
+    ),
+    _spec(
+        Label.B,
+        "B",
+        descripcion=(
+            "Dedos índice, medio, anular y meñique se estiran unidos y el "
+            "pulgar se dobla dirección a la palma, la cual mira al frente"
+        ),
+        confundible=(Label.F,),
+        pagina=15,
+    ),
+    _spec(
+        Label.C,
+        "C",
+        descripcion=(
+            "Dedos índice, medio, anular y meñique se mantienen unidos y en "
+            "posición cóncava; el pulgar también se pone de esa forma. La "
+            "palma mira a un lado"
+        ),
+        confundible=(Label.O,),
+        pagina=15,
+    ),
+    _spec(
+        Label.D,
+        "D",
+        descripcion=(
+            "Dedos medio, anular, meñique y pulgar se unen por las puntas y "
+            "el dedo índice se estira. La palma mira al frente"
+        ),
+        confundible=(Label.U, Label.R, Label.DOBLE_R),
+        pagina=15,
+    ),
+    _spec(
+        Label.E,
+        "E",
+        descripcion=(
+            "Dedos completamente doblados, se muestran las uñas. La palma "
+            "mira al frente"
+        ),
+        confundible=(Label.A, Label.L, Label.DOBLE_L),
+        pagina=15,
+    ),
+    _spec(
+        Label.F,
+        "F",
+        descripcion=(
+            "Mano abierta y los dedos unidos, se dobla el índice hasta que "
+            "su parte lateral toque la yema del pulgar. La palma mira a un "
+            "lado"
+        ),
+        confundible=(Label.B,),
+        pagina=15,
+    ),
+    _spec(
+        Label.G,
+        "G",
+        descripcion=(
+            "Mano cerrada y los dedos índice y pulgar estirados. La palma mira adentro"
+        ),
+        confundible=(Label.H,),
+        pagina=16,
+    ),
+    _spec(
+        Label.H,
+        "H",
+        descripcion=(
+            "Mano cerrada y los dedos índice y medio estirados y unidos, se "
+            "extiende el dedo pulgar señalando hacia arriba. La palma mira "
+            "adentro"
+        ),
+        confundible=(Label.G,),
+        pagina=16,
+    ),
+    _spec(
+        Label.I,
+        "I",
+        descripcion=(
+            "Mano cerrada, el dedo meñique se estira señalando hacia "
+            "arriba. La palma se pone de lado"
+        ),
+        confundible=(Label.J,),
+        pagina=16,
+    ),
     _spec(
         Label.J,
         "J",
         dinamica=True,
-        trayectoria="hacia abajo y vuelta en u",
+        descripcion=(
+            "Mano cerrada, el dedo meñique bien estirado señalando hacia "
+            "arriba y la palma a un lado dibuja una j en el aire"
+        ),
+        trayectoria="dibuja una j en el aire",
         confundible=(Label.I,),
         pagina=16,
     ),
@@ -140,51 +229,198 @@ _LETTERS: Final = (
         Label.K,
         "K",
         dinamica=True,
-        trayectoria="izquierda a derecha o derecha a izquierda",
+        descripcion=(
+            "Se cierra la mano con los dedos índice, medio y pulgar "
+            "estirados. La yema del pulgar se pone entre el índice y el "
+            "medio. Se mueve la muñeca hacia arriba"
+        ),
+        trayectoria="se mueve la muneca hacia arriba",
         confundible=(Label.P,),
         pagina=16,
     ),
-    _spec(Label.L, "L", confundible=(Label.E,), pagina=16),
-    _spec(Label.DOBLE_L, "LL", confundible=(Label.E,), pagina=16),
-    _spec(Label.M, "M", confundible=(Label.N,), pagina=17),
-    _spec(Label.N, "N", confundible=(Label.M,), pagina=17),
+    _spec(
+        Label.L,
+        "L",
+        descripcion=(
+            "Mano cerrada y los dedos índice y pulgar estirados, se forma "
+            "una l. La palma mira al frente"
+        ),
+        confundible=(Label.E, Label.A, Label.DOBLE_L),
+        pagina=16,
+    ),
+    _spec(
+        Label.DOBLE_L,
+        "LL",
+        dinamica=True,
+        descripcion=(
+            "Mano cerrada y los dedos índice y pulgar estirados, se forma "
+            "una l. La palma mira al frente"
+        ),
+        trayectoria="movimientos de adelante a atras u horizontales",
+        confundible=(Label.E, Label.A, Label.L),
+        pagina=16,
+    ),
+    _spec(
+        Label.M,
+        "M",
+        descripcion=(
+            "Mano cerrada, se ponen los dedos índice, medio y anular sobre el pulgar"
+        ),
+        confundible=(Label.N,),
+        pagina=17,
+    ),
+    _spec(
+        Label.N,
+        "N",
+        descripcion=("Mano cerrada, se ponen los dedos índice y medio sobre el pulgar"),
+        confundible=(Label.M, Label.ENIE),
+        pagina=17,
+    ),
     _spec(
         Label.ENIE,
         "Ñ",
         dinamica=True,
+        descripcion=(
+            "Mano cerrada, se ponen los dedos índice y medio sobre el "
+            "pulgar. Se mueve la muñeca a los lados"
+        ),
         trayectoria="rotacion de ida y vuelta",
-        confundible=(Label.N,),
+        confundible=(Label.N, Label.Q),
         pagina=17,
     ),
-    _spec(Label.O, "O", confundible=(Label.C,), pagina=17),
-    _spec(Label.P, "P", confundible=(Label.K,), pagina=17),
+    _spec(
+        Label.O,
+        "O",
+        descripcion=(
+            "Con la mano se forma una letra o. Todos los dedos se tocan por las puntas"
+        ),
+        confundible=(Label.C,),
+        pagina=17,
+    ),
+    _spec(
+        Label.P,
+        "P",
+        descripcion=(
+            "Mano cerrada y los dedos índice, medio y pulgar estirados, se "
+            "pone la yema del pulgar entre el índice y el medio"
+        ),
+        confundible=(Label.K,),
+        pagina=17,
+    ),
     _spec(
         Label.Q,
         "Q",
         dinamica=True,
+        descripcion=(
+            "Mano cerrada, se ponen los dedos índice y pulgar en posición "
+            "de garra. La palma mira hacia abajo, y se mueve la muñeca "
+            "hacia los lados"
+        ),
         trayectoria="rotacion de ida y vuelta",
+        confundible=(Label.ENIE,),
         pagina=17,
     ),
-    _spec(Label.R, "R", confundible=(Label.U,), pagina=18),
-    _spec(Label.DOBLE_R, "RR", pagina=18),
-    _spec(Label.S, "S", confundible=(Label.T,), pagina=18),
-    _spec(Label.T, "T", confundible=(Label.S,), pagina=18),
-    _spec(Label.U, "U", confundible=(Label.R, Label.D), pagina=18),
-    _spec(Label.V, "V", confundible=(Label.W,), pagina=18),
-    _spec(Label.W, "W", confundible=(Label.V,), pagina=18),
+    _spec(
+        Label.R,
+        "R",
+        descripcion=(
+            "Mano cerrada, se estiran y entrelazan los dedos índice y "
+            "medio. La palma mira al frente"
+        ),
+        confundible=(Label.U, Label.D, Label.DOBLE_R),
+        pagina=18,
+    ),
+    _spec(
+        Label.DOBLE_R,
+        "RR",
+        dinamica=True,
+        descripcion=(
+            "Mano cerrada, se estiran y entrelazan los dedos índice y "
+            "medio. La palma mira al frente"
+        ),
+        trayectoria="movimientos de adelante a atras u horizontales",
+        confundible=(Label.U, Label.D, Label.R),
+        pagina=18,
+    ),
+    _spec(
+        Label.S,
+        "S",
+        descripcion=(
+            "Mano cerrada, se pone el pulgar sobre los otros dedos. La "
+            "palma mira al frente"
+        ),
+        confundible=(Label.T,),
+        pagina=18,
+    ),
+    _spec(
+        Label.T,
+        "T",
+        descripcion=(
+            "Mano cerrada, el pulgar se pone entre el índice y el medio. La "
+            "palma mira al frente"
+        ),
+        confundible=(Label.S,),
+        pagina=18,
+    ),
+    _spec(
+        Label.U,
+        "U",
+        descripcion=(
+            "Mano cerrada, se estiran los dedos índice y medio unidos. La "
+            "palma mira al frente"
+        ),
+        confundible=(Label.R, Label.DOBLE_R, Label.D),
+        pagina=18,
+    ),
+    _spec(
+        Label.V,
+        "V",
+        descripcion=(
+            "Mano cerrada, se estiran los dedos índice y medio separados. "
+            "La palma mira al frente"
+        ),
+        confundible=(Label.W,),
+        pagina=18,
+    ),
+    _spec(
+        Label.W,
+        "W",
+        descripcion=(
+            "Mano cerrada, se estiran los dedos índice, medio y anular "
+            "separados. La palma mira al frente"
+        ),
+        confundible=(Label.V,),
+        pagina=18,
+    ),
     _spec(
         Label.X,
         "X",
         dinamica=True,
-        trayectoria="de un lado al otro horizontalmente, de ida y vuelta",
+        descripcion=(
+            "Mano cerrada, el índice y el pulgar en posición de garra y la "
+            "palma dirigida a un lado, se realiza un movimiento al frente y "
+            "de regreso"
+        ),
+        trayectoria="movimiento al frente y de regreso",
         pagina=19,
     ),
-    _spec(Label.Y, "Y", pagina=19),
+    _spec(
+        Label.Y,
+        "Y",
+        descripcion=(
+            "Mano cerrada, se estira el meñique y el pulgar. La palma mira hacia dentro"
+        ),
+        pagina=19,
+    ),
     _spec(
         Label.Z,
         "Z",
         dinamica=True,
-        trayectoria="se dibuja la letra z",
+        descripcion=(
+            "Mano cerrada, el dedo índice estirado y la palma al frente, se "
+            "dibuja una letra z en el aire"
+        ),
+        trayectoria="dibuja una letra z en el aire",
         pagina=19,
     ),
 )

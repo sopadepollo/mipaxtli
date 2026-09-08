@@ -69,6 +69,16 @@ def parse_glossary_table() -> list[dict[str, str]]:
     return parsed
 
 
+def normaliza(celda: str) -> str:
+    """Quita los `<br />` de la tabla y colapsa los espacios.
+
+    Los saltos de línea son de la presentación, no del texto: una celda de una
+    tabla Markdown no puede contener saltos reales, así que quien redactó el
+    glosario los escribió como HTML. `vocabulary.py` guarda la prosa.
+    """
+    return re.sub(r"\s+", " ", re.sub(r"<br\s*/?>", " ", celda)).strip()
+
+
 def parse_confundible(cell: str) -> set[str]:
     return {item.strip() for item in cell.split(",") if item.strip()}
 
@@ -98,8 +108,10 @@ def test_el_codigo_transcribe_el_documento_sin_desviarse() -> None:
 
         assert letter.display == row["letra"], label
         assert letter.es_dinamica is (row["es_dinamica"] == "true"), label
-        assert letter.trayectoria == row["trayectoria"], label
-        assert letter.descripcion == row["descripción de la configuración"], label
+        assert letter.trayectoria == normaliza(row["trayectoria"]), label
+        assert letter.descripcion == normaliza(
+            row["descripción de la configuración"]
+        ), label
         assert letter.confundible_con == {
             Label(name) for name in parse_confundible(row["confundible_con"])
         }, label
