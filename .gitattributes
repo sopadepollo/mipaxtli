@@ -1,0 +1,15 @@
+# Fin de linea LF en todo el repositorio, tambien en Windows.
+#
+# El proyecto se edita desde Windows y desde WSL, y sin esto un editor del lado
+# Windows convierte archivos enteros a CRLF: el diff pasa de 60 lineas reales a
+# 422 y la revision se vuelve inutil. En el Makefile es peor que cosmetico,
+# porque los \r acaban pasando al shell dentro de las recetas.
+* text=auto eol=lf
+
+# Binarios: que git no los toque.
+*.png binary
+*.jpg binary
+*.webp binary
+*.gif binary
+*.mp4 binary
+*.pdf binary
