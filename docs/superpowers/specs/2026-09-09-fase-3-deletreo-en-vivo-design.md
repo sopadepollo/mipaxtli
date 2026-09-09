@@ -99,6 +99,26 @@ sostenida. Aquí el problema es idéntico un nivel más arriba: la mano abajo no
 evento, es un estado que dura, y sin cerrojo pondría un espacio en cada frame. Se
 libera con el primer `HandPresent`.
 
+### Dos reglas que cierran agujeros reales
+
+**La clase negativa nunca escribe.** `segmentation.py:320` filtra `UNKNOWN` y la
+confianza por debajo del umbral, pero **no filtra `NONE`**: si el clasificador
+predice la clase negativa con confianza suficiente —y con 127 muestras de `NONE`
+acertando el 100% en la Fase 2, lo hará a menudo— llega un `LetterEmitted` con
+`label="NONE"`. Escribirlo sería poner una letra cada vez que la persona baja la
+mano o transita entre señas, que es exactamente lo que la clase negativa existe
+para evitar.
+
+`step` descarta `LetterSignal(NONE)` sin tocar el estado. Va aquí y no en
+`cli/demo.py` porque es un criterio, y los criterios viven en código puro
+(`CLAUDE.md` regla 2); y no en `segmentation.py` porque su contrato está versionado
+y no hay motivo para tocarlo.
+
+**El espacio no se pone sobre una palabra vacía.** Bajar la mano antes de empezar,
+o dos veces seguidas, no debe producir espacios sueltos ni dobles. Si `word` está
+vacía, la ausencia marca `space_emitted` igual —para no reintentarlo en cada
+frame— pero no añade nada a `finished`.
+
 ## 4. Los controles
 
 | Control | Señal | Qué hace |
@@ -155,8 +175,12 @@ El modelo se carga de `data/models/static_knn.json` con
 `StaticKnnClassifier.from_export`, que ya rechaza un `feature_spec_version` o un
 `handedness_convention` que no coincidan.
 
-`--desde-dataset RUTA` sustituye la cámara por las muestras de esa ruta,
-concatenadas con huecos entre ellas. Misma tubería, sin webcam.
+`--desde-dataset RUTA` sustituye la cámara. `RUTA` es un directorio del árbol de
+`data/raw`; las muestras se leen en orden alfabético de ruta —que es el orden en
+que se grabaron, porque el índice va en el nombre— y se concatenan separadas por
+`config.spelling.space_after_absent_frames` frames inválidos, de modo que la
+segmentación vea entre ellas la misma ausencia de mano que vería en vivo. Sin ese
+hueco las señas se fundirían en una sola ventana. Misma tubería, sin webcam.
 
 ## 6. El HUD
 
@@ -206,14 +230,19 @@ comprueba.
 - `DOBLE_R` renderiza `rr` y se borra de una; dos `R` renderizan `rr` y se borran
   de dos. Es la prueba de la decisión de §3
 - `ENTER` cierra la frase y deja el estado vacío
+- `LetterSignal(NONE)` **no escribe nada** y deja el estado intacto
+- la mano abajo con la palabra vacía no produce espacio, ni al principio ni entre
+  dos ausencias seguidas
 
 **`tests/test_cli_demo.py`** — el criterio de la fase, sin cámara:
 
-- una palabra de cinco letras construida con secuencias sintéticas produce
-  exactamente esas cinco letras: ni una de más por la ventana que sigue estable, ni
-  una de menos por el cooldown
-- una palabra con letra doble ejercita la regla de letras dobles: sin el rebote no
-  se emite la segunda
+- `CASAS` —cinco letras, todas estáticas, con `A` y `S` repetidas no
+  consecutivas— construida con secuencias sintéticas produce exactamente esas
+  cinco letras: ni una de más por la ventana que sigue estable, ni una de menos
+  por el cooldown. **Este es el criterio de la fase.**
+- `CANNA` ejercita la regla de letras dobles: dos `N` seguidas solo se emiten si
+  entre ellas hay movimiento por encima de `velocity_threshold`. Sin el rebote se
+  emite una sola, y el test lo exige en los dos sentidos
 - nada por debajo de `segmentation.min_confidence` llega al buffer
 - la mano abajo entre dos palabras produce un espacio y uno solo
 
