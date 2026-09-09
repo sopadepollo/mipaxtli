@@ -535,13 +535,15 @@ Añade los dos campos a `SpellingState`:
 Amplía el `match` de `step`:
 
 ```python
-match signal:
-    case LetterSignal(label=label):
-        return _escribir_letra(state, label)
-    case HandPresent():
-        return StepResult(state=replace(state, absent_frames=0, space_emitted=False))
-    case HandAbsent():
-        return _mano_ausente(state, config)
+    match signal:
+        case LetterSignal(label=label):
+            return _escribir_letra(state, label)
+        case HandPresent():
+            return StepResult(
+                state=replace(state, absent_frames=0, space_emitted=False)
+            )
+        case HandAbsent():
+            return _mano_ausente(state, config)
 ```
 
 Y la función nueva:
@@ -718,7 +720,9 @@ class TextCommitted:
 Amplía los alias:
 
 ```python
-Signal: TypeAlias = LetterSignal | HandPresent | HandAbsent | Backspace | CommitText
+Signal: TypeAlias = (
+    LetterSignal | HandPresent | HandAbsent | Backspace | CommitText
+)
 SpellingEvent: TypeAlias = (
     LetterWritten | SpaceWritten | SymbolDeleted | NothingToDelete | TextCommitted
 )
@@ -881,24 +885,12 @@ def draw_demo_hud(image: Any, state: DemoHudState) -> None:
     _panel(image, 0, 0, ancho, 96)
 
     cv2.putText(
-        image,
-        f"texto:   {state.texto}",
-        (12, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
+        image, f"texto:   {state.texto}", (12, 30),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA,
     )
     cv2.putText(
-        image,
-        f"palabra: {state.palabra}",
-        (12, 58),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (200, 200, 200),
-        1,
-        cv2.LINE_AA,
+        image, f"palabra: {state.palabra}", (12, 58),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA,
     )
 
     confianza = "—" if state.ultima is None else f"{state.ultima.confidence:.2f}"
@@ -908,36 +900,20 @@ def draw_demo_hud(image: Any, state: DemoHudState) -> None:
         image,
         f"{state.estado}   ultima: {letra} ({confianza})   sigma: {sigma}",
         (12, 84),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (180, 220, 180),
-        1,
-        cv2.LINE_AA,
+        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 220, 180), 1, cv2.LINE_AA,
     )
 
     if state.mensaje:
         _panel(image, 0, alto - 40, ancho, 40)
         cv2.putText(
-            image,
-            state.mensaje,
-            (12, alto - 14),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (120, 200, 255),
-            1,
-            cv2.LINE_AA,
+            image, state.mensaje, (12, alto - 14),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (120, 200, 255), 1, cv2.LINE_AA,
         )
 
     aviso = "las 8 letras dinamicas llegan en la Fase 5"
     cv2.putText(
-        image,
-        aviso,
-        (12, alto - 48),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        (140, 140, 140),
-        1,
-        cv2.LINE_AA,
+        image, aviso, (12, alto - 48),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1, cv2.LINE_AA,
     )
 ```
 
@@ -1277,9 +1253,7 @@ from lsm.types import FrameSlot, Prediction, Sequence
 from lsm.vocabulary import Label
 
 
-def still_frames(
-    count: int, *, at: tuple[float, float] = (640.0, 400.0)
-) -> list[FrameSlot]:
+def still_frames(count: int, *, at: tuple[float, float] = (640.0, 400.0)) -> list[FrameSlot]:
     """La mano quieta en el mismo sitio: velocidad cero, la ventana se estabiliza."""
     frame = to_frame(translated(canonical_hand(), *at), width=1280, height=720)
     return [frame for _ in range(count)]
@@ -1400,9 +1374,9 @@ def test_nada_por_debajo_del_umbral_llega_al_buffer() -> None:
 def test_la_mano_abajo_entre_dos_palabras_pone_un_espacio_y_uno_solo() -> None:
     sesion = Sesion(config=CONFIG)
     palabras = (Label.C, Label.A, Label.S, Label.A)
-    hueco: list[FrameSlot] = [InvalidFrame(reason=InvalidReason.NO_HAND)] * (
-        CONFIG.spelling.space_after_absent_frames * 2
-    )
+    hueco: list[FrameSlot] = [
+        InvalidFrame(reason=InvalidReason.NO_HAND)
+    ] * (CONFIG.spelling.space_after_absent_frames * 2)
     frames = [*_frames(palabras[:2]), *hueco, *_frames(palabras[2:])]
 
     for evento in run_segmentation(
@@ -1491,9 +1465,7 @@ def _sesion_en_vivo(
     with Camera.from_config(config.capture).open() as camera:
         detector = build_detector(config)
         try:
-            for evento in run_segmentation(
-                flujo(camera, detector), config, classifier.predict
-            ):
+            for evento in run_segmentation(flujo(camera, detector), config, classifier.predict):
                 aplicar_evento(sesion, evento)
         finally:
             detector.close()
