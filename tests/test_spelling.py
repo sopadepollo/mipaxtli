@@ -130,3 +130,22 @@ def test_el_espacio_emite_su_evento() -> None:
     resultado = step(state, HandAbsent(), CONFIG)
 
     assert isinstance(resultado.event, SpaceWritten)
+
+
+def test_el_cerrojo_sobrevive_a_una_letra_sin_mano_de_vuelta() -> None:
+    """El cerrojo no es redundante con la guarda de palabra vacia.
+
+    Si una letra llega mientras la ausencia sigue en curso —sin HandPresent que
+    la libere—, el siguiente HandAbsent encuentra `absent_frames` ya por encima
+    del umbral y una palabra con contenido. Sin `space_emitted` la cerraria de
+    golpe, tras una sola letra. Con el, no pasa nada hasta que la mano vuelva.
+    """
+    state = aplicar([*letras(Label.C, Label.A), *ausencia(UMBRAL)])
+    assert state.finished == ((Label.C, Label.A),)
+
+    resultado = step(state, LetterSignal(label=Label.S), CONFIG)
+    resultado = step(resultado.state, HandAbsent(), CONFIG)
+
+    assert resultado.event is None, "el cerrojo sigue puesto: no se cierra nada"
+    assert resultado.state.word == (Label.S,)
+    assert resultado.state.finished == ((Label.C, Label.A),)

@@ -136,7 +136,11 @@ def _escribir_letra(state: SpellingState, label: Label) -> StepResult:
 
 
 def _mano_ausente(state: SpellingState, config: Config) -> StepResult:
-    """Cierra la palabra cuando la ausencia deja de ser un parpadeo."""
+    """Cierra la palabra cuando la ausencia deja de ser un parpadeo.
+
+    Asume que quien emite las señales manda un `HandPresent` por cada frame con
+    mano: ese evento resetea los dos cerrojos (`absent_frames` y `space_emitted`).
+    """
     absent = state.absent_frames + 1
     alcanzado = absent >= config.spelling.space_after_absent_frames
 
