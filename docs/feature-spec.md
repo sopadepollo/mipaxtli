@@ -57,6 +57,22 @@ MediaPipe Hands entrega 21 landmarks por mano, cada uno con `(x, y, z)`:
 - Si no se detecta ninguna mano, el frame se marca **inválido**. Los frames
   inválidos no se interpolan: interrumpen la secuencia.
 
+> **Nota (no altera ningún paso ni la versión del spec).** Lo anterior dice qué
+> imagen recibe el detector. Qué etiqueta **devuelve** es otra cosa, y en MediaPipe
+> las dos no coinciden: determina la lateralidad *asumiendo que la imagen está
+> espejada*, que es como se ve una persona en una cámara frontal. Alimentado sin
+> espejar, como aquí se exige, reporta la mano contraria a la real y hay que
+> invertir la etiqueta antes de que llegue al paso 2.
+>
+> Es responsabilidad del adaptador del detector, no de esta especificación, y por
+> eso vive en `src/lsm/io/hands.py` tras el interruptor
+> `hands.mediapipe_reports_mirrored_handedness`. Se anota aquí porque **la
+> implementación de TypeScript de la Fase 7 se va a encontrar exactamente lo
+> mismo** con MediaPipe JS, y porque equivocarse no produce ningún síntoma: el
+> paso 2 canoniza todas las muestras hacia la mano equivocada, el vector queda
+> coherente consigo mismo y el modelo entrena sin quejarse. Ver
+> `docs/adr/0006-deteccion-de-manos-y-captura.md`.
+
 ---
 
 ## 1. Pipeline por frame

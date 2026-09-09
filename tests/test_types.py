@@ -27,6 +27,7 @@ from lsm.types import (
     Prediction,
     RawFrame,
     Sample,
+    SampleKind,
     Sequence,
     TrajectoryChannel,
 )
@@ -140,6 +141,7 @@ def test_una_muestra_sin_signer_id_no_se_construye() -> None:
             distance=Distance.MEDIUM,
             mean_luminance=0.4,
             mean_scale_px=100.0,
+            kind=SampleKind.STATIC,
         )
 
 
@@ -157,6 +159,7 @@ def test_una_muestra_exige_timestamp_con_zona_horaria() -> None:
             distance=Distance.MEDIUM,
             mean_luminance=0.4,
             mean_scale_px=100.0,
+            kind=SampleKind.STATIC,
         )
 
 
@@ -173,6 +176,7 @@ def _sample_kwargs() -> dict[str, object]:
         "distance": Distance.MEDIUM,
         "mean_luminance": 0.4,
         "mean_scale_px": 100.0,
+        "kind": SampleKind.STATIC,
     }
 
 

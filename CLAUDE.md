@@ -17,7 +17,8 @@ fuente de verdad sobre el diseño.
    suelto.** Una seña estática es una secuencia corta y estable. No introduzcas APIs
    que acepten un solo frame.
 
-2. **`src/lsm/features.py`, `segmentation.py` y `classifiers/` son código puro.** Sin
+2. **`src/lsm/features.py`, `segmentation.py`, `capture.py`, `evaluation.py` y
+   `classifiers/` son código puro.** Sin
    OpenCV, sin MediaPipe, sin acceso a disco, sin cámara. Toda la I/O vive en
    `src/lsm/io/` y en `src/lsm/cli/`. Esto permite testear el núcleo en CI sin
    hardware.

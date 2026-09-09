@@ -8,8 +8,19 @@ cambiarlas no toque ni la captura, ni el entrenamiento, ni la demo.
 En Fase 0 solo existe el contrato y un doble de pruebas. Lo que sí queda cerrado
 es el formato de export, porque de él dependen dos cosas que salen caras si se
 descubren tarde: que el modelo entrenado en Python corra igual en el navegador, y
-que un modelo entrenado con otra versión del spec de features se **rechace** al
-cargarse en vez de devolver predicciones malas sin ningún síntoma.
+que un modelo entrenado con otras premisas se **rechace** al cargarse en vez de
+devolver predicciones malas sin ningún síntoma.
+
+Hay dos premisas que se comprueban así, y las dos fallan en silencio:
+
+- `feature_spec_version` — si cambia la normalización, los números del modelo
+  dejan de significar lo que significaban.
+- `handedness_convention` — si las dos implementaciones no coinciden en qué mano
+  nombra `handedness`, el paso 2 canoniza hacia manos contrarias y el modelo
+  confunde cada seña con su espejo. **Los golden vectors no lo detectan**: reciben
+  la lateralidad ya resuelta como entrada, así que el test de paridad de la Fase 7
+  pasaría en verde con la app web reconociendo al revés. Ver
+  `types.HandednessConvention`.
 
 Código puro: sin disco, sin cámara, sin MediaPipe.
 """
@@ -20,7 +31,7 @@ from collections.abc import Mapping
 from typing import Any, Final, Protocol, runtime_checkable
 
 from lsm.features import FEATURE_SPEC_VERSION
-from lsm.types import Prediction, Sample, Sequence
+from lsm.types import HANDEDNESS_CONVENTION, Prediction, Sample, Sequence
 
 #: Versión del formato de archivo del modelo exportado. Cambia cuando cambia la
 #: estructura del JSON; es independiente de `feature_spec_version`, que cambia
@@ -31,6 +42,7 @@ SCHEMA_VERSION: Final = 1
 REQUIRED_EXPORT_FIELDS: Final = (
     "schema_version",
     "feature_spec_version",
+    "handedness_convention",
     "classifier",
     "labels",
     "params",
@@ -95,6 +107,7 @@ def build_export(
     return {
         "schema_version": SCHEMA_VERSION,
         "feature_spec_version": FEATURE_SPEC_VERSION,
+        "handedness_convention": str(HANDEDNESS_CONVENTION),
         "classifier": classifier,
         "labels": labels,
         "params": params,
@@ -128,5 +141,15 @@ def check_export_compatibility(payload: Mapping[str, Any]) -> None:
             f"este runtime extrae features con la versión {FEATURE_SPEC_VERSION}. "
             "Reentrenar el modelo; ejecutarlo así daría predicciones malas en "
             "silencio."
+        )
+        raise IncompatibleModelError(msg)
+
+    if payload["handedness_convention"] != str(HANDEDNESS_CONVENTION):
+        msg = (
+            f"handedness_convention {payload['handedness_convention']!r} "
+            f"incompatible: este runtime usa {str(HANDEDNESS_CONVENTION)!r}. "
+            "El modelo se entrenó con la lateralidad canonizada hacia la mano "
+            "contraria, así que confundiría cada seña con su espejo — y lo haría "
+            "con la misma confianza que si acertara."
         )
         raise IncompatibleModelError(msg)

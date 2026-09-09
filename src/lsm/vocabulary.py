@@ -210,7 +210,7 @@ _LETTERS: Final = (
             "Mano cerrada, el dedo meñique se estira señalando hacia "
             "arriba. La palma se pone de lado"
         ),
-        confundible=(Label.J,),
+        confundible=(Label.J, Label.Y),
         pagina=16,
     ),
     _spec(
@@ -222,7 +222,7 @@ _LETTERS: Final = (
             "arriba y la palma a un lado dibuja una j en el aire"
         ),
         trayectoria="dibuja una j en el aire",
-        confundible=(Label.I,),
+        confundible=(Label.I, Label.Y),
         pagina=16,
     ),
     _spec(
@@ -243,7 +243,7 @@ _LETTERS: Final = (
         "L",
         descripcion=(
             "Mano cerrada y los dedos índice y pulgar estirados, se forma "
-            "una l. La palma mira al frente"
+            "una letra l. La palma mira al frente"
         ),
         confundible=(Label.E, Label.A, Label.DOBLE_L),
         pagina=16,
@@ -253,10 +253,11 @@ _LETTERS: Final = (
         "LL",
         dinamica=True,
         descripcion=(
-            "Mano cerrada y los dedos índice y pulgar estirados, se forma "
-            "una l. La palma mira al frente"
+            "Mano cerrada y los dedos índice y pulgar alargados, se forma "
+            "una letra l. La palma mira al frente y se hacen movimientos "
+            "horizontales"
         ),
-        trayectoria="movimientos de adelante a atras u horizontales",
+        trayectoria="movimientos horizontales",
         confundible=(Label.E, Label.A, Label.L),
         pagina=16,
     ),
@@ -272,7 +273,10 @@ _LETTERS: Final = (
     _spec(
         Label.N,
         "N",
-        descripcion=("Mano cerrada, se ponen los dedos índice y medio sobre el pulgar"),
+        descripcion=(
+            "Con la mano cerrada, se ponen los dedos índice y medio sobre "
+            "el dedo pulgar"
+        ),
         confundible=(Label.M, Label.ENIE),
         pagina=17,
     ),
@@ -285,7 +289,7 @@ _LETTERS: Final = (
             "pulgar. Se mueve la muñeca a los lados"
         ),
         trayectoria="rotacion de ida y vuelta",
-        confundible=(Label.N, Label.Q),
+        confundible=(Label.N, Label.Q, Label.X),
         pagina=17,
     ),
     _spec(
@@ -317,7 +321,7 @@ _LETTERS: Final = (
             "hacia los lados"
         ),
         trayectoria="rotacion de ida y vuelta",
-        confundible=(Label.ENIE,),
+        confundible=(Label.ENIE, Label.X),
         pagina=17,
     ),
     _spec(
@@ -335,10 +339,10 @@ _LETTERS: Final = (
         "RR",
         dinamica=True,
         descripcion=(
-            "Mano cerrada, se estiran y entrelazan los dedos índice y "
-            "medio. La palma mira al frente"
+            "Mano cerrada, se alargan y entrelazan los dedos índice y "
+            "medio. La palma mira al frente y hace movimientos horizontales"
         ),
-        trayectoria="movimientos de adelante a atras u horizontales",
+        trayectoria="movimientos horizontales",
         confundible=(Label.U, Label.D, Label.R),
         pagina=18,
     ),
@@ -402,6 +406,7 @@ _LETTERS: Final = (
             "de regreso"
         ),
         trayectoria="movimiento al frente y de regreso",
+        confundible=(Label.Q, Label.ENIE),
         pagina=19,
     ),
     _spec(
@@ -410,6 +415,7 @@ _LETTERS: Final = (
         descripcion=(
             "Mano cerrada, se estira el meñique y el pulgar. La palma mira hacia dentro"
         ),
+        confundible=(Label.I, Label.J),
         pagina=19,
     ),
     _spec(

@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from lsm.io.glossary import read_letter_table, vocabulary_drift
 from lsm.types import NEGATIVE_LABEL
 from lsm.vocabulary import (
     ALPHABET,
@@ -42,45 +43,15 @@ EXPECTED_LETTERS = 29
 
 
 def parse_glossary_table() -> list[dict[str, str]]:
-    """Lee la tabla de letras del glosario en Markdown.
+    """Las filas de la tabla de letras.
 
-    El documento escapa los guiones bajos (`DOBLE\\_L`), así que hay que
-    desescaparlos antes de comparar.
+    El análisis del Markdown vive en `lsm.io.glossary` y no aquí desde que tuvo un
+    segundo consumidor —el bloqueo de sesión formal de `cli/capture.py`, que
+    necesita leer la sección 5—. Dos analizadores del mismo documento se
+    desincronizan igual de callados que las dos fuentes de verdad que pretendían
+    vigilar.
     """
-    lines = GLOSARIO.read_text(encoding="utf-8").splitlines()
-    rows = [line for line in lines if line.startswith("|")]
-
-    header_index = next(
-        index for index, line in enumerate(rows) if line.startswith("|label|")
-    )
-    header = [
-        cell.strip().replace("\\_", "_")
-        for cell in rows[header_index].strip("|").split("|")
-    ]
-
-    parsed: list[dict[str, str]] = []
-    for line in rows[header_index + 2 :]:
-        cells = [
-            cell.strip().replace("\\_", "_") for cell in line.strip("|").split("|")
-        ]
-        if len(cells) != len(header):
-            break  # empezó la tabla siguiente
-        parsed.append(dict(zip(header, cells, strict=True)))
-    return parsed
-
-
-def normaliza(celda: str) -> str:
-    """Quita los `<br />` de la tabla y colapsa los espacios.
-
-    Los saltos de línea son de la presentación, no del texto: una celda de una
-    tabla Markdown no puede contener saltos reales, así que quien redactó el
-    glosario los escribió como HTML. `vocabulary.py` guarda la prosa.
-    """
-    return re.sub(r"\s+", " ", re.sub(r"<br\s*/?>", " ", celda)).strip()
-
-
-def parse_confundible(cell: str) -> set[str]:
-    return {item.strip() for item in cell.split(",") if item.strip()}
+    return read_letter_table(GLOSARIO)
 
 
 # --------------------------------------------------------------------------- #
@@ -101,21 +72,25 @@ def test_el_enum_son_las_29_letras_mas_la_clase_negativa() -> None:
 
 
 def test_el_codigo_transcribe_el_documento_sin_desviarse() -> None:
-    """Si esto falla, alguien editó el glosario o `vocabulary.py` y no el otro."""
-    for row in parse_glossary_table():
-        label = Label(row["label"])
-        letter = spec(label)
+    """Si esto falla, alguien editó el glosario o `vocabulary.py` y no el otro.
 
-        assert letter.display == row["letra"], label
-        assert letter.es_dinamica is (row["es_dinamica"] == "true"), label
-        assert letter.trayectoria == normaliza(row["trayectoria"]), label
-        assert letter.descripcion == normaliza(
-            row["descripción de la configuración"]
-        ), label
-        assert letter.confundible_con == {
-            Label(name) for name in parse_confundible(row["confundible_con"])
-        }, label
-        assert letter.pagina == int(row["página"]), label
+    **No lleva marca `glosario` y no debe llevarla.** La deriva ya ocurrió una vez
+    y lo que la hizo pasar desapercibida no fue la falta de un test: fue que
+    `make test` ya estaba en rojo esperando a una persona, así que un fallo más no
+    llamó la atención. Este tiene que romper `make test-nucleo`, que es el que
+    siempre debe estar limpio.
+
+    El detalle de qué campos se comparan está en `lsm.io.glossary.vocabulary_drift`,
+    que informa de **todas** las discrepancias a la vez: la deriva real afectó a
+    ocho campos en seis letras, y arreglarlas de una en una es una tarde perdida.
+    """
+    problemas = vocabulary_drift(GLOSARIO)
+
+    assert not problemas, (
+        "src/lsm/vocabulary.py y docs/glosario-lsm.md dejaron de coincidir. "
+        "El documento manda: vocabulary.py lo transcribe, no lo corrige.\n"
+        + "\n".join(f"  - {problema}" for problema in problemas)
+    )
 
 
 def test_el_orden_del_codigo_es_el_del_documento() -> None:

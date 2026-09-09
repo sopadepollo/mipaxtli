@@ -82,6 +82,54 @@ class Handedness(StrEnum):
     RIGHT = "RIGHT"
 
 
+class HandednessConvention(StrEnum):
+    """Qué mano nombra el campo `handedness`. **No es una preferencia: es un
+    acuerdo entre implementaciones.**
+
+    El detector real observa una mano y tiene que ponerle nombre, y hay dos formas
+    razonables de hacerlo que se diferencian en un espejo:
+
+    - `SIGNER` — la mano **anatómica** de quien firma. Si levanta su derecha, dice
+      `RIGHT`.
+    - `IMAGE` — la mano tal como aparece en la imagen espejada, que es la
+      convención de selfie con la que MediaPipe decide la lateralidad.
+
+    Este proyecto usa `SIGNER` (`HANDEDNESS_CONVENTION`). Traducir de una a otra es
+    trabajo del adaptador del detector, no de la especificación de features: ver
+    `hands.mediapipe_reports_mirrored_handedness` y
+    `docs/adr/0006-deteccion-de-manos-y-captura.md`.
+
+    ### Por qué esto es un tipo y no un comentario
+
+    Elegir la convención equivocada **no rompe nada de forma observable**. El paso 2
+    de `feature-spec.md` espeja en X según este valor, así que con la convención
+    contraria *todas* las muestras se canonizan hacia la otra mano: las dos
+    poblaciones de vectores difieren por un espejo global y nada más. El modelo
+    entrena igual de bien, infiere igual de bien y la precisión es idéntica.
+
+    El error solo duele cuando **dos implementaciones no coinciden**, que es
+    exactamente lo que pasará en la Fase 7 cuando MediaPipe JS traiga su propia
+    convención. Y los golden vectors no lo detectan: reciben la lateralidad ya
+    resuelta como entrada, así que el test de paridad pasaría en verde mientras la
+    app web confunde cada seña con su espejo.
+
+    De ahí que la convención viaje **pegada al modelo exportado** y se rechace al
+    cargar si no coincide, igual que `feature_spec_version`
+    (`classifiers/base.py`). Es el único mecanismo que fuerza el acuerdo.
+    """
+
+    #: La mano anatómica de quien firma.
+    SIGNER = "SIGNER"
+    #: La mano tal como se ve en la imagen espejada (convención de selfie).
+    IMAGE = "IMAGE"
+
+
+#: La convención del proyecto. Cambiarla invalida todos los modelos exportados y
+#: obliga a re-canonizar el dataset, no a regrabarlo: los landmarks crudos no
+#: dependen de esto, solo su etiqueta de lateralidad.
+HANDEDNESS_CONVENTION: Final = HandednessConvention.SIGNER
+
+
 class LightLevel(StrEnum):
     """Cuánta luz hay (`ARQUITECTURA.md` §4.7).
 
@@ -342,6 +390,23 @@ class Prediction:
         return cls(label=UNKNOWN_LABEL, confidence=confidence)
 
 
+class SampleKind(StrEnum):
+    """Cómo se grabó la muestra.
+
+    No es lo mismo que `LetterSpec.es_dinamica`, aunque casi siempre coincidan:
+    aquello dice qué **es** la letra según el glosario, esto dice qué se **hizo**
+    frente a la cámara. Los dos casos en que se separan son reales: la clase
+    negativa `NONE` se graba de las dos formas —mano relajada y quieta, mano en
+    tránsito— y una letra estática grabada por error en modo dinámico tiene que
+    poder reconocerse como tal al depurar el dataset.
+    """
+
+    #: Configuración sostenida: se exige quietud, medida con la σ del §2.
+    STATIC = "STATIC"
+    #: Recorrido: el movimiento **es** la seña, así que no se exige quietud.
+    DYNAMIC = "DYNAMIC"
+
+
 @dataclass(frozen=True, slots=True)
 class Sample:
     """Una secuencia etiquetada con sus metadatos (`ARQUITECTURA.md` §4.7).
@@ -380,6 +445,12 @@ class Sample:
     #: objetiva que acompaña a `distance`, y sale gratis: la tubería ya la calcula
     #: para normalizar. Ver `lsm.features.scale_to_pixels`.
     mean_scale_px: float
+    #: Qué se **hizo** frente a la cámara, que no siempre es lo que el glosario
+    #: dice que la letra **es**. `to_sample()` lo arrastraba hasta que la Fase 2
+    #: lo necesitó: `NONE` se graba de las dos formas y un clasificador estático
+    #: no puede entrenar con las dinámicas. Ver
+    #: `docs/adr/0010-la-clase-negativa-y-el-modo-de-grabacion.md`.
+    kind: SampleKind
 
     def __post_init__(self) -> None:
         if not self.label:
@@ -396,3 +467,47 @@ class Sample:
             raise ValueError(f"mean_luminance fuera de [0, 1]: {self.mean_luminance}")
         if self.mean_scale_px <= 0.0:
             raise ValueError(f"mean_scale_px no positiva: {self.mean_scale_px}")
+
+
+# --------------------------------------------------------------------------- #
+# Topología de la mano
+# --------------------------------------------------------------------------- #
+
+#: Pares de landmarks unidos por un hueso, para dibujar el esqueleto de la mano.
+#:
+#: Vive aquí y no en la capa de dibujo porque es **estructura**, no presentación:
+#: es la misma topología que consumirá el preview de escritorio, el de la app web
+#: y cualquier figura de la documentación. Duplicarla en cada consumidor es la
+#: forma conocida de acabar con tres esqueletos ligeramente distintos.
+#:
+#: El orden dentro de cada par va de la articulación proximal a la distal, y los
+#: grupos van en el orden de `LandmarkIndex`: palma primero, luego cada dedo.
+HAND_CONNECTIONS: Final[tuple[tuple[LandmarkIndex, LandmarkIndex], ...]] = (
+    # Palma: muñeca a los nudillos, y los nudillos entre sí.
+    (LandmarkIndex.WRIST, LandmarkIndex.THUMB_CMC),
+    (LandmarkIndex.WRIST, LandmarkIndex.INDEX_MCP),
+    (LandmarkIndex.WRIST, LandmarkIndex.PINKY_MCP),
+    (LandmarkIndex.INDEX_MCP, LandmarkIndex.MIDDLE_MCP),
+    (LandmarkIndex.MIDDLE_MCP, LandmarkIndex.RING_MCP),
+    (LandmarkIndex.RING_MCP, LandmarkIndex.PINKY_MCP),
+    # Pulgar.
+    (LandmarkIndex.THUMB_CMC, LandmarkIndex.THUMB_MCP),
+    (LandmarkIndex.THUMB_MCP, LandmarkIndex.THUMB_IP),
+    (LandmarkIndex.THUMB_IP, LandmarkIndex.THUMB_TIP),
+    # Índice.
+    (LandmarkIndex.INDEX_MCP, LandmarkIndex.INDEX_PIP),
+    (LandmarkIndex.INDEX_PIP, LandmarkIndex.INDEX_DIP),
+    (LandmarkIndex.INDEX_DIP, LandmarkIndex.INDEX_TIP),
+    # Medio.
+    (LandmarkIndex.MIDDLE_MCP, LandmarkIndex.MIDDLE_PIP),
+    (LandmarkIndex.MIDDLE_PIP, LandmarkIndex.MIDDLE_DIP),
+    (LandmarkIndex.MIDDLE_DIP, LandmarkIndex.MIDDLE_TIP),
+    # Anular.
+    (LandmarkIndex.RING_MCP, LandmarkIndex.RING_PIP),
+    (LandmarkIndex.RING_PIP, LandmarkIndex.RING_DIP),
+    (LandmarkIndex.RING_DIP, LandmarkIndex.RING_TIP),
+    # Meñique.
+    (LandmarkIndex.PINKY_MCP, LandmarkIndex.PINKY_PIP),
+    (LandmarkIndex.PINKY_PIP, LandmarkIndex.PINKY_DIP),
+    (LandmarkIndex.PINKY_DIP, LandmarkIndex.PINKY_TIP),
+)
