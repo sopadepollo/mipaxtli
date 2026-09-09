@@ -59,6 +59,14 @@ criterio es deletrear una palabra de cinco letras sin errores de segmentación.
 dependencias opcionales: `make test` pasa sin cámara, sin modelo y sin ninguna de
 las dos instaladas.
 
+## Por dónde empezar
+
+**[`docs/COMO-PROBAR.md`](docs/COMO-PROBAR.md)** — todo lo que se puede ejecutar,
+en el orden en que tiene sentido hacerlo: la suite, la calibración de la cámara,
+la captura de dataset, el entrenamiento, la evaluación, la demo y qué hacer
+cuando algo falla. Si solo vas a leer un archivo antes de tocar el repositorio,
+que sea ese.
+
 ## Documentos normativos
 
 Antes de tocar código, en este orden:
@@ -70,6 +78,7 @@ Antes de tocar código, en este orden:
    TypeScript, debe reproducirlo dentro de `1e-6`.
 4. `docs/adr/` — decisiones de arquitectura y por qué se tomaron.
 5. `docs/glosario-lsm.md` — qué letras se reconocen y cuáles llevan movimiento.
+6. `docs/COMO-PROBAR.md` — cómo se ejecuta cada cosa, con qué hace falta para cada una.
 
 ## Requisitos
 

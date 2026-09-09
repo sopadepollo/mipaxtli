@@ -11,6 +11,10 @@ muestra las señas correspondientes a un texto escrito.
 Lee `docs/ARQUITECTURA.md` antes de hacer cambios estructurales. Ese documento es la
 fuente de verdad sobre el diseño.
 
+`docs/COMO-PROBAR.md` reúne todos los comandos ejecutables del proyecto y qué hace
+falta para cada uno. **Si añades, quitas o cambias un comando, actualízalo ahí**:
+es lo primero que lee quien llega al repositorio.
+
 ## Reglas no negociables
 
 1. **El tipo base de entrada es una secuencia temporal `(T, 21, 3)`, nunca un frame
