@@ -20,7 +20,6 @@ __pycache__/
 .env
 
 # Artefactos de descarga de Windows (alternate data streams de NTFS).
-*:Zone.Identifier
-
-# Metadatos que Windows pega a los archivos descargados de internet.
-*:Zone.Identifier
+# Sin los dos puntos: WSL no guarda un ':' ASCII en el nombre sino U+F03A del
+# area privada Unicode, asi que un patron con ':' no casa con nada.
+*Zone.Identifier
