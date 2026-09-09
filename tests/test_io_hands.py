@@ -168,6 +168,7 @@ def test_ningun_modulo_del_paquete_importa_mediapipe() -> None:
         "lsm.io.hands",
         "lsm.io.preview",
         "lsm.segmentation",
+        "lsm.spelling",
         "lsm.synthetic",
         "lsm.types",
         "lsm.vocabulary",

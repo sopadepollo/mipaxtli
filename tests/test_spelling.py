@@ -10,12 +10,17 @@ from __future__ import annotations
 
 from lsm.config import Config
 from lsm.spelling import (
+    Backspace,
+    CommitText,
     HandAbsent,
     HandPresent,
     LetterSignal,
+    NothingToDelete,
     Signal,
     SpaceWritten,
     SpellingState,
+    SymbolDeleted,
+    TextCommitted,
     render_text,
     render_word,
     step,
@@ -149,3 +154,61 @@ def test_el_cerrojo_sobrevive_a_una_letra_sin_mano_de_vuelta() -> None:
     assert resultado.event is None, "el cerrojo sigue puesto: no se cierra nada"
     assert resultado.state.word == (Label.S,)
     assert resultado.state.finished == ((Label.C, Label.A),)
+
+
+def test_backspace_borra_un_simbolo() -> None:
+    state = aplicar([*letras(Label.C, Label.A, Label.S), Backspace()])
+
+    assert render_word(state) == "ca"
+
+
+def test_backspace_deshace_exactamente_lo_que_se_seño() -> None:
+    """La razon de guardar simbolos: sobre una RR el borrado quita la seña
+    entera, y sobre dos R quita una R. Con un buffer de caracteres, lo primero
+    dejaria una `r` que nadie ejecuto."""
+    digrafo = aplicar([*letras(Label.DOBLE_R), Backspace()])
+    dos_erres = aplicar([*letras(Label.R, Label.R), Backspace()])
+
+    assert render_word(digrafo) == ""
+    assert render_word(dos_erres) == "r"
+
+
+def test_backspace_sobre_una_palabra_vacia_no_hace_nada_y_lo_dice() -> None:
+    """No recupera la palabra anterior: reabrir algo ya cerrado no vale la
+    complejidad en esta fase."""
+    state = aplicar([*letras(Label.A), *ausencia(UMBRAL)])
+
+    resultado = step(state, Backspace(), CONFIG)
+
+    assert resultado.state == state
+    assert isinstance(resultado.event, NothingToDelete)
+
+
+def test_backspace_emite_el_simbolo_que_quito() -> None:
+    state = aplicar(letras(Label.C, Label.DOBLE_L))
+
+    resultado = step(state, Backspace(), CONFIG)
+
+    assert resultado.event == SymbolDeleted(label=Label.DOBLE_L)
+
+
+def test_enter_cierra_la_frase_y_deja_el_estado_vacio() -> None:
+    señales = [
+        *letras(Label.C, Label.A),
+        *ausencia(UMBRAL),
+        HandPresent(),
+        *letras(Label.S, Label.A),
+    ]
+    state = aplicar(señales)
+
+    resultado = step(state, CommitText(), CONFIG)
+
+    assert resultado.event == TextCommitted(text="ca sa")
+    assert resultado.state == SpellingState()
+
+
+def test_enter_sobre_un_texto_vacio_no_emite_nada() -> None:
+    resultado = step(SpellingState(), CommitText(), CONFIG)
+
+    assert resultado.event is None
+    assert resultado.state == SpellingState()

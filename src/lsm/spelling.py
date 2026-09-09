@@ -48,8 +48,18 @@ class SpaceWritten:
     """Se cerró la palabra en curso y se abrió otra."""
 
 
+@dataclass(frozen=True, slots=True)
+class Backspace:
+    """Tecla: borra el último símbolo de la palabra en curso."""
+
+
+@dataclass(frozen=True, slots=True)
+class CommitText:
+    """Tecla: cierra la frase entera."""
+
+
 #: Las señales que la demo produce. Se irá ampliando en las tareas siguientes.
-Signal: TypeAlias = LetterSignal | HandPresent | HandAbsent
+Signal: TypeAlias = LetterSignal | HandPresent | HandAbsent | Backspace | CommitText
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +69,29 @@ class LetterWritten:
     label: Label
 
 
+@dataclass(frozen=True, slots=True)
+class SymbolDeleted:
+    """Se quitó un símbolo. Lleva cuál, para poder decirlo en el HUD."""
+
+    label: Label
+
+
+@dataclass(frozen=True, slots=True)
+class NothingToDelete:
+    """`BACKSPACE` con la palabra en curso vacía."""
+
+
+@dataclass(frozen=True, slots=True)
+class TextCommitted:
+    """La frase se cerró. `text` es lo que hay que imprimir."""
+
+    text: str
+
+
 #: Qué acaba de pasar. `None` significa que la señal no cambió nada.
-SpellingEvent: TypeAlias = LetterWritten | SpaceWritten
+SpellingEvent: TypeAlias = (
+    LetterWritten | SpaceWritten | SymbolDeleted | NothingToDelete | TextCommitted
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +143,10 @@ def step(
             )
         case HandAbsent():
             return _mano_ausente(state, config)
+        case Backspace():
+            return _borrar(state)
+        case CommitText():
+            return _cerrar_frase(state)
 
 
 def _escribir_letra(state: SpellingState, label: Label) -> StepResult:
@@ -164,6 +199,29 @@ def _mano_ausente(state: SpellingState, config: Config) -> StepResult:
         ),
         event=SpaceWritten(),
     )
+
+
+def _borrar(state: SpellingState) -> StepResult:
+    """Quita el último símbolo de la palabra en curso.
+
+    Con la palabra vacía no hace nada. Recuperar la palabra anterior significaría
+    reabrir algo ya cerrado, y no vale la complejidad en esta fase: un borrado que
+    hace más de lo que se espera destruye trabajo.
+    """
+    if not state.word:
+        return StepResult(state=state, event=NothingToDelete())
+    return StepResult(
+        state=replace(state, word=state.word[:-1]),
+        event=SymbolDeleted(label=state.word[-1]),
+    )
+
+
+def _cerrar_frase(state: SpellingState) -> StepResult:
+    """Vacía el buffer y entrega el texto para imprimirlo."""
+    texto = render_text(state)
+    if not texto:
+        return StepResult(state=state)
+    return StepResult(state=SpellingState(), event=TextCommitted(text=texto))
 
 
 def render_word(state: SpellingState) -> str:
