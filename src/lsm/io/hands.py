@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol, TypeAlias, runtime_checkable
 
+from lsm.config import Config
 from lsm.types import (
     NUM_LANDMARKS,
     FrameSlot,
@@ -314,6 +315,31 @@ class MediaPipeHandDetector:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+def build_detector(config: Config) -> MediaPipeHandDetector:
+    """El detector real, con todo lo que `config.yaml` dice sobre él.
+
+    Vive aquí y no en un CLI porque los CLI que abren cámara son ya dos —captura
+    y demo— y el segundo tendría que importar un privado del primero. Construir
+    el detector es traducir configuración a la frontera con MediaPipe, y esa
+    frontera es este módulo (`CLAUDE.md` §3).
+
+    Devuelve el tipo concreto y no el `Protocol`: `HandDetector` promete `detect`
+    y `close`, que es lo que el núcleo consume, pero quien abre una cámara además
+    necesita `open()` y el `with` que lo llama. Pedir el `Protocol` aquí
+    obligaría a los dos CLI a abrir el modelo a mano.
+    """
+    return MediaPipeHandDetector(
+        model_path=config.hands.model_path,
+        min_detection_score=config.segmentation.min_detection_score,
+        num_hands=config.hands.num_hands,
+        min_hand_detection_confidence=config.hands.min_hand_detection_confidence,
+        min_hand_presence_confidence=config.hands.min_hand_presence_confidence,
+        min_tracking_confidence=config.hands.min_tracking_confidence,
+        frame_interval_ms=max(1, round(1000 / config.capture.camera_fps)),
+        swap_handedness=config.hands.mediapipe_reports_mirrored_handedness,
+    )
 
 
 def _flip(side: Handedness) -> Handedness:

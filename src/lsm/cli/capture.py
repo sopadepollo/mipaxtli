@@ -78,7 +78,7 @@ from lsm.io.dataset import (
     write_sample,
 )
 from lsm.io.glossary import DEFAULT_GLOSSARY, is_validated
-from lsm.io.hands import HandDetector, MediaPipeHandDetector
+from lsm.io.hands import HandDetector, build_detector
 from lsm.io.preview import HudState, draw_hud, draw_landmarks
 from lsm.types import (
     HANDEDNESS_CONVENTION,
@@ -151,20 +151,6 @@ def _modo_por_defecto(label: Label) -> SampleKind:
 # --------------------------------------------------------------------------- #
 # grabar
 # --------------------------------------------------------------------------- #
-
-
-def _construir_detector(config: Config) -> MediaPipeHandDetector:
-    """El detector, con todo lo que `config.yaml` dice sobre él."""
-    return MediaPipeHandDetector(
-        model_path=config.hands.model_path,
-        min_detection_score=config.segmentation.min_detection_score,
-        num_hands=config.hands.num_hands,
-        min_hand_detection_confidence=config.hands.min_hand_detection_confidence,
-        min_hand_presence_confidence=config.hands.min_hand_presence_confidence,
-        min_tracking_confidence=config.hands.min_tracking_confidence,
-        frame_interval_ms=max(1, round(1000 / config.capture.camera_fps)),
-        swap_handedness=config.hands.mediapipe_reports_mirrored_handedness,
-    )
 
 
 def _clave_de_camara(camera: Camera) -> str:
@@ -250,7 +236,7 @@ def _cmd_grabar(args: argparse.Namespace) -> int:
 
     letras = _resolver_letras(args.letras)
     guarda_video = _resolver_video(raiz, signer_id, pedido=args.guardar_video)
-    detector = _construir_detector(config)
+    detector = build_detector(config)
 
     sesion = _Sesion(
         letras=letras,
@@ -653,7 +639,7 @@ def _cmd_calibrar(args: argparse.Namespace) -> int:
     print(_GUION_CALIBRACION.format(contrario=str(not swap).lower()))
     print()
 
-    detector = _construir_detector(config)
+    detector = build_detector(config)
     try:
         with Camera.from_config(config.capture) as camera, detector:
             clave = _clave_de_camara(camera)
