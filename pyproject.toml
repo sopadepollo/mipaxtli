@@ -24,6 +24,7 @@ lsm-golden = "lsm.cli.golden:main"
 lsm-capture = "lsm.cli.capture:main"
 lsm-train = "lsm.cli.train:main"
 lsm-eval = "lsm.cli.evaluate:main"
+lsm-demo = "lsm.cli.demo:main"
 
 [build-system]
 requires = ["hatchling"]
