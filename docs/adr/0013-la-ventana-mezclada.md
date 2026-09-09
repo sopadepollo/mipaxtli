@@ -111,19 +111,30 @@ cero con el dataset ya grabado.
   fps— encima de los 0.4 s del cooldown de emisión: probablemente demasiado para
   que el deletreo se sienta ágil, y es la razón de no aplicarlo ya en
   `config.yaml` sin que alguien lo mida. La palanca hermana es bajar
-  `buffer_size` para las estáticas: hoy vale 24 solo porque coincide con
-  `RESAMPLE_LENGTH` del remuestreo de las dinámicas (`docs/feature-spec.md` §3.2),
-  una coincidencia de calendario de implementación, no una razón que aplique a
-  una letra que no se mueve.
+  `buffer_size` para las estáticas. Hoy vale 24, el mismo número que
+  `RESAMPLE_LENGTH` (`src/lsm/features.py`, el remuestreo de las dinámicas) y
+  que `capture.static_frames` (`config.yaml`, con su propia justificación
+  escrita: "800 ms de mano sostenida"). Ninguna de las tres coincidencias está
+  documentada como intencional — no hay ADR ni comentario que ate
+  `segmentation.buffer_size` a ninguna de las otras dos—, así que no se puede
+  afirmar por qué vale 24 más allá de que nadie lo ha cuestionado todavía. Eso
+  es en sí mismo parte de lo que habría que revisar antes de tocarlo.
 
 ## Consecuencias
 
 **Si no se corrige:** cualquier transición entre dos letras más rápida que
 `buffer_size` frames (0.8 s a 30 fps) arriesga emitir una letra que nadie firmó,
 con probabilidad más alta cuanto más se parezcan las dos letras del par — el
-mismo tipo de par que `docs/adr/0011-calibracion-de-la-fase-2.md` ya identificó
-como confundible por el clasificador (`C`/`O`, `M`/`S`), así que el efecto se
-suma al del clasificador en vez de ser independiente de él.
+mismo tipo de par que ya es difícil para el clasificador: `C`/`O`, con 20
+confusiones medidas y el par dominante de la Fase 2
+(`docs/adr/0011-calibracion-de-la-fase-2.md`), o `C`/`F`, que apareció al
+cambiar a la métrica coseno. `docs/glosario-lsm.md` predice además `M`/`N` y
+`S`/`T` como confundibles por forma — no lo son por distancia: `M` y `S` se
+rechazaban limpio, sin una sola confusión entre ellas, por un problema de
+magnitud del vector que la métrica coseno ya corrigió, así que no son un
+ejemplo de este riesgo. El efecto de la ventana mezclada se suma al del
+clasificador en los pares donde de verdad se parecen, en vez de ser
+independiente de él.
 
 **Si se corrige subiendo `stable_frames`:** se paga en latencia percibida, sin
 tocar código, y sin garantía de que 0.8 s sea aceptable — nadie lo ha medido
