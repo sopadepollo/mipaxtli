@@ -21,3 +21,6 @@ __pycache__/
 
 # Artefactos de descarga de Windows (alternate data streams de NTFS).
 *:Zone.Identifier
+
+# Metadatos que Windows pega a los archivos descargados de internet.
+*:Zone.Identifier
