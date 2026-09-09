@@ -51,9 +51,33 @@ se ajustaron sobre el mismo conjunto con el que se miden.
 la cabecera del reporte, dentro del modelo exportado y en la sección de contraste de
 hipótesis. `--sin-sintetico` exige dataset real.
 
-**Siguiente: Fase 3** — `segmentation.py` ya existe y está testeado; falta
-`cli/demo.py`, que lo conecta con la cámara y el clasificador ya entrenado. El
-criterio es deletrear una palabra de cinco letras sin errores de segmentación.
+**Fase 3 — deletreo en vivo, cerrada.** `cli/demo.py` conecta cámara → MediaPipe
+→ features → segmentación → clasificador → `spelling.py`, el buffer que
+acumula letras en palabras y frases. Controles: bajar la mano cierra la
+palabra (es el mismo gesto de ausencia que ya detectaba la segmentación, no
+una clase nueva); `BACKSPACE` borra un símbolo y `ENTER` cierra la frase, por
+teclado — el clasificador ya usa sus 22 clases en las 21 letras más `NONE` y no
+hay ninguna libre para un gesto de control (`docs/adr/0012-controles-del-deletreo.md`).
+
+**Criterio cumplido:** deletrear una palabra de cinco letras sin errores de
+segmentación. `tests/test_cli_demo.py::test_una_palabra_de_cinco_letras_produce_cinco_simbolos`
+lo comprueba en CI, sin cámara y sin MediaPipe, con un `StaticKnnClassifier`
+entrenado de verdad sobre secuencias sintéticas: cinco señas producen cinco
+símbolos, `"casas"`.
+
+Las **ocho letras dinámicas** (`J`, `K`, `LL`, `Ñ`, `Q`, `RR`, `X`, `Z`) siguen
+sin reconocerse —llegan en la Fase 5 con `dynamic_dtw`— y el HUD de la demo lo
+avisa en pantalla mientras dura la sesión, para que no se confunda con un
+fallo. **La sesión en vivo con cámara real no se ha ejecutado todavía**: lo
+único probado es `lsm-demo --desde-dataset`, que reproduce una grabación sin
+abrir cámara ni tocar MediaPipe. Ver la sección 6 de `docs/COMO-PROBAR.md`.
+
+Esta fase también dejó una propuesta de cambio arquitectónico sin decidir:
+`docs/adr/0013-la-ventana-mezclada.md` documenta que la máquina de estados
+comprueba quietud sobre los últimos `stable_frames` frames pero clasifica el
+buffer entero, y que con un tránsito corto entre dos letras eso puede emitir
+una letra que nadie firmó. No bloquea el criterio de esta fase; sí hay que
+resolverlo antes de que `segmentation.ts` reproduzca el contrato en la Fase 7.
 
 **Nada de eso hace falta para trabajar en el núcleo.** MediaPipe y OpenCV son
 dependencias opcionales: `make test` pasa sin cámara, sin modelo y sin ninguna de

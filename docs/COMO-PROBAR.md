@@ -250,21 +250,56 @@ train y test mide memorización, no generalización.
 
 ## 6. La demo
 
-> **Fase 3, en construcción.** El diseño está en
-> `docs/superpowers/specs/2026-09-09-fase-3-deletreo-en-vivo-design.md`. Esta
-> sección se completa cuando `lsm-demo` exista; hasta entonces, `make demo`
-> avisa de que todavía no está.
-
-Lo que habrá:
+Necesita cámara, MediaPipe y un modelo entrenado (`make train`):
 
 ```bash
 uv run lsm-demo                          # 📷 sesión en vivo
-uv run lsm-demo --desde-dataset RUTA     # reproduce grabaciones, sin cámara
 ```
 
-Y el criterio de la fase —deletrear una palabra de cinco letras sin errores de
-segmentación— se comprueba en la suite, sin cámara, con
-`tests/test_cli_demo.py`.
+Sin `--extra capture` instalado, imprime el mismo aviso que `make setup-capture`
+y sale con código 1: el resto del proyecto corre sin esas dependencias y la
+demo no es la excepción a la hora de fallar con un mensaje útil.
+
+Para probarla **sin cámara**, reproduce una sesión ya grabada en `data/raw/`:
+
+```bash
+uv run lsm-demo --desde-dataset data/raw/s01/2026-09-09-manana
+# o: make demo ARGS="--desde-dataset data/raw/s01/2026-09-09-manana"
+```
+
+Esto es lo que ejercita `tests/test_cli_demo.py` en CI, sin cámara y sin
+MediaPipe: el criterio de la fase —deletrear una palabra de cinco letras sin
+errores de segmentación— pasa ahí, con secuencias sintéticas.
+`test_una_palabra_de_cinco_letras_produce_cinco_simbolos` produce `"casas"` a
+partir de cinco señas.
+
+### Controles
+
+| Tecla / gesto | Efecto |
+|---|---|
+| bajar la mano | cierra la palabra en curso y abre una nueva |
+| `BACKSPACE` | borra el último símbolo escrito |
+| `ENTER` | cierra la frase entera (se imprime y el buffer se vacía) |
+| `q` | sale; lo que quedó sin cerrar con `ENTER` se imprime igual |
+
+Bajar la mano es el único gesto de control del proyecto, y no está clasificado:
+es la ausencia de mano que la segmentación ya detecta, con un umbral propio y
+más largo (`spelling.space_after_absent_frames`, un segundo a 30 fps) para que
+no baste un parpadeo del detector. Borrar y cerrar la frase van por teclado
+porque el clasificador ya usa sus 22 clases en las 21 letras más `NONE`, y no
+hay ninguna libre para un gesto de control sin grabar una clase nueva. El
+razonamiento completo está en `docs/adr/0012-controles-del-deletreo.md`, y su
+consecuencia se dice ahí sin adornos: la demo **no es señable de extremo a
+extremo** — cerrar la frase o corregir un error necesita un teclado.
+
+Las **ocho letras dinámicas** (`J`, `K`, `LL`, `Ñ`, `Q`, `RR`, `X`, `Z`) no se
+reconocen todavía: llegan en la Fase 5 con `dynamic_dtw`. El HUD lo avisa en
+pantalla, en la franja inferior, mientras dura la sesión.
+
+**La sesión en vivo —con cámara de verdad— no se ha ejecutado todavía.** Lo
+único verificado hasta ahora es `--desde-dataset`, que no abre cámara ni toca
+MediaPipe. Cómo se ve el HUD y si la latencia es tolerable con una persona
+firmando delante no lo dice ningún test.
 
 ---
 

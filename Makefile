@@ -130,5 +130,12 @@ train:
 eval:
 	$(UV) run lsm-eval $(ARGS)
 
+# Demo en vivo: senas -> texto. Necesita camara, MediaPipe y un modelo
+# entrenado (`make train`). Controles: bajar la mano cierra la palabra,
+# BACKSPACE borra un simbolo, ENTER cierra la frase, q sale. Las 8 letras
+# dinamicas (J, K, LL, N~, Q, RR, X, Z) no se reconocen todavia: el HUD lo avisa
+# en pantalla (Fase 5). Para probarla sin camara, contra una sesion ya grabada:
+#
+#   make demo ARGS="--desde-dataset data/raw/s01/2026-09-09-manana"
 demo:
-	@echo "make demo: llega en la Fase 3 (src/lsm/cli/demo.py)."; exit 1
+	$(UV) run lsm-demo $(ARGS)
