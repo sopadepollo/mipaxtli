@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from lsm.config import Config
 from lsm.spelling import (
+    HandAbsent,
+    HandPresent,
     LetterSignal,
     Signal,
+    SpaceWritten,
     SpellingState,
     render_text,
     render_word,
@@ -69,3 +72,61 @@ def test_la_enie_se_escribe_con_su_letra() -> None:
 
 def test_el_texto_vacio_es_una_cadena_vacia() -> None:
     assert render_text(SpellingState()) == ""
+
+
+def ausencia(frames: int) -> list[Signal]:
+    return [HandAbsent()] * frames
+
+
+UMBRAL = CONFIG.spelling.space_after_absent_frames
+
+
+def test_la_ausencia_corta_no_pone_espacio() -> None:
+    """Un parpadeo del detector no es una intencion de quien firma."""
+    state = aplicar([*letras(Label.C, Label.A), *ausencia(UMBRAL - 1)])
+
+    assert state.finished == ()
+    assert render_text(state) == "ca"
+
+
+def test_al_alcanzar_el_umbral_pone_un_espacio_y_solo_uno() -> None:
+    """La mano abajo no es un evento, es un estado que dura: sin cerrojo pondria
+    un espacio en cada frame. Es el mismo problema que `pending_repeat` resuelve
+    en segmentation.py, un nivel mas arriba."""
+    state = aplicar([*letras(Label.C, Label.A), *ausencia(UMBRAL * 3)])
+
+    assert state.finished == ((Label.C, Label.A),)
+    assert state.word == ()
+    assert render_text(state) == "ca"
+
+
+def test_la_mano_de_vuelta_libera_el_cerrojo() -> None:
+    señales = [
+        *letras(Label.C, Label.A),
+        *ausencia(UMBRAL),
+        HandPresent(),
+        *letras(Label.S, Label.A),
+        *ausencia(UMBRAL),
+    ]
+
+    state = aplicar(señales)
+
+    assert state.finished == ((Label.C, Label.A), (Label.S, Label.A))
+    assert render_text(state) == "ca sa"
+
+
+def test_la_ausencia_sobre_una_palabra_vacia_no_pone_espacio() -> None:
+    """Ni al principio ni entre dos ausencias seguidas: espacios sueltos o
+    dobles serian texto que nadie seño."""
+    state = aplicar([*ausencia(UMBRAL * 2), HandPresent(), *ausencia(UMBRAL * 2)])
+
+    assert state.finished == ()
+    assert render_text(state) == ""
+
+
+def test_el_espacio_emite_su_evento() -> None:
+    state = aplicar([*letras(Label.A), *ausencia(UMBRAL - 1)])
+
+    resultado = step(state, HandAbsent(), CONFIG)
+
+    assert isinstance(resultado.event, SpaceWritten)
