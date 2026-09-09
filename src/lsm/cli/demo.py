@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from lsm.classifiers.static_knn import StaticKnnClassifier
+from lsm.cli import MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
 from lsm.io.camera import Camera, CameraError
 from lsm.io.dataset import iter_sample_paths, read_sample
@@ -226,41 +227,45 @@ def _sesion_en_vivo(
     frame, así que por esa vía la sesión no vería las ausencias y el espacio entre
     palabras no llegaría nunca.
     """
-    import cv2
-
-    from lsm.io.preview import draw_demo_hud, draw_landmarks
-
     ventana = "demo LSM — deletreo manual"
 
-    def flujo(camera: Camera, detector: HandDetector) -> Iterator[FrameSlot]:
-        # El `return` de la tecla de salida agota el generador, y agotarlo termina
-        # `run_segmentation`: no hace falta ninguna bandera compartida.
-        while True:
-            frame = camera.read()
-            slot = detector.detect(frame.rgb)
-
-            imagen = frame.bgr
-            if config.capture.preview_mirror:
-                imagen = cv2.flip(imagen, 1)
-            if isinstance(slot, InvalidFrame):
-                sesion.aplicar(HandAbsent())
-            else:
-                draw_landmarks(imagen, slot, mirrored=config.capture.preview_mirror)
-                sesion.aplicar(HandPresent())
-            draw_demo_hud(imagen, sesion.hud())
-            cv2.imshow(ventana, imagen)
-
-            tecla = cv2.waitKey(1) & 0xFF
-            if tecla in _SALIR:
-                return
-            if tecla in _BORRAR:
-                sesion.aplicar(Backspace())
-            elif tecla in _CERRAR_FRASE:
-                sesion.aplicar(CommitText())
-
-            yield slot
-
+    # Los tres fallos de arranque —sin OpenCV, sin modelo de MediaPipe, sin
+    # cámara— caen dentro del mismo `try` **incluidos los imports**: `import cv2`
+    # es el primero que se rompe en una máquina que solo hizo `make setup`, y
+    # dejarlo fuera lo convertiría en el único que sí escupe un traceback.
     try:
+        import cv2
+
+        from lsm.io.preview import draw_demo_hud, draw_landmarks
+
+        def flujo(camera: Camera, detector: HandDetector) -> Iterator[FrameSlot]:
+            # El `return` de la tecla de salida agota el generador, y agotarlo
+            # termina `run_segmentation`: no hace falta ninguna bandera compartida.
+            while True:
+                frame = camera.read()
+                slot = detector.detect(frame.rgb)
+
+                imagen = frame.bgr
+                if config.capture.preview_mirror:
+                    imagen = cv2.flip(imagen, 1)
+                if isinstance(slot, InvalidFrame):
+                    sesion.aplicar(HandAbsent())
+                else:
+                    draw_landmarks(imagen, slot, mirrored=config.capture.preview_mirror)
+                    sesion.aplicar(HandPresent())
+                draw_demo_hud(imagen, sesion.hud())
+                cv2.imshow(ventana, imagen)
+
+                tecla = cv2.waitKey(1) & 0xFF
+                if tecla in _SALIR:
+                    return
+                if tecla in _BORRAR:
+                    sesion.aplicar(Backspace())
+                elif tecla in _CERRAR_FRASE:
+                    sesion.aplicar(CommitText())
+
+                yield slot
+
         with (
             Camera.from_config(config.capture) as camera,
             build_detector(config) as detector,
@@ -272,8 +277,20 @@ def _sesion_en_vivo(
                     aplicar_evento(sesion, evento)
             finally:
                 cv2.destroyAllWindows()
+    except ImportError as error:
+        # Las dependencias de cámara se instalan aparte a propósito: el resto del
+        # proyecto corre sin ellas. El traceback de un módulo ausente no dice eso.
+        print(MENSAJE_SIN_EXTRAS.format(modulo=error.name))
+        return 1
     except CameraError as error:
-        print(error)
+        print(f"error de cámara: {error}")
+        return 1
+    except FileNotFoundError as error:
+        # Falta el bundle de MediaPipe. Es el fallo más probable la primera vez:
+        # pesa 8 MB y no se versiona, así que un repositorio recién clonado no lo
+        # tiene. El mensaje de `io/hands.py` ya dice qué ejecutar; lo único que
+        # hacía falta era no enterrarlo bajo un traceback.
+        print(f"error: {error}")
         return 1
 
     # Lo que quedó sin cerrar con ENTER se imprime igual: quien termina la sesión

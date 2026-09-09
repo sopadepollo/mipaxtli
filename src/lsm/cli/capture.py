@@ -49,6 +49,7 @@ from lsm.capture import (
     explain,
     minimum_frames,
 )
+from lsm.cli import MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
 from lsm.features import ExtractionRejected, extract_sequence_features
 from lsm.io.calibration import (
@@ -170,18 +171,6 @@ def _clave_de_camara(camera: Camera) -> str:
     )
 
 
-#: Qué decir cuando faltan las dependencias opcionales. Ocurre siempre la primera
-#: vez, porque `make setup` no las instala a propósito: la suite, el entrenamiento
-#: y la evaluación corren sin cámara, y arrastrar MediaPipe a todos esos entornos
-#: por un comando que solo se usa al grabar sería un mal negocio.
-_MENSAJE_SIN_EXTRAS = (
-    "faltan las dependencias de captura ({modulo}). Se instalan aparte porque el "
-    "resto del proyecto no las necesita:\n"
-    "  make setup-capture\n"
-    "  make model"
-)
-
-
 #: Lo que se imprime cuando no hay ninguna cámara calibrada. El caso de la primera
 #: vez, y el único que se puede detectar sin abrir el dispositivo.
 _MENSAJE_SIN_CALIBRAR = """No hay ninguna cámara calibrada.
@@ -277,7 +266,7 @@ def _cmd_grabar(args: argparse.Namespace) -> int:
                     guarda_video=guarda_video,
                 )
     except ImportError as error:
-        print(_MENSAJE_SIN_EXTRAS.format(modulo=error.name))
+        print(MENSAJE_SIN_EXTRAS.format(modulo=error.name))
         return 1
     except CalibrationError as error:
         print(f"sin calibración: {error}")
@@ -647,7 +636,7 @@ def _cmd_calibrar(args: argparse.Namespace) -> int:
                 camera=camera, detector=detector, config=config, camara=clave
             )
     except ImportError as error:
-        print(_MENSAJE_SIN_EXTRAS.format(modulo=error.name))
+        print(MENSAJE_SIN_EXTRAS.format(modulo=error.name))
         return 1
     except CameraError as error:
         print(f"error de cámara: {error}")
