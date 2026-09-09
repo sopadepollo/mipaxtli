@@ -86,3 +86,20 @@ def test_el_config_yaml_de_ejemplo_es_valido_y_coincide_con_los_defaults() -> No
     config = load_config(REPO_ROOT / "config.yaml")
 
     assert config == Config()
+
+
+def test_el_espacio_exige_mas_ausencia_que_la_vuelta_a_idle() -> None:
+    """Si bastara con lo que la maquina de estados considera "mano perdida", un
+    parpadeo del detector escribiria un espacio. El espacio es una intencion de
+    quien firma, no un fallo de deteccion."""
+    with pytest.raises(ValidationError):
+        Config.model_validate(
+            {
+                "segmentation": {"missing_frames_to_idle": 8},
+                "spelling": {"space_after_absent_frames": 8},
+            }
+        )
+
+
+def test_el_espacio_por_defecto_es_un_segundo_a_treinta_fps() -> None:
+    assert Config().spelling.space_after_absent_frames == 30

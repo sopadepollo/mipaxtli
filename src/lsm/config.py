@@ -229,6 +229,16 @@ class HandsConfig(_Section):
     mediapipe_reports_mirrored_handedness: bool = Field(default=False)
 
 
+class SpellingConfig(_Section):
+    """Acumulación de letras en palabras (`ARQUITECTURA.md` §4.2)."""
+
+    #: Frames consecutivos sin mano antes de cerrar la palabra en curso. A 30 fps,
+    #: 30 frames es un segundo. Es el único gesto de control del proyecto: bajar
+    #: la mano entre palabras es lo que se hace de todos modos, y el clasificador
+    #: no tiene clases libres para un gesto dedicado.
+    space_after_absent_frames: int = Field(default=30, ge=1, le=600)
+
+
 class CaptureConfig(_Section):
     """Recolección de dataset (`src/lsm/cli/capture.py`, `ARQUITECTURA.md` §4.7)."""
 
@@ -303,6 +313,7 @@ class Config(_Section):
     segmentation: SegmentationConfig = Field(default_factory=SegmentationConfig)
     hands: HandsConfig = Field(default_factory=HandsConfig)
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
+    spelling: SpellingConfig = Field(default_factory=SpellingConfig)
 
     @model_validator(mode="after")
     def _la_captura_alcanza_para_el_canal_dinamico(self) -> Config:
@@ -319,6 +330,26 @@ class Config(_Section):
                 f"capture.dynamic_min_frames ({self.capture.dynamic_min_frames}) "
                 f"es menor que dtw.min_source_frames ({self.dtw.min_source_frames}): "
                 "se grabarían muestras dinámicas que el remuestreo del §3.2 rechaza"
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _el_espacio_no_lo_dispara_un_parpadeo(self) -> Config:
+        """El espacio tiene que costar más ausencia que volver a IDLE.
+
+        `missing_frames_to_idle` es cuánto tarda la máquina de estados en dar la
+        mano por perdida, y se cruza con cualquier oclusión momentánea. Si el
+        espacio se disparara ahí, un parpadeo del detector partiría una palabra
+        en dos y quien firma no tendría forma de evitarlo.
+        """
+        espacio = self.spelling.space_after_absent_frames
+        idle = self.segmentation.missing_frames_to_idle
+        if espacio <= idle:
+            msg = (
+                f"spelling.space_after_absent_frames ({espacio}) no supera "
+                f"segmentation.missing_frames_to_idle ({idle}): un parpadeo "
+                "del detector escribiría un espacio"
             )
             raise ValueError(msg)
         return self

@@ -1,0 +1,4 @@
+feat(config): el umbral del espacio, validado contra la vuelta a IDLE
+
+Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01M38pgnk1Fjm1moS76t53zL

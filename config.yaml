@@ -246,3 +246,17 @@ capture:
   # pantalla: al alcanzarla no se bloquea nada. ARQUITECTURA.md §4.7 pide ~20 por
   # letra, 2 sesiones por persona, 3 personas.
   target_samples_per_label: 20
+
+# Acumulación de letras en palabras (ARQUITECTURA.md §4.2, docs/adr/0012-...).
+spelling:
+  # Frames consecutivos sin mano antes de cerrar la palabra en curso y empezar
+  # otra. A 30 fps, 30 frames es un segundo.
+  #
+  # Es el único gesto de control del proyecto. Bajar la mano entre palabras es lo
+  # que se hace de todos modos, y el clasificador no tiene clases libres: conoce
+  # 22 y las 21 letras están ocupadas, así que un gesto dedicado sería una clase
+  # nueva, y una clase nueva son tres personas citadas otra vez.
+  #
+  # config.py valida que supere a segmentation.missing_frames_to_idle. Si no, un
+  # parpadeo del detector partiría una palabra en dos.
+  space_after_absent_frames: 30
