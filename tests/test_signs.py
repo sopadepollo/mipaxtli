@@ -7,6 +7,7 @@ ejercita con datos construidos a mano.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -18,6 +19,7 @@ from lsm.signs import (
     MANIFEST_SCHEMA_VERSION,
     AssetReview,
     AssetSource,
+    Candidate,
     Faster,
     Finished,
     Manifest,
@@ -38,14 +40,26 @@ from lsm.signs import (
     WordGap,
     asset_frame,
     build_playlist,
+    choose_reference,
     expected_filename,
     manifest_drift,
     player_step,
+    project_frames,
     render_tokens,
     start,
     text_to_symbols,
 )
-from lsm.types import Handedness
+from lsm.synthetic import (
+    arc_offsets,
+    canonical_hand,
+    class_hand,
+    moving_sequence,
+    still_sequence,
+    synthetic_samples,
+    to_frame,
+    translated,
+)
+from lsm.types import Handedness, Point2, Sample, SampleKind
 from lsm.vocabulary import LETTERS, Label, spec
 
 HOY = date(2026, 9, 14)
@@ -441,3 +455,145 @@ def test_el_frame_del_gif_da_vueltas_con_los_loops() -> None:
     assert asset_frame(PlayerState(elapsed_ms=1000.0), n_frames, duracion) == 12
     assert asset_frame(PlayerState(elapsed_ms=2000.0), n_frames, duracion) == 0
     assert asset_frame(PlayerState(elapsed_ms=3999.0), n_frames, duracion) == 23
+
+
+# --------------------------------------------------------------------------- #
+# Muestra de referencia
+# --------------------------------------------------------------------------- #
+
+
+def candidatas(muestras: tuple[Sample, ...]) -> list[Candidate]:
+    return [
+        Candidate(
+            sample=muestra,
+            path=f"{muestra.signer_id}/{muestra.session_id}/{muestra.label}/{i:03d}.json",
+        )
+        for i, muestra in enumerate(muestras)
+    ]
+
+
+def test_la_referencia_es_la_medoide_y_no_una_rareza() -> None:
+    """Tres muestras parecidas y una hecha con otra mano: la elegida es una de
+    las tres. Y siempre la misma: `render` tiene que ser determinista."""
+    tipicas = synthetic_samples(("A",), signers=1, sessions=1, repetitions=3)
+    rara = replace(tipicas[0], sequence=still_sequence(class_hand(40), length=8))
+    todas = candidatas((*tipicas, rara))
+
+    eleccion = choose_reference(todas, Label.A, CONFIG)
+
+    assert eleccion.sample in tipicas
+    assert eleccion.candidates == 4
+    assert eleccion.mirrored is False
+    assert choose_reference(todas, Label.A, CONFIG) == eleccion
+
+
+def test_se_prefiere_la_mano_derecha_y_si_no_hay_se_espeja() -> None:
+    muestras = synthetic_samples(("A",), signers=1, sessions=1, repetitions=2)
+    izquierda = replace(muestras[0], handedness=Handedness.LEFT)
+    derecha = muestras[1]
+
+    eleccion = choose_reference(candidatas((izquierda, derecha)), Label.A, CONFIG)
+    assert eleccion.sample is derecha
+    assert eleccion.mirrored is False
+
+    solo_izquierdas = candidatas(
+        (izquierda, replace(muestras[1], handedness=Handedness.LEFT))
+    )
+    eleccion = choose_reference(solo_izquierdas, Label.A, CONFIG)
+    assert eleccion.mirrored is True
+
+
+def test_una_dinamica_solo_toma_grabaciones_dinamicas() -> None:
+    """`NONE` y las grabaciones estáticas de una letra dinámica no sirven de
+    referencia: la seña **es** el movimiento (ADR 0010)."""
+    estatica = replace(
+        synthetic_samples(("J",), signers=1, sessions=1, repetitions=1)[0],
+        label="J",
+    )
+    trazo = moving_sequence(class_hand(3), arc_offsets(16))
+    dinamica = replace(estatica, sequence=trazo, kind=SampleKind.DYNAMIC)
+
+    eleccion = choose_reference(candidatas((estatica, dinamica)), Label.J, CONFIG)
+
+    assert eleccion.sample is dinamica
+    assert eleccion.candidates == 1
+
+
+def test_sin_candidatas_validas_se_dice_cual_letra() -> None:
+    with pytest.raises(ValueError, match="Q"):
+        choose_reference([], Label.Q, CONFIG)
+
+
+# --------------------------------------------------------------------------- #
+# Proyección al lienzo
+# --------------------------------------------------------------------------- #
+
+LIENZO, MARGEN = 320, 0.1
+
+
+def caja(puntos: tuple[Point2, ...]) -> tuple[float, float, float, float]:
+    xs = [x for x, _ in puntos]
+    ys = [y for _, y in puntos]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def test_la_mano_llena_el_lienzo_respetando_el_margen() -> None:
+    frame = to_frame(canonical_hand(), width=1280, height=720)
+
+    (puntos,) = project_frames(
+        (frame,), mirrored=False, canvas_px=LIENZO, margin=MARGEN
+    )
+
+    x0, y0, x1, y1 = caja(puntos)
+    utilizable = LIENZO * (1 - 2 * MARGEN)
+    assert x0 >= LIENZO * MARGEN - 1e-6 and y0 >= LIENZO * MARGEN - 1e-6  # noqa: PT018
+    assert x1 <= LIENZO * (1 - MARGEN) + 1e-6 and y1 <= LIENZO * (1 - MARGEN) + 1e-6  # noqa: PT018 — es una sola caja, x e y van juntos
+    assert max(x1 - x0, y1 - y0) == pytest.approx(utilizable)
+
+
+def test_espejar_invierte_el_eje_x_y_deja_el_y() -> None:
+    frame = to_frame(canonical_hand(), width=1280, height=720)
+
+    (normal,) = project_frames(
+        (frame,), mirrored=False, canvas_px=LIENZO, margin=MARGEN
+    )
+    (espejo,) = project_frames((frame,), mirrored=True, canvas_px=LIENZO, margin=MARGEN)
+
+    for (x, y), (mx, my) in zip(normal, espejo, strict=True):
+        assert mx == pytest.approx(LIENZO - x)
+        assert my == pytest.approx(y)
+
+
+def test_la_caja_es_una_sola_para_toda_la_secuencia() -> None:
+    """En una dinámica el desplazamiento es la seña: encuadrar frame a frame lo
+    borraría. Con dos frames, el segundo desplazado, el primero no queda centrado."""
+    quieta = to_frame(canonical_hand(), width=1280, height=720)
+    movida = to_frame(translated(canonical_hand(), 200.0, 0.0), width=1280, height=720)
+
+    primero, segundo = project_frames(
+        (quieta, movida), mirrored=False, canvas_px=LIENZO, margin=MARGEN
+    )
+
+    x0_primero, _, _, _ = caja(primero)
+    _, _, x1_segundo, _ = caja(segundo)
+    assert x0_primero == pytest.approx(LIENZO * MARGEN)
+    assert x1_segundo == pytest.approx(LIENZO * (1 - MARGEN))
+    assert caja(primero)[2] < caja(segundo)[2]
+
+
+def test_la_relacion_de_aspecto_no_achata_la_mano() -> None:
+    """Los landmarks vienen normalizados por ancho y alto por separado. Sin
+    corregirlo, una mano en 16:9 saldría estirada a lo alto."""
+    ancha = to_frame(canonical_hand(), width=1280, height=720)
+    cuadrada = to_frame(canonical_hand(), width=720, height=720)
+
+    (en_ancha,) = project_frames(
+        (ancha,), mirrored=False, canvas_px=LIENZO, margin=MARGEN
+    )
+    (en_cuadrada,) = project_frames(
+        (cuadrada,), mirrored=False, canvas_px=LIENZO, margin=MARGEN
+    )
+
+    for (x, y), (cx, cy) in zip(en_ancha, en_cuadrada, strict=True):
+        assert x == pytest.approx(cx, abs=1e-6)
+        assert y == pytest.approx(cy, abs=1e-6)

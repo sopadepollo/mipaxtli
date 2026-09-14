@@ -16,6 +16,7 @@ sea lo que dice `vocabulary.py`, que a su vez transcribe el glosario.
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from collections.abc import Sequence as SequenceABC
@@ -27,7 +28,12 @@ from typing import Final, Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lsm.config import Config
-from lsm.types import Handedness
+from lsm.features import (
+    DynamicUnavailable,
+    ExtractionRejected,
+    extract_sequence_features,
+)
+from lsm.types import Handedness, Point2, RawFrame, Sample, SampleKind
 from lsm.vocabulary import LETTERS, Label
 
 # --------------------------------------------------------------------------- #
@@ -501,3 +507,135 @@ def asset_frame(state: PlayerState, n_frames: int, duracion_ms: int) -> int:
     """Qué frame del GIF mostrar. Da vueltas: con `dynamic_loops = 2`, dos."""
     posicion = int(state.elapsed_ms / duracion_ms * n_frames)
     return posicion % n_frames
+
+
+# --------------------------------------------------------------------------- #
+# Muestra de referencia
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class Candidate:
+    """Una muestra del dataset y su ruta relativa, que es lo que irá al manifest."""
+
+    sample: Sample
+    path: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceChoice:
+    sample: Sample
+    path: str
+    #: Se dibujará espejada en X para mostrar mano derecha.
+    mirrored: bool
+    #: Cuántas muestras se consideraron. Va al log de `render`.
+    candidates: int
+
+
+def _comparison_vector(
+    sample: Sample, dynamic: bool, config: Config
+) -> tuple[float, ...] | None:
+    """Vector en el que se mide "típica": forma para estáticas, matriz DTW
+    aplanada para dinámicas. `None` si la extracción no da para comparar."""
+    outcome = extract_sequence_features(sample.sequence, config)
+    if isinstance(outcome, ExtractionRejected):
+        return None
+    if not dynamic:
+        return outcome.static.shape.values
+    if isinstance(outcome.dynamic, DynamicUnavailable):
+        return None
+    return tuple(valor for fila in outcome.dynamic.rows for valor in fila)
+
+
+def choose_reference(
+    candidates: SequenceABC[Candidate], label: Label, config: Config
+) -> ReferenceChoice:
+    """La muestra más típica de la letra: la medoide del grupo.
+
+    1. Solo muestras de la letra y del `kind` que le corresponde.
+    2. Mano derecha si la hay (el diccionario muestra mano derecha); si no, las
+       izquierdas y se anota que hay que espejar.
+    3. La más cercana al centroide, en distancia euclidiana. Empate → ruta
+       menor, para que `render` sea determinista.
+
+    No es un promedio inventado: es una grabación concreta que se puede ir a ver.
+    """
+    dynamic = LETTERS[label].es_dinamica
+    kind = SampleKind.DYNAMIC if dynamic else SampleKind.STATIC
+    pool = [c for c in candidates if c.sample.label == label and c.sample.kind == kind]
+    derechas = [c for c in pool if c.sample.handedness == Handedness.RIGHT]
+    mirrored = not derechas
+    pool = derechas or pool
+
+    vectores: list[tuple[Candidate, tuple[float, ...]]] = []
+    for candidate in pool:
+        vector = _comparison_vector(candidate.sample, dynamic, config)
+        if vector is not None:
+            vectores.append((candidate, vector))
+    if not vectores:
+        raise ValueError(f"{label}: sin muestras de referencia válidas en el dataset")
+
+    dimension = len(vectores[0][1])
+    centroide = [
+        sum(vector[i] for _, vector in vectores) / len(vectores)
+        for i in range(dimension)
+    ]
+
+    def distancia(entrada: tuple[Candidate, tuple[float, ...]]) -> tuple[float, str]:
+        _, vector = entrada
+        return (
+            math.sqrt(
+                sum((v - c) ** 2 for v, c in zip(vector, centroide, strict=True))
+            ),
+            entrada[0].path,
+        )
+
+    elegida, _ = min(vectores, key=distancia)
+    return ReferenceChoice(
+        sample=elegida.sample,
+        path=elegida.path,
+        mirrored=mirrored,
+        candidates=len(vectores),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Proyección al lienzo
+# --------------------------------------------------------------------------- #
+
+
+def project_frames(
+    frames: SequenceABC[RawFrame], *, mirrored: bool, canvas_px: int, margin: float
+) -> tuple[tuple[Point2, ...], ...]:
+    """Landmarks normalizados → píxeles de un lienzo cuadrado.
+
+    Corrige la relación de aspecto (`x · a`, con `a = ancho / alto`), espeja en
+    X si se pide, y encuadra **una** caja envolvente sobre toda la secuencia:
+    en una dinámica el desplazamiento es la seña, y encuadrar frame a frame lo
+    borraría. Vista de cámara, no espejo: como te ve quien te mira.
+    """
+    if not frames:
+        raise ValueError("project_frames necesita al menos un frame")
+    crudos = [
+        [
+            (
+                -lm.x * frame.aspect_ratio if mirrored else lm.x * frame.aspect_ratio,
+                lm.y,
+            )
+            for lm in frame.landmarks
+        ]
+        for frame in frames
+    ]
+    xs = [x for puntos in crudos for x, _ in puntos]
+    ys = [y for puntos in crudos for _, y in puntos]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    lado = max(x1 - x0, y1 - y0)
+    utilizable = canvas_px * (1.0 - 2.0 * margin)
+    escala = utilizable / lado if lado > 0.0 else 1.0
+    centro = canvas_px / 2.0
+    dx = centro - escala * (x0 + x1) / 2.0
+    dy = centro - escala * (y0 + y1) / 2.0
+    return tuple(
+        tuple((x * escala + dx, y * escala + dy) for x, y in puntos)
+        for puntos in crudos
+    )
