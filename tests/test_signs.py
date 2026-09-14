@@ -19,8 +19,12 @@ from lsm.signs import (
     AssetSource,
     Manifest,
     SignAsset,
+    UnsupportedCharacters,
+    WordGap,
     expected_filename,
     manifest_drift,
+    render_tokens,
+    text_to_symbols,
 )
 from lsm.types import Handedness
 from lsm.vocabulary import LETTERS, Label, spec
@@ -196,3 +200,62 @@ def test_la_forma_de_escribir_la_letra_tambien_se_compara() -> None:
 
     assert deriva
     assert "letra" in deriva[0]
+
+
+# --------------------------------------------------------------------------- #
+# Texto → símbolos
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        ("llave", (Label.DOBLE_L, Label.A, Label.V, Label.E)),
+        ("carro", (Label.C, Label.A, Label.DOBLE_R, Label.O)),
+        ("año", (Label.A, Label.ENIE, Label.O)),
+        ("chico", (Label.C, Label.H, Label.I, Label.C, Label.O)),
+        ("ll", (Label.DOBLE_L,)),
+        ("lll", (Label.DOBLE_L, Label.L)),
+        ("Ñ", (Label.ENIE,)),
+        (
+            "pingüino",
+            (Label.P, Label.I, Label.N, Label.G, Label.U, Label.I, Label.N, Label.O),
+        ),
+    ],
+)
+def test_texto_a_simbolos(texto: str, esperado: tuple[Label, ...]) -> None:
+    assert text_to_symbols(texto) == esperado
+
+
+def test_los_espacios_separan_palabras_y_no_se_acumulan() -> None:
+    tokens = text_to_symbols("  Árbol  verde ")
+
+    assert tokens == (
+        Label.A, Label.R, Label.B, Label.O, Label.L,
+        WordGap(),
+        Label.V, Label.E, Label.R, Label.D, Label.E,
+    )  # fmt: skip
+
+
+def test_la_enie_sobrevive_a_quitar_los_acentos() -> None:
+    """En NFD la ñ es `n` + tilde: quitar marcas combinantes sin cuidado la
+    convertiría en N y "año" se deletrearía como "ano"."""
+    assert text_to_symbols("ñandú") == (Label.ENIE, Label.A, Label.N, Label.D, Label.U)
+
+
+def test_un_caracter_sin_sena_se_rechaza_con_la_lista_exacta() -> None:
+    with pytest.raises(UnsupportedCharacters) as excinfo:
+        text_to_symbols("hola2! 2")
+
+    assert excinfo.value.chars == ("2", "!")
+
+
+def test_un_texto_sin_letras_da_una_tupla_vacia() -> None:
+    assert text_to_symbols("   ") == ()
+    assert text_to_symbols("") == ()
+
+
+def test_los_simbolos_se_muestran_como_se_escriben() -> None:
+    tokens = text_to_symbols("año ll")
+
+    assert render_tokens(tokens) == "A Ñ O · LL"

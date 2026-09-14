@@ -17,6 +17,9 @@ sea lo que dice `vocabulary.py`, que a su vez transcribe el glosario.
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Sequence as SequenceABC
+from dataclasses import dataclass
 from datetime import date
 from typing import Final, Literal, TypeAlias
 
@@ -216,3 +219,84 @@ def manifest_drift(manifest: Manifest) -> list[str]:
         if label not in LETTERS:
             deriva.append(f"{label}: sobra, no está en el glosario")
     return deriva
+
+
+# --------------------------------------------------------------------------- #
+# Texto → símbolos
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class WordGap:
+    """Un espacio del texto: pausa entre palabras."""
+
+
+Token: TypeAlias = Label | WordGap
+
+#: Dígrafos del glosario, en el orden en que se prueban. Voraz y de izquierda a
+#: derecha: en ortografía española `ll` y `rr` son siempre dígrafos, y es lo
+#: simétrico a `spelling.py`, donde `DOBLE_L` es un símbolo y no dos.
+_DIGRAPHS: Final[dict[str, Label]] = {"LL": Label.DOBLE_L, "RR": Label.DOBLE_R}
+
+#: Cómo se lee cada símbolo en pantalla.
+_GAP_DISPLAY: Final = "·"
+
+
+class UnsupportedCharacters(ValueError):  # noqa: N818
+    """El texto tiene caracteres sin seña en el glosario. Nada se salta en silencio."""
+
+    def __init__(self, chars: tuple[str, ...]) -> None:
+        self.chars = chars
+        listado = ", ".join(repr(char) for char in chars)
+        super().__init__(f"caracteres sin seña en el glosario: {listado}")
+
+
+def _base_letter(char: str) -> str:
+    """`á` → `A`, `ü` → `U`, `ñ` → `Ñ`; lo demás, tal cual en mayúsculas."""
+    if char in "ñÑ":
+        return "Ñ"
+    decomposed = unicodedata.normalize("NFD", char)
+    return decomposed[0].upper()
+
+
+def text_to_symbols(text: str) -> tuple[Token, ...]:
+    """Convierte texto escrito en símbolos del glosario.
+
+    Normaliza (`§6.1` del spec): `ñ` se protege antes de quitar acentos, los
+    dígrafos se toman vorazmente, `ch` son dos letras porque el glosario no
+    tiene CH, los espacios separan palabras y cualquier otro carácter es un
+    error con la lista completa de ofensores.
+    """
+    tokens: list[Token] = []
+    unsupported: list[str] = []
+    for palabra in unicodedata.normalize("NFC", text).split():
+        if tokens:
+            tokens.append(WordGap())
+        letras = "".join(_base_letter(char) for char in palabra)
+        i = 0
+        while i < len(letras):
+            digrafo = _DIGRAPHS.get(letras[i : i + 2])
+            if digrafo is not None:
+                tokens.append(digrafo)
+                i += 2
+                continue
+            char = letras[i]
+            if char == "Ñ":
+                tokens.append(Label.ENIE)
+            elif "A" <= char <= "Z":
+                tokens.append(Label(char))
+            elif palabra[i] not in unsupported:
+                unsupported.append(palabra[i])
+            i += 1
+    if unsupported:
+        raise UnsupportedCharacters(tuple(unsupported))
+    return tuple(tokens)
+
+
+def render_tokens(tokens: SequenceABC[Token]) -> str:
+    """`A Ñ O · LL`: cada símbolo como se escribe, los espacios como `·`."""
+    partes = [
+        _GAP_DISPLAY if isinstance(token, WordGap) else LETTERS[token].display
+        for token in tokens
+    ]
+    return " ".join(partes)
