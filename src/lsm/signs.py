@@ -265,14 +265,33 @@ def text_to_symbols(text: str) -> tuple[Token, ...]:
     Normaliza (`§6.1` del spec): `ñ` se protege antes de quitar acentos, los
     dígrafos se toman vorazmente, `ch` son dos letras porque el glosario no
     tiene CH, los espacios separan palabras y cualquier otro carácter es un
-    error con la lista completa de ofensores.
+    error con la lista completa de ofensores. Un carácter que se expande al
+    pasar a mayúsculas (e.g., ß → SS) se rechaza como unsupported.
     """
     tokens: list[Token] = []
     unsupported: list[str] = []
     for palabra in unicodedata.normalize("NFC", text).split():
         if tokens:
             tokens.append(WordGap())
-        letras = "".join(_base_letter(char) for char in palabra)
+        # Map each character and track its origin in case it expands (e.g., ß → SS).
+        mapped_chars: list[str] = []
+        char_origins: list[str] = []  # original character for each mapped character
+        for char in palabra:
+            mapped = _base_letter(char)
+            # Reject characters that expand to multiple characters or are not valid
+            # letters.
+            if len(mapped) != 1:
+                if char not in unsupported:
+                    unsupported.append(char)
+                continue
+            m = mapped[0]
+            if m in "ABCDEFGHIJKLMNOPQRSTUVWXYZÑ":
+                mapped_chars.append(m)
+                char_origins.append(char)
+            else:
+                if char not in unsupported:
+                    unsupported.append(char)
+        letras = "".join(mapped_chars)
         i = 0
         while i < len(letras):
             digrafo = _DIGRAPHS.get(letras[i : i + 2])
@@ -285,8 +304,11 @@ def text_to_symbols(text: str) -> tuple[Token, ...]:
                 tokens.append(Label.ENIE)
             elif "A" <= char <= "Z":
                 tokens.append(Label(char))
-            elif palabra[i] not in unsupported:
-                unsupported.append(palabra[i])
+            else:
+                # This shouldn't happen as we already filter above.
+                original = char_origins[i]
+                if original not in unsupported:
+                    unsupported.append(original)
             i += 1
     if unsupported:
         raise UnsupportedCharacters(tuple(unsupported))

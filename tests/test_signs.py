@@ -259,3 +259,20 @@ def test_los_simbolos_se_muestran_como_se_escriben() -> None:
     tokens = text_to_symbols("año ll")
 
     assert render_tokens(tokens) == "A Ñ O · LL"
+    # Also check DOBLE_R
+    assert render_tokens(text_to_symbols("carro")) == "C A RR O"
+
+
+def test_un_caracter_que_se_expande_al_mayusculas_se_rechaza() -> None:
+    """ß (German sharp s) expands to SS when uppercased, causing index mismatch."""
+    with pytest.raises(UnsupportedCharacters) as excinfo:
+        text_to_symbols("ß")
+
+    assert excinfo.value.chars == ("ß",)
+
+
+def test_un_caracter_expandible_con_otros_invalidos_se_reportan_juntos() -> None:
+    with pytest.raises(UnsupportedCharacters) as excinfo:
+        text_to_symbols("ß2")
+
+    assert excinfo.value.chars == ("ß", "2")
