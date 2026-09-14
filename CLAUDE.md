@@ -21,11 +21,12 @@ es lo primero que lee quien llega al repositorio.
    suelto.** Una seña estática es una secuencia corta y estable. No introduzcas APIs
    que acepten un solo frame.
 
-2. **`src/lsm/features.py`, `segmentation.py`, `capture.py`, `evaluation.py` y
-   `classifiers/` son código puro.** Sin
+2. **`src/lsm/features.py`, `segmentation.py`, `capture.py`, `evaluation.py`,
+   `telemetry.py` y `classifiers/` son código puro.** Sin
    OpenCV, sin MediaPipe, sin acceso a disco, sin cámara. Toda la I/O vive en
    `src/lsm/io/` y en `src/lsm/cli/`. Esto permite testear el núcleo en CI sin
-   hardware.
+   hardware. `telemetry.py` mide tiempo, así que además **no llama a `time`**: el
+   reloj entra inyectado y quien lo pasa es el CLI.
 
 3. **MediaPipe solo se importa en `src/lsm/io/hands.py`.** El resto del código
    consume la interfaz definida ahí.

@@ -27,13 +27,13 @@ def test_config_por_defecto_cubre_los_umbrales_del_contrato() -> None:
     assert config.dtw.min_source_frames >= 1
 
     segmentation = config.segmentation
-    assert segmentation.buffer_size > 0
+    assert segmentation.buffer_ms > 0
     assert segmentation.velocity_threshold > 0.0
-    assert segmentation.stable_frames > 0
+    assert segmentation.stable_ms > 0
     assert segmentation.min_confidence > 0.0
-    assert segmentation.emit_cooldown_frames > 0
-    assert segmentation.reject_cooldown_frames > 0
-    assert segmentation.missing_frames_to_idle > 0
+    assert segmentation.emit_cooldown_ms > 0
+    assert segmentation.reject_cooldown_ms > 0
+    assert segmentation.missing_to_idle_ms > 0
     assert segmentation.min_detection_score > 0.0
 
 
@@ -73,13 +73,13 @@ def test_el_cooldown_de_rechazo_no_puede_superar_al_de_emision() -> None:
     """
     with pytest.raises(ValidationError):
         Config.model_validate(
-            {"segmentation": {"emit_cooldown_frames": 4, "reject_cooldown_frames": 9}}
+            {"segmentation": {"emit_cooldown_ms": 4, "reject_cooldown_ms": 9}}
         )
 
 
 def test_los_frames_estables_no_pueden_exceder_el_buffer() -> None:
     with pytest.raises(ValidationError):
-        Config.model_validate({"segmentation": {"buffer_size": 8, "stable_frames": 9}})
+        Config.model_validate({"segmentation": {"buffer_ms": 8, "stable_ms": 9}})
 
 
 def test_el_config_yaml_de_ejemplo_es_valido_y_coincide_con_los_defaults() -> None:
@@ -95,11 +95,38 @@ def test_el_espacio_exige_mas_ausencia_que_la_vuelta_a_idle() -> None:
     with pytest.raises(ValidationError):
         Config.model_validate(
             {
-                "segmentation": {"missing_frames_to_idle": 8},
-                "spelling": {"space_after_absent_frames": 8},
+                "segmentation": {"missing_to_idle_ms": 8},
+                "spelling": {"space_after_absent_ms": 8},
             }
         )
 
 
-def test_el_espacio_por_defecto_es_un_segundo_a_treinta_fps() -> None:
-    assert Config().spelling.space_after_absent_frames == 30
+def test_el_espacio_por_defecto_es_un_segundo_de_verdad() -> None:
+    """Un segundo, y ahora lo es a cualquier tasa.
+
+    Antes eran 30 cuadros «que son un segundo a 30 fps», y en la maquina medida
+    —17.8 fps— eran 1685 ms. Ver `docs/adr/0013-la-ventana-mezclada.md`.
+    """
+    assert Config().spelling.space_after_absent_ms == 1000.0
+
+
+def test_la_telemetria_tambien_tiene_su_seccion() -> None:
+    """`CLAUDE.md` §5 no hace excepciones: la ventana sobre la que se promedia
+    el fps que se ve en pantalla y la duracion de la medicion son umbrales, y
+    viven en `config.yaml` como los demas."""
+    telemetry = Config().telemetry
+
+    assert telemetry.fps_window_frames > 0
+    assert telemetry.benchmark_seconds > 0.0
+
+
+def test_una_ventana_de_fps_vacia_se_rechaza() -> None:
+    """Promediar sobre cero cuadros no significa nada, y el HUD no deberia
+    tener que defenderse de una configuracion imposible."""
+    with pytest.raises(ValidationError):
+        Config.model_validate({"telemetry": {"fps_window_frames": 0}})
+
+
+def test_una_medicion_de_duracion_cero_se_rechaza() -> None:
+    with pytest.raises(ValidationError):
+        Config.model_validate({"telemetry": {"benchmark_seconds": 0.0}})

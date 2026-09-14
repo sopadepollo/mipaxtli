@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from typing import TypeAlias
 
 from lsm.config import Config
+from lsm.segmentation import frames_from_ms
 from lsm.vocabulary import Label, spec
 
 
@@ -128,11 +129,17 @@ def step(
     state: SpellingState,
     signal: Signal,
     config: Config,
+    *,
+    fps: float | None = None,
 ) -> StepResult:
     """Aplica una señal. Nunca muta `state`.
 
-    `config` entra aunque esta versión todavía no lo use: el umbral del espacio
-    llega en la tarea siguiente y la firma no debe cambiar entonces.
+    `fps` convierte a cuadros el umbral del espacio, que en `config.yaml` está en
+    milisegundos. La sesión en vivo pasa la tasa medida; sin ella se usa la
+    nominal, `capture.camera_fps`. Es la misma regla que `run_segmentation`, y
+    tiene que serlo: `config.py` valida que el espacio exija más ausencia que la
+    vuelta a IDLE, y esa comparación solo se sostiene si las dos duraciones se
+    convierten con la misma tasa.
     """
     match signal:
         case LetterSignal(label=label):
@@ -142,7 +149,7 @@ def step(
                 state=replace(state, absent_frames=0, space_emitted=False)
             )
         case HandAbsent():
-            return _mano_ausente(state, config)
+            return _mano_ausente(state, config, fps or config.capture.camera_fps)
         case Backspace():
             return _borrar(state)
         case CommitText():
@@ -170,14 +177,14 @@ def _escribir_letra(state: SpellingState, label: Label) -> StepResult:
     )
 
 
-def _mano_ausente(state: SpellingState, config: Config) -> StepResult:
+def _mano_ausente(state: SpellingState, config: Config, fps: float) -> StepResult:
     """Cierra la palabra cuando la ausencia deja de ser un parpadeo.
 
     Asume que quien emite las señales manda un `HandPresent` por cada frame con
     mano: ese evento resetea los dos cerrojos (`absent_frames` y `space_emitted`).
     """
     absent = state.absent_frames + 1
-    alcanzado = absent >= config.spelling.space_after_absent_frames
+    alcanzado = absent >= frames_from_ms(config.spelling.space_after_absent_ms, fps)
 
     if not alcanzado or state.space_emitted:
         return StepResult(state=replace(state, absent_frames=absent))

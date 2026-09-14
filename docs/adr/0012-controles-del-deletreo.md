@@ -30,9 +30,10 @@ ninguno pasa por el clasificador.**
 
 - **Bajar la mano cierra la palabra.** No es una clase nueva: es la ausencia de
   mano que `run_segmentation` ya detecta para volver a `IDLE`
-  (`missing_frames_to_idle`), y `spelling.py` la reutiliza con su propio umbral,
-  más largo (`spelling.space_after_absent_frames`, 30 frames — un segundo a 30
-  fps). Se justifica solo: al deletrear con las manos, bajarla entre palabras es
+  (`missing_to_idle_ms`), y `spelling.py` la reutiliza con su propio umbral,
+  más largo (`spelling.space_after_absent_ms`, un segundo — y desde el ADR 0013,
+  un segundo de verdad a cualquier tasa; cuando estaba en frames eran 1.7
+  segundos en la máquina donde se midió). Se justifica solo: al deletrear con las manos, bajarla entre palabras es
   lo que ya hace cualquiera de forma natural, con o sin este proyecto. No hay
   nada que aprender.
 - **`BACKSPACE` borra el último símbolo** de la palabra en curso.

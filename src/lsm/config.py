@@ -131,47 +131,95 @@ class DtwConfig(_Section):
 class SegmentationConfig(_Section):
     """Umbrales de la máquina de estados (`ARQUITECTURA.md` §4.2)."""
 
-    #: Tamaño del buffer circular de frames recientes, en frames.
-    buffer_size: int = Field(default=24, ge=2, le=300)
+    #: Cuánto pasado recuerda el buffer circular, en **milisegundos**.
+    #:
+    #: Los umbrales temporales están en milisegundos y no en frames desde que se
+    #: midió la tasa real (`docs/adr/0013-la-ventana-mezclada.md`). En frames, el
+    #: comportamiento cambiaba con la máquina sin que nadie lo notara: estos 24
+    #: frames eran los 800 ms que decía el comentario a 30 fps, y 1348 ms a los
+    #: 17.8 fps que de verdad sostiene la máquina de referencia.
+    #:
+    #: La conversión a frames la hace `FrameThresholds.from_config` con la tasa
+    #: medida en tiempo de ejecución.
+    buffer_ms: float = Field(default=800.0, gt=0.0, le=60000.0)
 
     #: Por debajo de esto, el frame del detector se marca inválido.
     min_detection_score: float = Field(default=0.5, gt=0.0, le=1.0)
 
     #: Velocidad por debajo de la cual se considera que la mano está quieta.
-    #: Unidades de mano por frame; definida en `docs/feature-spec.md` §6.
+    #: Unidades de mano **por frame**; definida en `docs/feature-spec.md` §6.
+    #:
+    #: **Sigue en unidades por frame y por tanto sigue dependiendo de la tasa**,
+    #: al revés que el resto de esta sección. Es una deuda conocida y anotada: a
+    #: menor tasa, dos frames consecutivos están más separados en el tiempo, así
+    #: que la misma mano física da un `v_t` mayor y cuesta más declararla quieta.
+    #: Expresarla por segundo es el arreglo, y no se hizo aquí porque
+    #: `segmentation.velocity_threshold` es un **eje del barrido de calibración de
+    #: la Fase 2** (`src/lsm/cli/evaluate.py`): cambiarle la unidad invalida esa
+    #: calibración y pide su propia medición. Ver el ADR 0013.
     velocity_threshold: float = Field(default=0.02, gt=0.0, le=100.0)
 
-    #: Cuántos frames consecutivos por debajo del umbral hacen falta para pasar de
-    #: TRACKING a STABLE.
-    stable_frames: int = Field(default=5, ge=1, le=300)
+    #: Cuánta quietud continuada hace falta para pasar de TRACKING a STABLE, en
+    #: milisegundos. Es además el **piso** de la ventana que se clasifica.
+    stable_ms: float = Field(default=167.0, gt=0.0, le=60000.0)
 
     #: Confianza mínima para emitir una letra. Por debajo se emite UNKNOWN y no se
-    #: agrega nada al texto (`ARQUITECTURA.md` §4.4).
+    #: agrega nada al texto (`ARQUITECTURA.md` §4.4). Es el **piso**: con la
+    #: emisión progresiva, una confianza entre este valor y `high_confidence` no
+    #: emite todavía, sigue acumulando evidencia.
     min_confidence: float = Field(default=0.6, gt=0.0, le=1.0)
 
-    #: Cooldown tras emitir una letra, para no repetirla mientras la mano sigue
-    #: quieta.
-    emit_cooldown_frames: int = Field(default=12, ge=1, le=300)
+    #: Confianza que emite **sin esperar más evidencia**. Entre `min_confidence`
+    #: y este valor, la máquina sigue clasificando frame a frame mientras la
+    #: ventana crece, y emite al agotarla.
+    #:
+    #: MEDIDO bajo leave-one-signer-out sobre el dataset de la Fase 2 (2437
+    #: muestras no rechazadas): en 0.82 el 75.1% de las muestras emitirían de
+    #: inmediato con precisión 0.9995 —un único error, `E→C` con 0.9316, que
+    #: ningún umbral por debajo de 0.94 excluye—. Es la rodilla: en 0.80 pasan 4
+    #: errores y en 0.85 la precisión ya no mejora (0.9994) mientras la emisión
+    #: inmediata cae al 67.1%, o sea un tercio de las letras esperando la
+    #: ventana entera.
+    #:
+    #: **Lo que la medida no cubre:** se midió sobre muestras completas de 24
+    #: frames, no sobre las ventanas cortas de la emisión progresiva, que son más
+    #: ruidosas. Una ventana de 5 frames alcanzará 0.82 menos veces que una de
+    #: 24, así que el efecto real es acumular más de lo que predice esta tabla.
+    #: El error va hacia tardar, no hacia escribir mal.
+    high_confidence: float = Field(default=0.82, gt=0.0, le=1.0)
 
-    #: Cooldown tras un rechazo (confianza insuficiente o ventana inestable).
-    #: Más corto que el de emisión a propósito: ver `lsm.segmentation`.
-    reject_cooldown_frames: int = Field(default=4, ge=1, le=300)
+    #: Cooldown tras emitir una letra, en milisegundos, para no repetirla
+    #: mientras la mano sigue quieta.
+    emit_cooldown_ms: float = Field(default=400.0, gt=0.0, le=60000.0)
 
-    #: Frames consecutivos sin mano que llevan de vuelta a IDLE.
-    missing_frames_to_idle: int = Field(default=8, ge=1, le=300)
+    #: Cooldown tras un rechazo (confianza insuficiente o ventana inestable), en
+    #: milisegundos. Más corto que el de emisión a propósito: ver
+    #: `lsm.segmentation`.
+    reject_cooldown_ms: float = Field(default=133.0, gt=0.0, le=60000.0)
+
+    #: Ausencia de mano continuada que lleva de vuelta a IDLE, en milisegundos.
+    missing_to_idle_ms: float = Field(default=267.0, gt=0.0, le=60000.0)
 
     @model_validator(mode="after")
     def _coherencia_entre_umbrales(self) -> SegmentationConfig:
-        if self.stable_frames > self.buffer_size:
+        if self.stable_ms > self.buffer_ms:
             msg = (
-                f"stable_frames ({self.stable_frames}) excede buffer_size "
-                f"({self.buffer_size}): nunca se alcanzaría STABLE"
+                f"stable_ms ({self.stable_ms}) excede buffer_ms "
+                f"({self.buffer_ms}): nunca se alcanzaría STABLE"
             )
             raise ValueError(msg)
-        if self.reject_cooldown_frames > self.emit_cooldown_frames:
+        if self.high_confidence < self.min_confidence:
             msg = (
-                f"reject_cooldown_frames ({self.reject_cooldown_frames}) excede "
-                f"emit_cooldown_frames ({self.emit_cooldown_frames}): un rechazo "
+                f"high_confidence ({self.high_confidence}) es menor que "
+                f"min_confidence ({self.min_confidence}): el umbral que emite sin "
+                "esperar no puede estar por debajo del piso que decide si se "
+                "emite en absoluto"
+            )
+            raise ValueError(msg)
+        if self.reject_cooldown_ms > self.emit_cooldown_ms:
+            msg = (
+                f"reject_cooldown_ms ({self.reject_cooldown_ms}) excede "
+                f"emit_cooldown_ms ({self.emit_cooldown_ms}): un rechazo "
                 "costaría más que un acierto y una letra apenas bajo el umbral "
                 "obligaría a rehacer la seña entera"
             )
@@ -232,11 +280,47 @@ class HandsConfig(_Section):
 class SpellingConfig(_Section):
     """Acumulación de letras en palabras (`ARQUITECTURA.md` §4.2)."""
 
-    #: Frames consecutivos sin mano antes de cerrar la palabra en curso. A 30 fps,
-    #: 30 frames es un segundo. Es el único gesto de control del proyecto: bajar
-    #: la mano entre palabras es lo que se hace de todos modos, y el clasificador
-    #: no tiene clases libres para un gesto dedicado.
-    space_after_absent_frames: int = Field(default=30, ge=1, le=600)
+    #: Ausencia de mano que cierra la palabra en curso, en **milisegundos**. Un
+    #: segundo. Es el único gesto de control del proyecto: bajar la mano entre
+    #: palabras es lo que se hace de todos modos, y el clasificador no tiene
+    #: clases libres para un gesto dedicado.
+    #:
+    #: En milisegundos y no en frames por lo mismo que la sección de
+    #: segmentación: en frames, "un segundo" eran 1685 ms en la máquina medida.
+    space_after_absent_ms: float = Field(default=1000.0, gt=0.0, le=60000.0)
+
+
+class TelemetryConfig(_Section):
+    """Instrumentación de la tasa de cuadros (`src/lsm/telemetry.py`).
+
+    Existe porque todos los umbrales de `segmentation` están en **frames** y sus
+    comentarios los traducen a milisegundos suponiendo 30 fps, suposición que no
+    se había medido nunca. Ver `docs/adr/0013-la-ventana-mezclada.md`.
+    """
+
+    #: Cuadros sobre los que se promedia el fps que se muestra en vivo en el
+    #: preview. Es una media móvil a propósito: con la sesión entera, un arranque
+    #: lento seguiría tirando del número diez minutos después y el HUD dejaría de
+    #: servir para ver el efecto de lo que se acaba de tocar. A 30 fps, 30
+    #: cuadros es un segundo de historia.
+    fps_window_frames: int = Field(default=30, ge=1, le=3600)
+
+    #: Tasa por debajo de la cual el preview avisa de que el problema es de
+    #: rendimiento y no de la seña.
+    #:
+    #: A tasas muy bajas ninguna ventana temporal razonable contiene frames
+    #: suficientes: con `stable_ms = 167`, a 12 fps la estabilidad se decide con
+    #: 2 cuadros y a 6 fps con 1, que es no decidir nada. 12 va justo por debajo
+    #: del percentil 5 medido en la máquina de referencia (13.8 fps), así que
+    #: avisa cuando esa máquina se degrada por debajo de su propio peor caso
+    #: normal y no en cada bache.
+    min_fps: float = Field(default=12.0, gt=0.0, le=1000.0)
+
+    #: Cuánto dura `lsm-demo --medir-fps` cuando no se le pasa `--medir-segundos`.
+    #: Un minuto: lo bastante para que la distribución tenga cola —el percentil 5
+    #: de 1800 cuadros son los 90 peores— y lo bastante corto para repetirlo tras
+    #: cada ajuste.
+    benchmark_seconds: float = Field(default=60.0, gt=0.0, le=3600.0)
 
 
 class CaptureConfig(_Section):
@@ -314,6 +398,7 @@ class Config(_Section):
     hands: HandsConfig = Field(default_factory=HandsConfig)
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
     spelling: SpellingConfig = Field(default_factory=SpellingConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
 
     @model_validator(mode="after")
     def _la_captura_alcanza_para_el_canal_dinamico(self) -> Config:
@@ -343,12 +428,12 @@ class Config(_Section):
         espacio se disparara ahí, un parpadeo del detector partiría una palabra
         en dos y quien firma no tendría forma de evitarlo.
         """
-        espacio = self.spelling.space_after_absent_frames
-        idle = self.segmentation.missing_frames_to_idle
+        espacio = self.spelling.space_after_absent_ms
+        idle = self.segmentation.missing_to_idle_ms
         if espacio <= idle:
             msg = (
-                f"spelling.space_after_absent_frames ({espacio}) no supera "
-                f"segmentation.missing_frames_to_idle ({idle}): un parpadeo "
+                f"spelling.space_after_absent_ms ({espacio}) no supera "
+                f"segmentation.missing_to_idle_ms ({idle}): un parpadeo "
                 "del detector escribiría un espacio"
             )
             raise ValueError(msg)

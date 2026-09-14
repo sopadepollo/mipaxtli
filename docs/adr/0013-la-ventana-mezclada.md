@@ -1,6 +1,6 @@
-# ADR 0013 — La ventana que se clasifica no es la ventana que se comprueba estable (propuesta)
+# ADR 0013 — La ventana que se clasifica no es la ventana que se comprueba estable
 
-- **Estado:** propuesta — esta fase no la decide
+- **Estado:** aceptada e implementada el 2026-09-09 (`SEGMENTATION_SPEC_VERSION = 2`)
 - **Fecha:** 2026-09-09
 - **Fase:** 3 (cierre)
 - **Implementa:** `src/lsm/segmentation.py`
@@ -145,3 +145,129 @@ correcto a largo plazo, pero toca la máquina de estados que `segmentation.ts`
 tiene que reproducir, así que exige su propio ciclo de golden vectors y
 verificación cruzada antes de la Fase 7 — no es un cambio de una línea aunque el
 diagnóstico quepa en una.
+
+---
+
+# Resolución (2026-09-09)
+
+Lo de arriba se deja **tal como se escribió**, incluida la parte que la medición
+posterior corrigió. Lo que sigue es lo que se decidió y lo que se midió.
+
+## Lo primero fue medir, porque no había con qué decidir
+
+Todos los umbrales están en frames, y «24 frames» significa cosas distintas a 30
+fps que a 12. Se instrumentó el bucle en vivo (`lsm-demo --medir-fps`,
+`src/lsm/telemetry.py`) separando la tasa de entrega de la cámara de la de
+procesamiento de la tubería, con percentiles y reparto por etapas. Sesión de 60 s
+con una persona deletreando delante, Windows, backend MSMF, 1280×720:
+
+```
+cuadros: 1067   pared: 59.98 s   fps sostenido: 17.8
+
+fps por cuadro      media  mediana       p5      p95      min      max
+entrega              18.4     18.4     13.8     23.6      1.6     31.3
+procesamiento        27.2     27.1     18.2     36.8     12.3     61.8
+
+latencia (ms)       media  mediana       p5      p95      min      max
+camara                9.6      8.6      6.6     12.0      5.7    538.3
+deteccion            36.7     35.1     25.7     52.8     16.2     78.9
+segmentacion          1.8      1.7      1.0      3.5      0.0      7.7
+preview               8.1      8.1      4.9     11.9      4.6     79.8
+```
+
+**La máquina de referencia corre a 17.8 fps, no a 30.** Cada umbral de
+`segmentation` duraba 1.7 veces lo que su comentario afirmaba: el buffer no eran
+800 ms sino **1348**, el cooldown de emisión no eran 400 ms sino 674, y el
+espacio entre palabras no era un segundo sino 1.7. La lentitud reportada era, en
+su mayor parte, el buffer circular vaciándose de frames de tránsito durante 1348
+ms mientras cada rechazo intermedio costaba otros 225.
+
+Dos lecturas más de la tabla, las dos con consecuencias:
+
+- **`deteccion` es el 66% del ciclo** (35.1 ms de 53.5). Ninguna de las
+  correcciones de esta ADR la toca, así que la tasa seguirá rondando los 18 fps:
+  lo que se recupera es latencia de confirmación, no fluidez.
+- **`segmentacion` es el 3%** (1.7 ms, techo medido 7.7). Eso es lo que hace
+  asequible clasificar en cada frame en vez de uno de cada cinco, que es el
+  mecanismo de la emisión progresiva. No hay que optimizar la segmentación; hay
+  que dejar de esperar frames.
+
+## Lo que se decidió
+
+**1. La ventana de clasificación es el tramo estable** (`feature-spec.md` §6.4).
+De las dos salidas que esta ADR listaba sin elegir, se toma la segunda: cambia
+qué ventana se clasifica, no el criterio de estabilidad. La invariante del ADR
+0004 pasa a cumplirse por construcción.
+
+Consecuencia aceptada: promediar 5 frames reduce menos ruido que promediar 24. A
+cambio, esos 5 contienen la seña y los 24 no.
+
+Consecuencia aritmética descubierta al implementarlo: como `stable_run` cuenta
+pares, el tope alcanzable de la ventana es `buffer_size − 1`, no `buffer_size`.
+
+**2. Emisión progresiva con dos umbrales** (§6.6). Desde `stable_frames` se
+clasifica en cada frame; por encima de `high_confidence` se emite ya, entre los
+dos umbrales se acumula sin pagar cooldown, y por debajo del piso se rechaza como
+siempre.
+
+`high_confidence = 0.82` está **medido**, no elegido por instinto: distribución de
+confianzas bajo leave-one-signer-out sobre las 2437 muestras no rechazadas del
+dataset de la Fase 2.
+
+| umbral | emite ya | precisión | errores que pasan |
+|---|---|---|---|
+| 0.75 | 86.3% | 0.9952 | 10 |
+| 0.80 | 79.4% | 0.9979 | 4 |
+| **0.82** | **75.1%** | **0.9995** | **1** |
+| 0.85 | 67.1% | 0.9994 | 1 |
+
+0.82 es la rodilla. Por encima la precisión ya no mejora —el único error que
+queda es un `E→C` con 0.9316 que ningún umbral por debajo de 0.94 excluye— y la
+emisión inmediata se desploma. Lo que la medida **no** cubre: se hizo sobre
+muestras completas de 24 frames, no sobre las ventanas cortas de la emisión
+progresiva, que son más ruidosas; en vivo se acumulará más de lo que dice la
+tabla. El error va hacia tardar, no hacia escribir mal.
+
+**3. Los umbrales temporales pasan a milisegundos** (§6.5), derivados de la tasa
+medida al arrancar y congelada para toda la sesión. La conversión —redondeo hacia
+arriba en el empate, piso de un cuadro— es normativa, porque `Math.round` y
+`round` no coinciden y la discrepancia solo aparecería en algunas combinaciones
+de umbral y tasa.
+
+**4. `velocity_threshold` NO se convirtió**, y conviene que quede escrito por qué,
+porque es la pieza que falta. Sigue en unidades de mano **por frame**, así que
+sigue dependiendo de la tasa, y en la dirección mala: a menor tasa, dos frames
+consecutivos están más separados en el tiempo, la misma mano física da un `v_t`
+mayor y cuesta **más** declararla quieta. Es decir, la máquina lenta es también la
+más exigente. No se arregló aquí porque `segmentation.velocity_threshold` es un
+eje del barrido de calibración de la Fase 2 (`src/lsm/cli/evaluate.py`) y
+cambiarle la unidad invalida esa calibración: pide su propia medición y su propio
+ADR.
+
+## Lo que se midió y no se tocó
+
+- **σ y `max_dispersion`** siguen igual. El análisis de esta ADR sobre por qué no
+  atrapan la ventana mezclada sigue siendo correcto, y σ pasa ahora a calcularse
+  sobre la ventana estable, que es donde significa algo.
+- **El apéndice A del `feature-spec`** sigue inactivo. Se activa con la matriz de
+  confusión de la Fase 2 en la mano, no por instinto.
+- **`capture.static_frames`** (24 frames, «800 ms a 30 fps») tiene exactamente el
+  mismo defecto y se queda como está: es de la Fase 1 y cambiarlo invalidaría la
+  comparabilidad del dataset ya grabado.
+- **El outlier de `camara`**: 538 ms en un solo cuadro, con el mínimo de entrega en
+  1.6 fps. Medio segundo de stall son diez cuadros perdidos, o sea dos ventanas
+  estables enteras. Es la justificación del aviso de tasa baja del preview
+  (`telemetry.min_fps`), no un problema que esta ADR resuelva.
+
+## Cómo se verificó
+
+El defecto original está fijado como test de regresión en
+`tests/test_cli_demo.py::test_un_transito_corto_ya_no_funde_dos_manos_en_una_ventana`:
+con un tránsito de 4 frames entre `S` y `A`, la tubería producía `"ssa"` —una `s`
+que nadie firmó— y ahora produce `"sa"`. Se comprobó revirtiendo la ventana al
+buffer entero y viendo reaparecer la letra fantasma.
+
+La latencia adaptativa se ve en el mismo archivo: con el clasificador entrenado
+sobre el corpus sintético, `A` (0.832) y `S` (0.959) emiten con la ventana mínima
+y la `C` (0.743) acumula hasta agotarla. Que sea la `C` la que paga no es
+casualidad: `C`/`O` es el par dominante de la matriz de confusión de la Fase 2.

@@ -88,6 +88,43 @@ completa mientras hay movimiento coherente, en vez de esperar a que se detenga.
 No se resuelve ahora, y se deja escrito precisamente para no descubrirlo en la
 Fase 5 con el dataset ya grabado y las letras dinámicas sin reconocer.
 
+## Corrección de 2026-09-09: la invariante estaba escrita y no sostenida
+
+**No se reescribe nada de lo de arriba.** Lo que sigue se añade porque esta ADR
+afirmó una propiedad que su implementación no cumplía, y borrar la afirmación
+dejaría sin registrar el error más instructivo de este contrato.
+
+La frase es la del riesgo registrado: «la ventana solo es estable si la mano ni
+viajó ni siguió acomodándose». Era verdad de los últimos `stable_run` frames
+—cinco o seis— y falsa de los `buffer_size` que efectivamente se clasificaban.
+Entre una cosa y la otra había hasta 18 frames sobre los que la máquina no había
+comprobado nada, y que con un tránsito más corto que el buffer eran la mano
+viajando de una letra a la siguiente. Medido: un tránsito de 4 frames entre dos
+letras hacía emitir una letra que nadie firmó.
+
+Nadie escribió una invariante falsa a sabiendas. Lo que pasó es que la frase
+describía **la ventana** y el código comprobaba **una cola de ella**, y las dos
+cosas se leen igual mientras el tránsito entre letras dure más que el buffer —que
+es justo lo que hacían las secuencias sintéticas con las que se probó.
+
+**La corrección** (`SEGMENTATION_SPEC_VERSION = 2`, `docs/feature-spec.md` §6.4):
+la ventana que se clasifica pasa a ser `min(max(stable_run, stable_frames),
+T_max)` frames, es decir el tramo verificado estable. La invariante deja de ser
+algo que hay que comprobar y pasa a cumplirse por construcción — no hay ningún
+bucle que revise los frames de la ventana, porque el caso en que fallaría no
+existe.
+
+**Lo que esto enseña sobre el resto del contrato:** una invariante que solo vive
+en prosa no está sostenida por nada. Las de esta ADR que siguen siendo prosa —la
+escala del par, el orden de recorrido de los landmarks— sí tienen golden vectors
+detrás. Esta no los tenía porque la ventana no viaja en `golden_features.json`;
+ahora la fija `tests/test_segmentation.py`, que comprueba sobre la ventana
+emitida que `max(velocities) < velocity_threshold`.
+
+La misma revisión encontró que los umbrales en frames hacían que el contrato
+significara cosas distintas en máquinas distintas; eso se corrige en la §6.5 y se
+razona en `docs/adr/0013-la-ventana-mezclada.md`.
+
 ## Alternativas consideradas
 
 **1. Dejar la definición en el docstring.**

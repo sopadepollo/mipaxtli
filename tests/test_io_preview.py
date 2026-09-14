@@ -48,3 +48,60 @@ def test_el_hud_de_la_demo_admite_no_haber_predicho_todavia() -> None:
     assert state.ultima is None
     assert state.dispersion is None
     assert state.estado is State.IDLE
+
+
+def test_el_hud_de_la_demo_lleva_la_tasa_de_cuadros() -> None:
+    """El fps va en pantalla y no solo en el volcado de `--medir-fps`.
+
+    Todos los umbrales de la segmentacion estan en frames, asi que la tasa es la
+    unidad en la que estan expresados: sin verla, "tarda en confirmar" no se
+    puede separar de "la tuberia va a 9 fps". Ver
+    `docs/adr/0013-la-ventana-mezclada.md`.
+    """
+    state = DemoHudState(
+        texto="",
+        palabra="",
+        estado=State.TRACKING,
+        ultima=None,
+        dispersion=None,
+        mensaje="",
+        fps_entrega=27.4,
+        fps_procesamiento=41.2,
+    )
+
+    assert state.fps_entrega == 27.4
+    assert state.fps_procesamiento == 41.2
+
+
+def test_el_hud_de_la_demo_no_exige_haber_medido_la_tasa() -> None:
+    """`--desde-dataset` no abre camara y no mide nada: ahi la tasa es `None` y
+    el HUD tiene que poder dibujarse igual."""
+    state = DemoHudState(
+        texto="",
+        palabra="",
+        estado=State.IDLE,
+        ultima=None,
+        dispersion=None,
+        mensaje="",
+    )
+
+    assert state.fps_entrega is None
+    assert state.fps_procesamiento is None
+
+
+def test_el_hud_de_la_demo_lleva_el_minimo_contra_el_que_avisar() -> None:
+    """El umbral viaja en el dato y no lo lee el dibujo de `config`: `preview.py`
+    pinta, y quien decide que ensenar es el CLI."""
+    state = DemoHudState(
+        texto="",
+        palabra="",
+        estado=State.TRACKING,
+        ultima=None,
+        dispersion=None,
+        mensaje="",
+        fps_entrega=9.2,
+        fps_procesamiento=11.0,
+        fps_minimo=12.0,
+    )
+
+    assert state.fps_minimo == 12.0

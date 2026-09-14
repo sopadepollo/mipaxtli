@@ -16,7 +16,10 @@ from collections.abc import Callable, Iterable
 import pytest
 
 from lsm.config import Config
+from lsm.features import ExtractionRejected, extract_sequence_features
 from lsm.segmentation import (
+    EvidenceAccumulated,
+    FrameThresholds,
     HandAcquired,
     HandLost,
     LetterEmitted,
@@ -26,6 +29,7 @@ from lsm.segmentation import (
     StateChanged,
     WindowRejected,
     WindowStable,
+    frames_from_ms,
     run_segmentation,
 )
 from lsm.synthetic import canonical_hand, to_frame, translated
@@ -33,22 +37,46 @@ from lsm.types import FrameSlot, InvalidFrame, InvalidReason, Prediction, Sequen
 
 Classify = Callable[[Sequence], Prediction]
 
+#: La tasa con la que corren estos tests. Fija y explícita: los umbrales viven en
+#: milisegundos y solo se convierten a cuadros con una tasa, así que sin fijarla
+#: no habría nada determinista que afirmar.
+FPS = 30.0
+
+
+def _ms(frames: int) -> float:
+    """Los milisegundos que son `frames` cuadros a `FPS`.
+
+    Los tests de este archivo razonan en cuadros —«dos frames quieta y emite»—
+    porque es como funciona la máquina. La configuración habla en milisegundos.
+    Esto traduce entre las dos, en un solo sitio y de forma exacta a 30 fps.
+    """
+    return frames * 1000.0 / FPS
+
+
 #: Umbrales apretados para que las secuencias de prueba quepan en pocos frames.
 CONFIG = Config.model_validate(
     {
         "segmentation": {
-            "buffer_size": 6,
-            "stable_frames": 2,
-            "emit_cooldown_frames": 3,
-            "reject_cooldown_frames": 2,
-            "missing_frames_to_idle": 2,
+            "buffer_ms": _ms(6),
+            "stable_ms": _ms(2),
+            "emit_cooldown_ms": _ms(3),
+            "reject_cooldown_ms": _ms(2),
+            "missing_to_idle_ms": _ms(2),
             "min_confidence": 0.6,
+            "high_confidence": 0.9,
             "velocity_threshold": 0.02,
         }
     }
 )
 
+#: Los mismos umbrales ya resueltos a cuadros, que es la unidad en la que se
+#: escriben las expectativas de este archivo.
+UMBRALES = FrameThresholds.from_config(CONFIG, FPS)
+
 CONFIDENT_A = Prediction(label="A", confidence=0.95)
+#: Por encima del piso de emision y por debajo del umbral alto: la ventana no
+#: se rechaza, pero tampoco basta para emitir sin acumular mas evidencia.
+MEDIUM_A = Prediction(label="A", confidence=0.7)
 UNSURE_A = Prediction(label="A", confidence=0.2)
 
 FINGERTIPS = (4, 8, 12, 16, 20)
@@ -113,7 +141,24 @@ def jittery_frames(count: int) -> list[FrameSlot]:
 def run(
     stream: Iterable[FrameSlot], classify: Classify | None = None
 ) -> list[SegmentationEvent]:
-    return list(run_segmentation(stream, CONFIG, classify or always(CONFIDENT_A)))
+    return list(
+        run_segmentation(stream, CONFIG, classify or always(CONFIDENT_A), fps=FPS)
+    )
+
+
+def velocidades(window: Sequence) -> tuple[float, ...]:
+    """Las velocidades de la §6 dentro de una ventana ya emitida.
+
+    Es la forma de comprobar la invariante del ADR 0004 sobre la ventana que de
+    verdad se clasificó, en vez de darla por cierta.
+    """
+    features = extract_sequence_features(window, CONFIG)
+    assert not isinstance(features, ExtractionRejected)
+    return features.velocities
+
+
+def ventanas(events: list[SegmentationEvent]) -> list[Sequence]:
+    return [event.window for event in events if isinstance(event, LetterEmitted)]
 
 
 def transitions(events: list[SegmentationEvent]) -> list[tuple[State, State]]:
@@ -172,7 +217,7 @@ def test_stable_a_emit_con_confianza_suficiente() -> None:
 
 
 def test_emit_a_tracking_cuando_expira_el_cooldown() -> None:
-    events = run(still_frames(3 + CONFIG.segmentation.emit_cooldown_frames))
+    events = run(still_frames(3 + UMBRALES.emit_cooldown_frames))
 
     assert (State.EMIT, State.TRACKING) in transitions(events)
 
@@ -311,7 +356,7 @@ def test_el_rebote_dentro_del_cooldown_tambien_cuenta() -> None:
     liberaría y la segunda letra quedaría bloqueada sin que quien firma pueda hacer
     nada al respecto.
     """
-    cooldown = CONFIG.segmentation.emit_cooldown_frames
+    cooldown = UMBRALES.emit_cooldown_frames
     stream = [*still_frames(3), *moving_frames(cooldown), *still_frames(4)]
 
     events = run(stream)
@@ -325,11 +370,11 @@ def test_una_ventana_inestable_se_rechaza_antes_de_clasificar() -> None:
         {
             "quality": {"max_dispersion": 1e-4},
             "segmentation": {
-                "buffer_size": 6,
-                "stable_frames": 2,
-                "emit_cooldown_frames": 3,
-                "reject_cooldown_frames": 2,
-                "missing_frames_to_idle": 2,
+                "buffer_ms": _ms(6),
+                "stable_ms": _ms(2),
+                "emit_cooldown_ms": _ms(3),
+                "reject_cooldown_ms": _ms(2),
+                "missing_to_idle_ms": _ms(2),
             },
         }
     )
@@ -367,7 +412,7 @@ def test_la_ventana_emitida_no_excede_el_buffer() -> None:
     ]
 
     assert windows
-    assert all(len(window) <= CONFIG.segmentation.buffer_size for window in windows)
+    assert all(len(window) <= UMBRALES.buffer_size for window in windows)
 
 
 def test_un_frame_invalido_no_cose_dos_tramos_de_secuencia() -> None:
@@ -433,3 +478,254 @@ def test_los_eventos_son_tipados_no_cadenas() -> None:
 
 def missing_frames(count: int) -> list[FrameSlot]:
     return [InvalidFrame(reason=InvalidReason.NO_HAND) for _ in range(count)]
+
+
+# --------------------------------------------------------------------------- #
+# La ventana clasificada ES el tramo estable (ADR 0004, ADR 0013)
+# --------------------------------------------------------------------------- #
+
+
+def test_la_ventana_clasificada_solo_contiene_frames_estables() -> None:
+    """La invariante del ADR 0004, comprobada sobre la ventana que se clasifica.
+
+    «La ventana solo es estable si la mano ni viajó ni siguió acomodándose». La
+    implementacion anterior garantizaba eso de los ultimos `stable_run` frames
+    —normalmente 5 o 6— y clasificaba los `buffer_size` del buffer circular: con
+    un transito mas corto que el buffer, la ventana mezclaba dos manos y el
+    promedio del §2 no correspondia a ninguna configuracion real.
+
+    Un viaje de 10 frames seguido de 3 de quietud es exactamente ese caso: el
+    buffer que se declara estable todavia contiene cola del transito.
+    """
+    stream = [*moving_frames(10), *still_frames(3)]
+
+    for window in ventanas(run(stream)):
+        assert max(velocidades(window)) < CONFIG.segmentation.velocity_threshold
+
+
+def test_la_ventana_es_el_tramo_estable_y_no_el_buffer_entero() -> None:
+    """Se clasifican los frames verificados, no todo lo que se recuerda.
+
+    Con `stable_frames = 2`, dos frames de quietud tras el viaje bastan para
+    declarar STABLE, y son exactamente esos dos los que se clasifican: el buffer
+    de 6 contiene ademas 4 frames de viaje sobre los que no se comprobo nada.
+    """
+    stream = [*moving_frames(10), *still_frames(3)]
+
+    emitidas = ventanas(run(stream))
+
+    assert emitidas
+    assert len(emitidas[0]) == UMBRALES.stable_frames
+
+
+def test_la_ventana_sigue_a_stable_run_y_no_a_un_numero_fijo() -> None:
+    """El caso mas revelador de la correccion.
+
+    Un rechazo por confianza baja no cambia de estado: la mano sigue quieta y
+    `stable_run` sigue creciendo mientras la maquina reintenta. Cuando por fin
+    emite lleva 5 pares estables acumulados y la ventana son esos 5 frames — el
+    primer frame de la quietud, el que la mano acabo de alcanzar viajando, queda
+    fuera. La implementacion anterior clasificaba los 6 del buffer.
+    """
+    stream = [*moving_frames(10), *still_frames(6)]
+
+    emitidas = ventanas(run(stream, responses(UNSURE_A, CONFIDENT_A)))
+
+    assert emitidas
+    assert len(emitidas[0]) == 5
+    assert max(velocidades(emitidas[0])) < CONFIG.segmentation.velocity_threshold
+
+
+def test_la_ventana_se_topa_un_frame_por_debajo_del_buffer() -> None:
+    """`T_max` es `buffer_size`, pero el tope alcanzable es uno menos.
+
+    Sin transito previo que descartar, la ventana crece con la quietud —
+    promediar mas frames reduce mas ruido y aqui todos son de la sena— hasta
+    topar. Y topa en `buffer_size - 1`, no en `buffer_size`: `stable_run` cuenta
+    PARES de frames, asi que con un buffer lleno de N frames hay N-1 pares y el
+    frame mas viejo solo participa como origen del primero. Con `min(stable_run,
+    T_max)` ese frame nunca entra en la ventana clasificada.
+
+    No es un error de una unidad: es la lectura conservadora de la definicion, y
+    se fija aqui para que `segmentation.ts` no elija la otra en la Fase 7.
+    """
+    emitidas = ventanas(run(still_frames(20), responses(UNSURE_A, CONFIDENT_A)))
+
+    assert emitidas
+    assert len(emitidas[0]) == UMBRALES.buffer_size - 1
+
+
+# --------------------------------------------------------------------------- #
+# Emision progresiva
+# --------------------------------------------------------------------------- #
+
+
+def acumulados(events: list[SegmentationEvent]) -> list[tuple[int, float]]:
+    """Longitud de ventana y confianza de cada intento que no emitio."""
+    return [
+        (len(event.window), event.prediction.confidence)
+        for event in events
+        if isinstance(event, EvidenceAccumulated)
+    ]
+
+
+def test_la_confianza_alta_emite_de_inmediato() -> None:
+    """Latencia adaptativa: una letra sin vecinos cercanos no espera nada.
+
+    En cuanto la ventana es estable y el clasificador la resuelve por encima de
+    `high_confidence`, la letra sale con la ventana minima. Es el caso comun —
+    medido bajo leave-one-signer-out, el 75% de las muestras.
+    """
+    eventos = run(still_frames(20), always(CONFIDENT_A))
+
+    emitidas = ventanas(eventos)
+    assert len(emitidas) == 1
+    assert len(emitidas[0]) == UMBRALES.stable_frames
+    assert acumulados(eventos) == []
+
+
+def test_la_confianza_media_acumula_en_vez_de_emitir() -> None:
+    """El corazon del bloque 2.
+
+    Una confianza por encima del piso pero por debajo del umbral alto ya no
+    emite en el primer frame estable: sigue clasificando frame a frame mientras
+    la ventana crece. La implementacion anterior escribia la letra en cuanto
+    superaba `min_confidence`, sin distinguir «segura» de «la menos mala».
+    """
+    eventos = run(still_frames(20), always(MEDIUM_A))
+
+    assert acumulados(eventos)[0] == (UMBRALES.stable_frames, 0.7)
+
+
+def test_la_emision_progresiva_emite_en_cuanto_cruza_el_umbral() -> None:
+    """Dos intentos medios y uno alto: emite en el tercer frame estable.
+
+    Y lo hace **sin cooldown intermedio**: acumular no es rechazar, asi que la
+    maquina reintenta en el frame siguiente y no `reject_cooldown_frames`
+    despues. Que los tres indices sean consecutivos es exactamente esa
+    propiedad, y es de donde sale la latencia que se recupera.
+    """
+    eventos = run(still_frames(20), responses(MEDIUM_A, MEDIUM_A, CONFIDENT_A))
+
+    intentos = [
+        event.frame_index
+        for event in eventos
+        if isinstance(event, EvidenceAccumulated | LetterEmitted)
+    ]
+    primeros = intentos[:3]
+
+    assert primeros == [primeros[0], primeros[0] + 1, primeros[0] + 2]
+    assert len(acumulados(eventos)) == 2
+    assert acumulados(eventos) == [
+        (UMBRALES.stable_frames, 0.7),
+        (UMBRALES.stable_frames + 1, 0.7),
+    ]
+    assert len(ventanas(eventos)[0]) == UMBRALES.stable_frames + 2
+    assert RejectionReason.LOW_CONFIDENCE not in rechazos_de(eventos)
+
+
+def test_agotar_la_ventana_sin_cruzar_el_umbral_emite_igual() -> None:
+    """Cuando ya no hay mas evidencia que acumular, la mejor disponible manda.
+
+    Si al agotar la ventana no emitiera, ninguna letra de confianza media
+    saldria nunca y el par confundible quedaria mudo en vez de tardar. El piso
+    sigue siendo `min_confidence`, que es lo que decidia antes por si solo.
+    """
+    eventos = run(still_frames(30), always(MEDIUM_A))
+
+    emitidas = ventanas(eventos)
+    tope = UMBRALES.buffer_size - 1
+    assert emitidas
+    assert len(emitidas[0]) == tope
+    # La ventana crecio frame a frame desde el piso hasta el tope, y solo el
+    # ultimo intento —el que ya no podia crecer mas— emitio.
+    assert acumulados(eventos)[: tope - UMBRALES.stable_frames] == [
+        (longitud, 0.7) for longitud in range(UMBRALES.stable_frames, tope)
+    ]
+
+
+def test_la_confianza_baja_nunca_emite_ni_acumula() -> None:
+    """Por debajo del piso no hay nada que acumular: es un rechazo con su
+    cooldown, como antes. Acumular sobre basura solo gastaria clasificaciones."""
+    eventos = run(still_frames(20), always(UNSURE_A))
+
+    assert ventanas(eventos) == []
+    assert acumulados(eventos) == []
+    assert set(rechazos_de(eventos)) == {RejectionReason.LOW_CONFIDENCE}
+
+
+def rechazos_de(events: list[SegmentationEvent]) -> list[RejectionReason]:
+    return [event.reason for event in events if isinstance(event, WindowRejected)]
+
+
+# --------------------------------------------------------------------------- #
+# Los umbrales viven en milisegundos y se derivan de la tasa medida
+# --------------------------------------------------------------------------- #
+
+
+def test_la_conversion_redondea_hacia_arriba_en_el_empate() -> None:
+    """La regla de redondeo es parte del contrato, no un detalle.
+
+    `round` de Python redondea al par mas cercano y `Math.round` de JavaScript
+    redondea hacia arriba: con 0.5 exacto darian numeros distintos y
+    `segmentation.ts` derivaria un cuadro mas o menos que Python con el mismo
+    `config.yaml`. Se fija la de JavaScript, `floor(x + 0.5)`.
+    """
+    # 50 ms a 30 fps son 1.5 cuadros exactos.
+    assert frames_from_ms(50.0, 30.0) == 2
+    # 150 ms a 30 fps son 4.5 exactos: `round` daria 4, esto da 5.
+    assert frames_from_ms(150.0, 30.0) == 5
+
+
+def test_la_conversion_nunca_baja_de_un_cuadro() -> None:
+    """Un cooldown de cero cuadros no es un cooldown: la maquina reclasificaria
+    en cada frame, que es justo lo que el cooldown existe para impedir."""
+    assert frames_from_ms(1.0, 5.0) == 1
+    assert frames_from_ms(0.001, 1.0) == 1
+
+
+def test_a_treinta_fps_los_umbrales_dan_los_valores_historicos() -> None:
+    """Los milisegundos por defecto son los que los comentarios de `config.yaml`
+    ya afirmaban: 24 cuadros de buffer, 5 de estabilidad, 12 de cooldown. Lo que
+    cambia no es la intencion, es que ahora se cumple a cualquier tasa."""
+    umbrales = FrameThresholds.from_config(Config(), fps=30.0)
+
+    assert umbrales.buffer_size == 24
+    assert umbrales.stable_frames == 5
+    assert umbrales.emit_cooldown_frames == 12
+    assert umbrales.reject_cooldown_frames == 4
+    assert umbrales.missing_frames_to_idle == 8
+
+
+def test_a_la_tasa_medida_de_verdad_los_umbrales_encogen() -> None:
+    """El defecto que este bloque repara, en un solo test.
+
+    A los 17.8 fps medidos en la maquina de referencia, los mismos 800 ms de
+    buffer son 14 cuadros y no 24. Antes el numero de cuadros era fijo y lo que
+    variaba era el tiempo: 24 cuadros eran 800 ms en el papel y 1348 ms en la
+    maquina. Ahora es al reves, que es lo que quien firma percibe.
+    """
+    umbrales = FrameThresholds.from_config(Config(), fps=17.8)
+
+    assert umbrales.buffer_size == 14
+    assert umbrales.stable_frames == 3
+    assert umbrales.emit_cooldown_frames == 7
+
+
+def test_la_maquina_usa_la_tasa_que_se_le_pasa() -> None:
+    """Y no una constante escondida: a la mitad de tasa, la misma quietud fisica
+    exige la mitad de cuadros para declararse estable."""
+    config = Config.model_validate({"segmentation": {"stable_ms": 200.0}})
+
+    rapida = list(
+        run_segmentation(still_frames(30), config, always(CONFIDENT_A), fps=30.0)
+    )
+    lenta = list(
+        run_segmentation(still_frames(30), config, always(CONFIDENT_A), fps=15.0)
+    )
+
+    def primera_emision(events: list[SegmentationEvent]) -> int:
+        return next(e.frame_index for e in events if isinstance(e, LetterEmitted))
+
+    assert primera_emision(rapida) == 6  # 200 ms a 30 fps son 6 cuadros
+    assert primera_emision(lenta) == 3  # y a 15 fps, 3

@@ -9,6 +9,7 @@ fase en vez de delante de una webcam.
 from __future__ import annotations
 
 from lsm.config import Config
+from lsm.segmentation import frames_from_ms
 from lsm.spelling import (
     Backspace,
     CommitText,
@@ -83,7 +84,13 @@ def ausencia(frames: int) -> list[Signal]:
     return [HandAbsent()] * frames
 
 
-UMBRAL = CONFIG.spelling.space_after_absent_frames
+#: El umbral del espacio, en cuadros: en `config.yaml` está en milisegundos y
+#: aquí se cuentan señales de ausencia, que son una por cuadro. Sin tasa medida
+#: —estos tests no abren cámara— se convierte con la nominal, igual que hace
+#: `step`.
+UMBRAL = frames_from_ms(
+    CONFIG.spelling.space_after_absent_ms, CONFIG.capture.camera_fps
+)
 
 
 def test_la_ausencia_corta_no_pone_espacio() -> None:

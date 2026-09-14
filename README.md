@@ -72,12 +72,16 @@ fallo. **La sesión en vivo con cámara real no se ha ejecutado todavía**: lo
 único probado es `lsm-demo --desde-dataset`, que reproduce una grabación sin
 abrir cámara ni tocar MediaPipe. Ver la sección 6 de `docs/COMO-PROBAR.md`.
 
-Esta fase también dejó una propuesta de cambio arquitectónico sin decidir:
-`docs/adr/0013-la-ventana-mezclada.md` documenta que la máquina de estados
-comprueba quietud sobre los últimos `stable_frames` frames pero clasifica el
-buffer entero, y que con un tránsito corto entre dos letras eso puede emitir
-una letra que nadie firmó. No bloquea el criterio de esta fase; sí hay que
-resolverlo antes de que `segmentation.ts` reproduzca el contrato en la Fase 7.
+Esa propuesta de cambio arquitectónico ya se resolvió:
+`docs/adr/0013-la-ventana-mezclada.md` documentaba que la máquina de estados
+comprobaba quietud sobre los últimos frames pero clasificaba el buffer entero, y
+que con un tránsito corto entre dos letras eso emitía una letra que nadie firmó.
+Está corregido en `SEGMENTATION_SPEC_VERSION = 2`: la ventana que se clasifica es
+el tramo verificado estable, la emisión es progresiva —una letra segura sale con
+la ventana mínima y un par confundible acumula evidencia— y los umbrales
+temporales pasan a milisegundos derivados de la tasa **medida**, que resultó ser
+17.8 fps y no los 30 que suponían los comentarios. `lsm-demo --medir-fps` mide esa
+tasa; ver la sección 6.1 de `docs/COMO-PROBAR.md`.
 
 **Nada de eso hace falta para trabajar en el núcleo.** MediaPipe y OpenCV son
 dependencias opcionales: `make test` pasa sin cámara, sin modelo y sin ninguna de

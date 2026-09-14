@@ -32,15 +32,27 @@ letra.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
 
 from lsm.classifiers.static_knn import StaticKnnClassifier
-from lsm.cli.demo import Sesion, aplicar_evento
+from lsm.cli.demo import (
+    Medida,
+    Sesion,
+    _build_parser,
+    _medida_pedida,
+    aplicar_evento,
+    main,
+)
 from lsm.config import Config
 from lsm.segmentation import (
+    FrameThresholds,
     LetterEmitted,
     RejectionReason,
     SegmentationEvent,
     WindowRejected,
+    frames_from_ms,
     run_segmentation,
 )
 from lsm.spelling import HandAbsent, HandPresent, SpellingState, render_text
@@ -48,7 +60,14 @@ from lsm.synthetic import class_hand, synthetic_samples, to_frame, translated
 from lsm.types import FrameSlot, InvalidFrame, InvalidReason
 from lsm.vocabulary import Label
 
+RAIZ_REPO = Path(__file__).resolve().parents[1]
+
 CONFIG = Config()
+
+#: Los umbrales de `CONFIG` resueltos a cuadros con la tasa NOMINAL, que es la
+#: que usa `run_segmentation` cuando nadie le pasa una medida — el caso de estos
+#: tests, donde no hay cámara ni tasa real que medir.
+UMBRALES = FrameThresholds.from_config(CONFIG, CONFIG.capture.camera_fps)
 
 #: Las clases con las que se entrena. El **orden importa**: `synthetic_samples`
 #: asigna la configuración de mano por posición, no por nombre, así que este es el
@@ -97,7 +116,7 @@ CLASIFICADOR = _entrenado()
 #: llevaría dentro frames de la anterior: se clasificaría una mezcla de dos manos y
 #: la máquina emitiría una letra que nadie hizo. Medido con un viaje de 4 frames,
 #: eso es exactamente lo que pasa — la S salía como A.
-VIAJE = CONFIG.segmentation.buffer_size
+VIAJE = UMBRALES.buffer_size
 
 #: Frames de mano quieta por letra, sumados término a término:
 #:
@@ -116,9 +135,9 @@ VIAJE = CONFIG.segmentation.buffer_size
 #: esa propiedad, que es la mitad del criterio. Uno más largo solo acumula más
 #: rechazos por `REPEATED_LETTER`, ninguna emisión de más.
 QUIETO = (
-    (CONFIG.segmentation.stable_frames + 1)
-    + CONFIG.segmentation.emit_cooldown_frames
-    + CONFIG.segmentation.stable_frames
+    (UMBRALES.stable_frames + 1)
+    + UMBRALES.emit_cooldown_frames
+    + UMBRALES.stable_frames
     + 1
 )
 
@@ -228,7 +247,14 @@ def test_ninguna_sena_se_parte_en_dos_ni_se_funde_con_la_siguiente() -> None:
     stream = eventos(frames(PALABRA))
 
     assert emitidas(stream) == ["C", "A", "S", "A", "S"]
-    assert rechazos(stream) == [RejectionReason.REPEATED_LETTER] * 5
+    assert set(rechazos(stream)) == {RejectionReason.REPEATED_LETTER}
+    # Cuatro y no cinco: la `C` del corpus sintético se clasifica con 0.743,
+    # por debajo de `high_confidence`, así que acumula evidencia hasta agotar la
+    # ventana y emite en el frame 23 de su bloque en vez de en el 5. Se le acaba
+    # el bloque antes de la segunda oportunidad. Las otras cuatro señas emiten
+    # con la ventana mínima y sí la tienen. Ver la emisión progresiva en
+    # `lsm.segmentation` y `docs/adr/0013-la-ventana-mezclada.md`.
+    assert len(rechazos(stream)) == 4
 
 
 def test_la_mano_que_viaja_no_escribe_nada() -> None:
@@ -258,7 +284,12 @@ def test_nada_por_debajo_del_umbral_llega_al_buffer() -> None:
     """`segmentation.min_confidence` es el piso que la máquina exige por encima del
     del propio clasificador. Puesto por las nubes, el texto queda vacío: ninguna
     ventana insuficientemente segura escribe."""
-    exigente = Config.model_validate({"segmentation": {"min_confidence": 0.99}})
+    exigente = Config.model_validate(
+        # Los dos umbrales por las nubes: `config.py` no admite un
+        # `high_confidence` por debajo del piso, y lo que se quiere aquí es que
+        # NADA emita, ni de inmediato ni acumulando.
+        {"segmentation": {"min_confidence": 0.99, "high_confidence": 0.99}}
+    )
     stream = eventos(frames(PALABRA), exigente)
 
     assert emitidas(stream) == []
@@ -275,7 +306,8 @@ def test_la_mano_abajo_entre_dos_palabras_pone_un_espacio_y_uno_solo() -> None:
     sesion = Sesion(config=CONFIG)
     palabras = (Label.C, Label.A, Label.S, Label.A)
     hueco: list[FrameSlot] = [InvalidFrame(reason=InvalidReason.NO_HAND)] * (
-        CONFIG.spelling.space_after_absent_frames * 2
+        frames_from_ms(CONFIG.spelling.space_after_absent_ms, CONFIG.capture.camera_fps)
+        * 2
     )
     flujo = [*frames(palabras[:2]), *hueco, *frames(palabras[2:])]
 
@@ -285,3 +317,134 @@ def test_la_mano_abajo_entre_dos_palabras_pone_un_espacio_y_uno_solo() -> None:
         aplicar_evento(sesion, evento)
 
     assert render_text(sesion.state) == "ca sa"
+
+
+# --------------------------------------------------------------------------- #
+# La medicion de fps: que pide cada combinacion de flags
+# --------------------------------------------------------------------------- #
+
+
+def _pedida(*argv: str) -> Medida | str | None:
+    return _medida_pedida(_build_parser().parse_args(argv), CONFIG)
+
+
+def test_sin_flags_no_se_mide_nada() -> None:
+    """La instrumentacion del HUD corre siempre; la medicion de duracion fija,
+    solo cuando se pide. Una sesion normal no debe terminarse sola al minuto."""
+    assert _pedida() is None
+
+
+def test_medir_fps_toma_la_duracion_de_la_configuracion() -> None:
+    """`CLAUDE.md` §5: el default es un umbral y vive en `config.yaml`, no en el
+    parser."""
+    medida = _pedida("--medir-fps")
+
+    assert isinstance(medida, Medida)
+    assert medida.duracion == CONFIG.telemetry.benchmark_seconds
+    assert medida.medicion.cuadros == 0
+
+
+def test_medir_segundos_manda_sobre_la_configuracion() -> None:
+    medida = _pedida("--medir-fps", "--medir-segundos", "12.5")
+
+    assert isinstance(medida, Medida)
+    assert medida.duracion == 12.5
+
+
+def test_medir_fps_sobre_un_dataset_grabado_se_rechaza() -> None:
+    """Lo que se mide es el bucle en vivo: cuanto tarda la camara en entregar un
+    cuadro y cuanto tarda la tuberia en procesarlo. Sobre un dataset ya grabado
+    no hay ninguna de las dos cosas, y devolver un numero de todas formas seria
+    peor que negarse: se leeria como la tasa de la maquina."""
+    error = _pedida("--medir-fps", "--desde-dataset", "data/raw/s01/x")
+
+    assert isinstance(error, str)
+    assert "--desde-dataset" in error
+
+
+def test_medir_segundos_sin_medir_fps_se_rechaza() -> None:
+    """Pedir una duracion sin pedir la medicion es un malentendido, y correr la
+    demo normal en silencio lo dejaria sin resolver."""
+    error = _pedida("--medir-segundos", "30")
+
+    assert isinstance(error, str)
+    assert "--medir-fps" in error
+
+
+def test_una_duracion_negativa_se_rechaza() -> None:
+    error = _pedida("--medir-fps", "--medir-segundos", "-1")
+
+    assert isinstance(error, str)
+
+
+def test_un_transito_corto_ya_no_funde_dos_manos_en_una_ventana() -> None:
+    """El defecto medido del ADR 0013, fijado como regresion.
+
+    Con un transito de 4 frames entre dos letras —mas corto que `buffer_size`—
+    la ventana que la maquina declaraba estable sobre la letra nueva todavia
+    llevaba dentro frames de la anterior: se clasificaba una mezcla de dos manos
+    y salia una letra que nadie firmo.
+
+    `VIAJE` vale `buffer_size` justamente para no tocar este sintoma; el resto de
+    los tests de este archivo siguen usandolo. Este lo toca a proposito, con el
+    transito mas corto que el ADR reporta haber medido.
+    """
+    corto = 4
+    assert corto < UMBRALES.buffer_size
+
+    flujo = [
+        *quieto(Label.S),
+        *viaje(Label.A, count=corto),
+        *quieto(Label.A),
+    ]
+
+    assert render_text(deletrear(flujo)) == "sa"
+
+
+def test_la_letra_segura_sale_rapido_y_la_dudosa_espera() -> None:
+    """La latencia adaptativa del bloque 2, sobre el clasificador de verdad.
+
+    `A` y `S` se resuelven por encima de `high_confidence` y salen con la
+    ventana minima —`stable_frames` frames—; la `C`, que en este corpus se
+    clasifica con 0.743, acumula evidencia hasta agotar la ventana. Rapido donde
+    puede permitirselo, prudente solo donde hace falta.
+
+    Y la `C` no es una letra cualquiera para este ejemplo: `C`/`O` es el par
+    dominante de la matriz de confusion de la Fase 2
+    (`docs/adr/0011-calibracion-de-la-fase-2.md`), es decir justo el caso en el
+    que acumular evidencia vale lo que cuesta.
+    """
+    emisiones = [
+        evento
+        for evento in eventos(frames(PALABRA))
+        if isinstance(evento, LetterEmitted)
+    ]
+    por_letra = {evento.prediction.label: len(evento.window) for evento in emisiones}
+
+    assert por_letra["A"] == UMBRALES.stable_frames
+    assert por_letra["S"] == UMBRALES.stable_frames
+    assert por_letra["C"] == UMBRALES.buffer_size - 1
+
+
+def test_una_ruta_sin_muestras_lo_dice_en_vez_de_callarse(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Una linea en blanco y salida 0 es indistinguible de "no reconocio nada".
+
+    Y el error es facil de cometer: la raiz que `iter_sample_paths` espera es la
+    del dataset, y apuntar a una sesion concreta —que es lo que uno haria, y lo
+    que documentaba `COMO-PROBAR`— no encuentra ninguna muestra.
+    """
+    codigo = main(
+        [
+            "--config",
+            str(RAIZ_REPO / "config.yaml"),
+            "--desde-dataset",
+            str(tmp_path),
+        ]
+    )
+
+    salida = capsys.readouterr().out
+    assert codigo == 1
+    assert "no hay muestras" in salida
+    assert "<firmante>/<sesion>/<letra>" in salida

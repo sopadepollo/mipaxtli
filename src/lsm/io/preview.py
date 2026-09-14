@@ -23,6 +23,7 @@ from typing import Any
 
 from lsm.capture import WindowQuality, explain, preview_position
 from lsm.segmentation import State
+from lsm.telemetry import render_fps, tasa_insuficiente
 from lsm.types import HAND_CONNECTIONS, Handedness, Prediction, RawFrame, SampleKind
 
 #: Colores BGR, que es el orden de OpenCV.
@@ -83,6 +84,20 @@ class DemoHudState:
     dispersion: float | None
     #: Último mensaje: por qué se rechazó, o qué se acaba de borrar.
     mensaje: str
+    #: Tasa de cuadros del bucle y de la tubería, promediadas sobre los últimos
+    #: `telemetry.fps_window_frames` cuadros. `None` mientras no haya medida: el
+    #: primer cuadro se dibuja antes de que su segmentación haya corrido, y
+    #: `--desde-dataset` no mide nada porque no hay bucle en vivo que medir.
+    #:
+    #: Van en el HUD porque la tasa es la unidad en la que están expresados
+    #: todos los umbrales de la segmentación: sin verla, "tarda en confirmar" no
+    #: se puede separar de "la tubería va a 9 fps".
+    fps_entrega: float | None = None
+    fps_procesamiento: float | None = None
+    #: Tasa por debajo de la cual el HUD avisa (`telemetry.min_fps`). Viaja en el
+    #: dato en vez de leerlo el dibujo: este módulo pinta, y quién decide qué
+    #: enseñar es el CLI.
+    fps_minimo: float | None = None
 
 
 def draw_landmarks(image: Any, frame: RawFrame, *, mirrored: bool) -> None:
@@ -282,6 +297,16 @@ _ATAJOS = "ESPACIO guardar | n/p letra | m estatica/dinamica | r rehacer | q sal
 #: cuando lo que pasa es que esa letra llega en la Fase 5.
 _AVISO_DINAMICAS = "las 8 letras dinamicas no se reconocen aun: llegan en la Fase 5"
 
+#: Sustituye al aviso de las dinamicas cuando la tasa cae por debajo de
+#: `telemetry.min_fps`. Se cambia de mensaje en vez de anadir uno: a esa tasa,
+#: que las dinamicas no esten es el menor de los problemas, y dos avisos a la vez
+#: no se leen. Sin este, quien firma corrige la sena —lo unico que puede hacer—
+#: cuando lo que falla es la maquina.
+_AVISO_TASA_BAJA = (
+    "tasa baja: la deteccion no llega. Es rendimiento, no tu sena."
+    " Prueba con menos resolucion (capture.frame_width)."
+)
+
 
 def draw_demo_hud(image: Any, state: DemoHudState) -> None:
     """Dibuja el HUD de la demo en vivo. Modifica `image` en el lugar.
@@ -316,6 +341,23 @@ def draw_demo_hud(image: Any, state: DemoHudState) -> None:
         cv2.LINE_AA,
     )
 
+    # Arriba a la derecha y siempre presente, con la misma prominencia que el
+    # texto que se está escribiendo: es el número que dice si lo que se percibe
+    # como lentitud del reconocimiento es en realidad una tubería que no llega.
+    lenta = state.fps_minimo is not None and tasa_insuficiente(
+        state.fps_entrega, minimo=state.fps_minimo
+    )
+    cv2.putText(
+        image,
+        render_fps(entrega=state.fps_entrega, procesamiento=state.fps_procesamiento),
+        (width - 250, 30),
+        _FUENTE,
+        0.55,
+        _ROJO if lenta else _BLANCO,
+        2 if lenta else 1,
+        cv2.LINE_AA,
+    )
+
     confianza = "--" if state.ultima is None else f"{state.ultima.confidence:.2f}"
     letra = "--" if state.ultima is None else state.ultima.label
     sigma = "--" if state.dispersion is None else f"{state.dispersion:.3f}"
@@ -333,11 +375,11 @@ def draw_demo_hud(image: Any, state: DemoHudState) -> None:
     _panel(image, 0, height - 64, width, 64)
     cv2.putText(
         image,
-        _AVISO_DINAMICAS,
+        _AVISO_TASA_BAJA if lenta else _AVISO_DINAMICAS,
         (18, height - 40),
         _FUENTE,
         0.45,
-        _GRIS,
+        _ROJO if lenta else _GRIS,
         1,
         cv2.LINE_AA,
     )
