@@ -12,18 +12,37 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
+from lsm.config import Config
 from lsm.signs import (
     FUENTE_NORMATIVA,
     MANIFEST_SCHEMA_VERSION,
     AssetReview,
     AssetSource,
+    Faster,
+    Finished,
     Manifest,
+    Next,
+    PlayerEvent,
+    PlayerInput,
+    PlayerState,
+    Prev,
+    Restart,
     SignAsset,
+    Slower,
+    Step,
+    StepKind,
+    StepStarted,
+    Tick,
+    TogglePause,
     UnsupportedCharacters,
     WordGap,
+    asset_frame,
+    build_playlist,
     expected_filename,
     manifest_drift,
+    player_step,
     render_tokens,
+    start,
     text_to_symbols,
 )
 from lsm.types import Handedness
@@ -276,3 +295,149 @@ def test_un_caracter_expandible_con_otros_invalidos_se_reportan_juntos() -> None
         text_to_symbols("ß2")
 
     assert excinfo.value.chars == ("ß", "2")
+
+
+# --------------------------------------------------------------------------- #
+# Lista de pasos
+# --------------------------------------------------------------------------- #
+
+CONFIG = Config()
+
+
+def test_las_duraciones_salen_de_la_configuracion_y_del_manifest() -> None:
+    pasos = build_playlist(text_to_symbols("aj a"), manifiesto(), CONFIG)
+
+    assert [paso.kind for paso in pasos] == [
+        StepKind.LETTER, StepKind.LETTER, StepKind.GAP, StepKind.LETTER
+    ]  # fmt: skip
+    assert pasos[0].duration_ms == CONFIG.signs.static_hold_ms
+    assert pasos[1].duration_ms == 2000 * CONFIG.signs.dynamic_loops
+    assert pasos[2].duration_ms == CONFIG.signs.word_gap_ms
+    assert pasos[2].label is None
+
+
+def test_una_letra_sin_asset_no_entra_en_la_lista_en_silencio() -> None:
+    letras = {label: asset(label) for label in LETTERS}
+    del letras[Label.J]
+    incompleto = Manifest(
+        schema_version=MANIFEST_SCHEMA_VERSION,
+        fuente_normativa=FUENTE_NORMATIVA,
+        letras=letras,
+    )
+    with pytest.raises(ValueError, match="J"):
+        build_playlist((Label.J,), incompleto, CONFIG)
+
+
+def test_una_lista_vacia_no_arranca() -> None:
+    with pytest.raises(ValueError, match="vac"):
+        start(())
+
+
+# --------------------------------------------------------------------------- #
+# Reproductor
+# --------------------------------------------------------------------------- #
+
+DOS_PASOS = (
+    Step(kind=StepKind.LETTER, label=Label.A, duration_ms=1000.0),
+    Step(kind=StepKind.LETTER, label=Label.B, duration_ms=500.0),
+)
+
+
+def avanzar(
+    estado: PlayerState, *eventos: PlayerInput
+) -> tuple[PlayerState, list[PlayerEvent]]:
+    emitidos: list[PlayerEvent] = []
+    for evento in eventos:
+        estado, nuevos = player_step(estado, evento, DOS_PASOS, CONFIG)
+        emitidos.extend(nuevos)
+    return estado, emitidos
+
+
+def test_los_ticks_acumulan_y_al_agotar_el_paso_pasan_al_siguiente() -> None:
+    estado, eventos = avanzar(start(DOS_PASOS), Tick(400.0), Tick(400.0))
+    assert estado.index == 0
+    assert estado.elapsed_ms == 800.0
+    assert eventos == []
+
+    estado, eventos = avanzar(estado, Tick(200.0))
+    assert estado.index == 1
+    assert estado.elapsed_ms == 0.0
+    assert eventos == [StepStarted(index=1)]
+
+
+def test_al_agotar_el_ultimo_paso_termina_y_se_queda_en_el() -> None:
+    estado = PlayerState(index=1, elapsed_ms=400.0)
+
+    estado, eventos = avanzar(estado, Tick(100.0))
+    assert estado.finished
+    assert estado.index == 1
+    assert eventos == [Finished()]
+
+    otra, mas = avanzar(estado, Tick(5000.0))
+    assert otra == estado
+    assert mas == []
+
+
+def test_en_pausa_los_ticks_no_avanzan() -> None:
+    estado, _ = avanzar(start(DOS_PASOS), TogglePause(), Tick(5000.0))
+    assert estado.paused
+    assert estado.elapsed_ms == 0.0
+
+    estado, _ = avanzar(estado, TogglePause(), Tick(100.0))
+    assert not estado.paused
+    assert estado.elapsed_ms == 100.0
+
+
+def test_la_velocidad_multiplica_el_tiempo() -> None:
+    estado, _ = avanzar(start(DOS_PASOS), Faster(), Tick(100.0))
+
+    assert estado.speed == 1.0 + CONFIG.signs.speed_step
+    assert estado.elapsed_ms == pytest.approx(100.0 * estado.speed)
+
+
+def test_la_velocidad_queda_acotada() -> None:
+    muchas = [Faster()] * 100
+    estado, _ = avanzar(start(DOS_PASOS), *muchas)
+    assert estado.speed == CONFIG.signs.speed_max
+
+    pocas = [Slower()] * 100
+    estado, _ = avanzar(estado, *pocas)
+    assert estado.speed == CONFIG.signs.speed_min
+
+
+def test_siguiente_y_anterior_quedan_acotados() -> None:
+    estado, eventos = avanzar(start(DOS_PASOS), Tick(300.0), Next())
+    assert estado.index == 1
+    assert estado.elapsed_ms == 0.0
+    assert eventos == [StepStarted(index=1)]
+
+    estado, eventos = avanzar(estado, Next())
+    assert estado.finished
+    assert estado.index == 1
+    assert eventos == [Finished()]
+
+    estado, eventos = avanzar(estado, Prev())
+    assert not estado.finished
+    assert estado.index == 0
+    assert eventos == [StepStarted(index=0)]
+
+    estado, eventos = avanzar(estado, Tick(300.0), Prev())
+    assert estado.index == 0
+    assert estado.elapsed_ms == 0.0
+
+
+def test_reiniciar_conserva_la_velocidad() -> None:
+    estado, _ = avanzar(start(DOS_PASOS), Faster(), Next(), Next())
+    assert estado.finished
+
+    estado, eventos = avanzar(estado, Restart())
+    assert estado == PlayerState(speed=1.0 + CONFIG.signs.speed_step)
+    assert eventos == [StepStarted(index=0)]
+
+
+def test_el_frame_del_gif_da_vueltas_con_los_loops() -> None:
+    n_frames, duracion = 24, 2000
+    assert asset_frame(PlayerState(elapsed_ms=0.0), n_frames, duracion) == 0
+    assert asset_frame(PlayerState(elapsed_ms=1000.0), n_frames, duracion) == 12
+    assert asset_frame(PlayerState(elapsed_ms=2000.0), n_frames, duracion) == 0
+    assert asset_frame(PlayerState(elapsed_ms=3999.0), n_frames, duracion) == 23

@@ -19,12 +19,14 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence as SequenceABC
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
+from enum import StrEnum
 from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from lsm.config import Config
 from lsm.types import Handedness
 from lsm.vocabulary import LETTERS, Label
 
@@ -322,3 +324,180 @@ def render_tokens(tokens: SequenceABC[Token]) -> str:
         for token in tokens
     ]
     return " ".join(partes)
+
+
+# --------------------------------------------------------------------------- #
+# Lista de pasos
+# --------------------------------------------------------------------------- #
+
+
+class StepKind(StrEnum):
+    LETTER = "LETTER"
+    GAP = "GAP"
+
+
+@dataclass(frozen=True, slots=True)
+class Step:
+    """Un paso de la reproducción: una letra sostenida o una pausa."""
+
+    kind: StepKind
+    #: `None` si es una pausa.
+    label: Label | None
+    #: A velocidad 1.0. El reproductor la divide por la velocidad al comparar.
+    duration_ms: float
+
+
+def build_playlist(
+    tokens: SequenceABC[Token], manifest: Manifest, config: Config
+) -> tuple[Step, ...]:
+    """Símbolos → pasos con duración.
+
+    Estática: `signs.static_hold_ms`. Dinámica: la vuelta del GIF que dice el
+    manifest por `signs.dynamic_loops`. Pausa: `signs.word_gap_ms`.
+    """
+    pasos: list[Step] = []
+    for token in tokens:
+        if isinstance(token, WordGap):
+            pasos.append(Step(StepKind.GAP, None, config.signs.word_gap_ms))
+            continue
+        asset = manifest.letras.get(token)
+        if asset is None:
+            raise ValueError(f"el manifest no tiene asset para {token}")
+        if asset.es_dinamica:
+            assert asset.duracion_ms is not None  # lo garantiza el esquema
+            duracion = float(asset.duracion_ms * config.signs.dynamic_loops)
+        else:
+            duracion = config.signs.static_hold_ms
+        pasos.append(Step(StepKind.LETTER, token, duracion))
+    return tuple(pasos)
+
+
+# --------------------------------------------------------------------------- #
+# Reproductor
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class Tick:
+    """Ha pasado tiempo de pared. Es la única forma en que entra el reloj."""
+
+    dt_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class TogglePause: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Next: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Prev: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Restart: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Faster: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Slower: ...
+
+
+PlayerInput: TypeAlias = Tick | TogglePause | Next | Prev | Restart | Faster | Slower
+
+
+@dataclass(frozen=True, slots=True)
+class PlayerState:
+    index: int = 0
+    #: Tiempo ya reproducido del paso actual, **a velocidad 1.0**: los ticks se
+    #: multiplican por `speed` antes de sumarse.
+    elapsed_ms: float = 0.0
+    paused: bool = False
+    speed: float = 1.0
+    #: Se agotó el último paso. El estado se queda en él hasta `Restart`/`Prev`.
+    finished: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StepStarted:
+    index: int
+
+
+@dataclass(frozen=True, slots=True)
+class Finished: ...
+
+
+PlayerEvent: TypeAlias = StepStarted | Finished
+
+
+def start(playlist: SequenceABC[Step]) -> PlayerState:
+    """El estado inicial. Una lista vacía es un error de quien la construyó."""
+    if not playlist:
+        raise ValueError("la lista de pasos está vacía: no hay nada que reproducir")
+    return PlayerState()
+
+
+def player_step(
+    state: PlayerState,
+    event: PlayerInput,
+    playlist: SequenceABC[Step],
+    config: Config,
+) -> tuple[PlayerState, tuple[PlayerEvent, ...]]:
+    """Un evento → el estado siguiente y lo que pasó. Puro e inmutable."""
+    ultimo = len(playlist) - 1
+    match event:
+        case Tick(dt_ms=dt):
+            if state.paused or state.finished:
+                return state, ()
+            elapsed = state.elapsed_ms + dt * state.speed
+            if elapsed < playlist[state.index].duration_ms:
+                return replace(state, elapsed_ms=elapsed), ()
+            return _advance(state, ultimo)
+        case Next():
+            return _advance(state, ultimo)
+        case Prev():
+            index = max(state.index - 1, 0)
+            return (
+                replace(state, index=index, elapsed_ms=0.0, finished=False),
+                (StepStarted(index),),
+            )
+        case Restart():
+            return PlayerState(speed=state.speed), (StepStarted(0),)
+        case TogglePause():
+            return replace(state, paused=not state.paused), ()
+        case Faster():
+            velocidad = min(
+                state.speed + config.signs.speed_step, config.signs.speed_max
+            )
+            return replace(state, speed=velocidad), ()
+        case Slower():
+            velocidad = max(
+                state.speed - config.signs.speed_step, config.signs.speed_min
+            )
+            return replace(state, speed=velocidad), ()
+        case _:
+            raise AssertionError(f"evento desconocido: {event!r}")
+
+
+def _advance(
+    state: PlayerState, ultimo: int
+) -> tuple[PlayerState, tuple[PlayerEvent, ...]]:
+    if state.index >= ultimo:
+        if state.finished:
+            return state, ()
+        return replace(state, elapsed_ms=0.0, finished=True), (Finished(),)
+    index = state.index + 1
+    return replace(state, index=index, elapsed_ms=0.0, finished=False), (
+        StepStarted(index),
+    )
+
+
+def asset_frame(state: PlayerState, n_frames: int, duracion_ms: int) -> int:
+    """Qué frame del GIF mostrar. Da vueltas: con `dynamic_loops = 2`, dos."""
+    posicion = int(state.elapsed_ms / duracion_ms * n_frames)
+    return posicion % n_frames
