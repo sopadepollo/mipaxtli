@@ -345,3 +345,37 @@ spelling:
   # config.py valida que supere a segmentation.missing_to_idle_ms. Si no, un
   # parpadeo del detector partiría una palabra en dos.
   space_after_absent_ms: 1000.0
+
+# Dirección texto → señas (src/lsm/signs.py, docs/adr/0014-...).
+#
+# Aquí no hay clasificador: hay tiempos. Todos en milisegundos a velocidad 1.0;
+# el reproductor los multiplica por la velocidad elegida con + y -.
+signs:
+  # Cuánto se sostiene en pantalla una letra estática.
+  static_hold_ms: 1500.0
+
+  # Vueltas completas del GIF de una dinámica. La duración del paso es
+  # duracion_ms del manifest por este número.
+  dynamic_loops: 2
+
+  # Pausa entre palabras: lo que ocupa un espacio del texto.
+  word_gap_ms: 800.0
+
+  # Cuadros por segundo del GIF al renderizar. Fija duracion_ms de cada
+  # dinámica en el manifest: round(1000 * frames / render_fps).
+  render_fps: 12
+
+  # Lado del lienzo cuadrado de cada asset, en píxeles, y aire alrededor de la
+  # mano como fracción del lienzo por cada lado.
+  canvas_px: 320
+  canvas_margin: 0.12
+
+  # Límites y paso de la velocidad de reproducción. config.py valida que
+  # speed_min < speed_max.
+  speed_min: 0.25
+  speed_max: 4.0
+  speed_step: 0.25
+
+  # Espera de waitKey en cada vuelta del bucle de la ventana. No es el dt del
+  # reproductor —ese se mide con el reloj—, solo cada cuánto se lee el teclado.
+  tick_ms: 33

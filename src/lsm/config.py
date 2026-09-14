@@ -386,6 +386,56 @@ class CaptureConfig(_Section):
         return self
 
 
+class SignsConfig(_Section):
+    """Dirección texto → señas (`src/lsm/signs.py`, `ARQUITECTURA.md` §4.10).
+
+    No hay clasificador en esta dirección; lo que hay son tiempos. Todos en
+    milisegundos a velocidad 1.0: el reproductor los multiplica por la velocidad
+    que la persona elija con `+`/`-`.
+    """
+
+    #: Cuánto se sostiene en pantalla una letra estática.
+    static_hold_ms: float = Field(default=1500.0, gt=0.0, le=60000.0)
+
+    #: Vueltas completas del GIF de una letra dinámica. La duración del paso es
+    #: `duracion_ms` del manifest por este número: el movimiento se ve entero
+    #: tantas veces como diga.
+    dynamic_loops: int = Field(default=2, ge=1, le=20)
+
+    #: Pausa entre palabras: lo que ocupa un espacio del texto.
+    word_gap_ms: float = Field(default=800.0, gt=0.0, le=60000.0)
+
+    #: Cuadros por segundo del GIF al renderizar. Fija `duracion_ms` de cada
+    #: dinámica: `round(1000 · frames / render_fps)`.
+    render_fps: int = Field(default=12, ge=1, le=60)
+
+    #: Lado, en píxeles, del lienzo cuadrado de cada asset.
+    canvas_px: int = Field(default=320, ge=64, le=2048)
+
+    #: Aire alrededor de la mano, como fracción del lienzo por cada lado.
+    canvas_margin: float = Field(default=0.12, ge=0.0, lt=0.5)
+
+    #: Límites y paso de la velocidad de reproducción.
+    speed_min: float = Field(default=0.25, gt=0.0, le=10.0)
+    speed_max: float = Field(default=4.0, gt=0.0, le=10.0)
+    speed_step: float = Field(default=0.25, gt=0.0, le=10.0)
+
+    #: Espera de `waitKey` en cada vuelta del bucle de la ventana. No es el
+    #: `dt` del reproductor: ese se mide con el reloj, este solo decide cada
+    #: cuánto se mira el teclado.
+    tick_ms: int = Field(default=33, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def _la_velocidad_tiene_rango(self) -> SignsConfig:
+        if self.speed_min >= self.speed_max:
+            msg = (
+                f"signs.speed_min ({self.speed_min}) no es menor que "
+                f"signs.speed_max ({self.speed_max}): no hay velocidad válida"
+            )
+            raise ValueError(msg)
+        return self
+
+
 class Config(_Section):
     """Configuración completa. Inmutable y validada."""
 
@@ -399,6 +449,7 @@ class Config(_Section):
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
     spelling: SpellingConfig = Field(default_factory=SpellingConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    signs: SignsConfig = Field(default_factory=SignsConfig)
 
     @model_validator(mode="after")
     def _la_captura_alcanza_para_el_canal_dinamico(self) -> Config:
