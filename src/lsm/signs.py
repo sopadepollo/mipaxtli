@@ -23,7 +23,7 @@ from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, replace
 from datetime import date
 from enum import StrEnum
-from typing import Final, Literal, TypeAlias
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -639,3 +639,39 @@ def project_frames(
         tuple((x * escala + dx, y * escala + dy) for x, y in puntos)
         for puntos in crudos
     )
+
+
+# --------------------------------------------------------------------------- #
+# Lo que la ventana dibuja
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class Scene:
+    """Todo lo que hace falta para componer un cuadro. Datos, no dibujo.
+
+    `frame` es la imagen del asset ya elegida para este instante (o `None` en
+    una pausa). Es `Any` porque este módulo no importa Pillow: quien compone
+    sabe qué es.
+    """
+
+    tokens: tuple[Token, ...]
+    playlist: tuple[Step, ...]
+    state: PlayerState
+    asset: SignAsset | None
+    frame: Any | None
+
+    @property
+    def step(self) -> Step:
+        return self.playlist[self.state.index]
+
+    @property
+    def progress(self) -> float:
+        """Fracción del paso actual ya reproducida, en `[0, 1]`."""
+        return min(self.state.elapsed_ms / self.step.duration_ms, 1.0)
+
+    @property
+    def token_index(self) -> int:
+        """Índice del token que corresponde al paso actual. Coinciden uno a uno
+        porque `build_playlist` produce un paso por token."""
+        return self.state.index

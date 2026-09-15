@@ -15,12 +15,13 @@ from collections.abc import Sequence as SequenceABC
 from pathlib import Path
 from typing import Any, Final
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
+from lsm.config import Config
 from lsm.io.dataset import DatasetError, iter_sample_paths, read_sample
-from lsm.signs import Candidate, Manifest
+from lsm.signs import Candidate, Manifest, Scene, WordGap
 from lsm.types import HAND_CONNECTIONS, LandmarkIndex, Point2
-from lsm.vocabulary import Label
+from lsm.vocabulary import LETTERS, Label
 
 MANIFEST_FILENAME: Final = "manifest.json"
 DEFAULT_ASSETS_DIR: Final = Path("assets/signs")
@@ -161,3 +162,140 @@ def load_asset_frames(path: Path) -> list[Image.Image]:
             imagen.seek(indice)
             cuadros.append(imagen.convert("RGB").copy())
     return cuadros
+
+
+# --------------------------------------------------------------------------- #
+# El cuadro de la ventana
+# --------------------------------------------------------------------------- #
+
+_PANEL_ANCHO: Final = 520
+_PIE_ALTO: Final = 96
+_MARGEN_TEXTO: Final = 24
+_TINTA: Final = (30, 30, 30)
+_TINTA_SUAVE: Final = (110, 110, 110)
+_ACENTO: Final = (30, 80, 200)
+_BARRA_FONDO: Final = (225, 225, 222)
+_AVISO: Final = "Deletreo manual, no LSM como lengua. Procesamiento local."
+_ATAJOS: Final = (
+    "ESPACIO pausa | n/p siguiente/anterior | r reinicio | +/- velocidad | q salir"
+)
+
+
+def _fuente(tamano: int) -> Any:
+    # La fuente por defecto de Pillow ≥ 10.1 es escalable y cubre latín con
+    # acentos y Ñ, que es lo que la Hershey de OpenCV no hace.
+    return ImageFont.load_default(size=tamano)
+
+
+def _envolver(
+    texto: str, ancho_max: int, fuente: Any, lapiz: ImageDraw.ImageDraw
+) -> list[str]:
+    lineas: list[str] = []
+    actual = ""
+    for palabra in texto.split():
+        prueba = f"{actual} {palabra}".strip()
+        if lapiz.textlength(prueba, font=fuente) <= ancho_max or not actual:
+            actual = prueba
+        else:
+            lineas.append(actual)
+            actual = palabra
+    if actual:
+        lineas.append(actual)
+    return lineas
+
+
+def draw_scene(scene: Scene, config: Config) -> Image.Image:
+    """Asset a la izquierda; letra, descripción, progreso y estado a la derecha;
+    el texto completo con el símbolo actual resaltado abajo."""
+    lado = config.signs.canvas_px
+    ancho, alto = lado + _PANEL_ANCHO, lado + _PIE_ALTO
+    cuadro = Image.new("RGB", (ancho, alto), _FONDO)
+    lapiz = ImageDraw.Draw(cuadro)
+
+    # Panel izquierdo: el asset, o "espacio" en una pausa.
+    if scene.frame is not None:
+        cuadro.paste(scene.frame.resize((lado, lado)), (0, 0))
+    else:
+        lapiz.rectangle([0, 0, lado, lado], fill=_BARRA_FONDO)
+        lapiz.text(
+            (lado // 2, lado // 2),
+            "espacio",
+            fill=_TINTA_SUAVE,
+            font=_fuente(28),
+            anchor="mm",
+        )
+
+    # Panel derecho.
+    x = lado + _MARGEN_TEXTO
+    y = _MARGEN_TEXTO
+    posicion = f"{scene.state.index + 1} / {len(scene.playlist)}"
+    lapiz.text(
+        (ancho - _MARGEN_TEXTO, y),
+        posicion,
+        fill=_TINTA_SUAVE,
+        font=_fuente(20),
+        anchor="ra",
+    )
+    if scene.asset is not None:
+        lapiz.text((x, y), scene.asset.letra, fill=_TINTA, font=_fuente(72))
+        y += 96
+        for linea in _envolver(
+            scene.asset.descripcion,
+            _PANEL_ANCHO - 2 * _MARGEN_TEXTO,
+            _fuente(18),
+            lapiz,
+        ):
+            lapiz.text((x, y), linea, fill=_TINTA, font=_fuente(18))
+            y += 24
+        if scene.asset.es_dinamica:
+            y += 8
+            lapiz.text(
+                (x, y),
+                f"Trayectoria: {scene.asset.trayectoria}",
+                fill=_ACENTO,
+                font=_fuente(18),
+            )
+            y += 24
+    else:
+        lapiz.text((x, y), "pausa entre palabras", fill=_TINTA_SUAVE, font=_fuente(28))
+
+    # Estado, velocidad y barra de progreso, pegados al borde inferior del panel.
+    estado = (
+        "PAUSA"
+        if scene.state.paused
+        else ("FIN" if scene.state.finished else "REPRODUCIENDO")
+    )
+    y_barra = lado - _MARGEN_TEXTO - 32
+    lapiz.text(
+        (x, y_barra - 28),
+        f"{estado}   {scene.state.speed:.2f}x",
+        fill=_TINTA,
+        font=_fuente(18),
+    )
+    ancho_barra = _PANEL_ANCHO - 2 * _MARGEN_TEXTO
+    lapiz.rectangle([x, y_barra, x + ancho_barra, y_barra + 12], fill=_BARRA_FONDO)
+    lapiz.rectangle(
+        [x, y_barra, x + int(ancho_barra * scene.progress), y_barra + 12], fill=_ACENTO
+    )
+    transcurrido = scene.state.elapsed_ms / 1000.0
+    total = scene.step.duration_ms / 1000.0
+    lapiz.text(
+        (x + ancho_barra, y_barra + 16),
+        f"{transcurrido:.1f} s / {total:.1f} s",
+        fill=_TINTA_SUAVE,
+        font=_fuente(16),
+        anchor="ra",
+    )
+
+    # Pie: el texto completo, símbolo a símbolo, con el actual resaltado.
+    y_pie = lado + 20
+    x_pie = _MARGEN_TEXTO
+    fuente_pie = _fuente(26)
+    for indice, token in enumerate(scene.tokens):
+        simbolo = "·" if isinstance(token, WordGap) else LETTERS[token].display
+        color = _ACENTO if indice == scene.token_index else _TINTA
+        lapiz.text((x_pie, y_pie), simbolo, fill=color, font=fuente_pie)
+        x_pie += int(lapiz.textlength(simbolo + "  ", font=fuente_pie))
+    lapiz.text((_MARGEN_TEXTO, alto - 40), _ATAJOS, fill=_TINTA_SUAVE, font=_fuente(14))
+    lapiz.text((_MARGEN_TEXTO, alto - 22), _AVISO, fill=_TINTA_SUAVE, font=_fuente(14))
+    return cuadro

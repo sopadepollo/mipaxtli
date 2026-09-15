@@ -7,9 +7,11 @@ from pathlib import Path
 
 from PIL import Image
 
+from lsm.config import Config
 from lsm.io.dataset import SampleMetadata, StoredSample, write_sample
 from lsm.io.signs import (
     MANIFEST_FILENAME,
+    draw_scene,
     gif_frame_count,
     load_asset_frames,
     load_candidates,
@@ -24,9 +26,13 @@ from lsm.signs import (
     AssetReview,
     AssetSource,
     Manifest,
+    PlayerState,
+    Scene,
     SignAsset,
+    build_playlist,
     expected_filename,
     project_frames,
+    text_to_symbols,
 )
 from lsm.synthetic import arc_offsets, canonical_hand, moving_sequence, still_sequence
 from lsm.types import (
@@ -166,3 +172,45 @@ def test_un_png_se_carga_como_un_solo_cuadro(tmp_path: Path) -> None:
 
     assert gif_frame_count(ruta) == 1
     assert len(load_asset_frames(ruta)) == 1
+
+
+def test_el_cuadro_tiene_asset_a_la_izquierda_y_texto_a_la_derecha() -> None:
+    config = Config()
+    manifest = manifiesto()
+    tokens = text_to_symbols("año")
+    playlist = build_playlist(tokens, manifest, config)
+    lienzo = Image.new(
+        "RGB", (config.signs.canvas_px, config.signs.canvas_px), (255, 0, 0)
+    )
+    escena = Scene(
+        tokens=tokens,
+        playlist=playlist,
+        state=PlayerState(index=1, elapsed_ms=300.0),
+        asset=manifest.letras[Label.ENIE],
+        frame=lienzo,
+    )
+
+    cuadro = draw_scene(escena, config)
+
+    assert cuadro.width > config.signs.canvas_px
+    assert cuadro.height > config.signs.canvas_px
+    # El asset se pega tal cual: un píxel del centro del panel izquierdo es rojo.
+    centro = config.signs.canvas_px // 2
+    assert cuadro.getpixel((centro, centro)) == (255, 0, 0)
+
+
+def test_una_pausa_se_dibuja_sin_asset() -> None:
+    config = Config()
+    manifest = manifiesto()
+    tokens = text_to_symbols("a b")
+    escena = Scene(
+        tokens=tokens,
+        playlist=build_playlist(tokens, manifest, config),
+        state=PlayerState(index=1),
+        asset=None,
+        frame=None,
+    )
+
+    cuadro = draw_scene(escena, config)
+
+    assert cuadro.width > 0

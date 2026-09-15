@@ -14,18 +14,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+from collections.abc import Callable, Mapping
 from datetime import date
 from pathlib import Path
-from typing import Final
+from typing import Any, Final, Protocol
 
 from pydantic import ValidationError
 
+from lsm.cli import MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
 from lsm.io.signs import (
     DEFAULT_ASSETS_DIR,
     DEFAULT_RAW_DIR,
     MANIFEST_FILENAME,
+    draw_scene,
     gif_frame_count,
+    load_asset_frames,
     load_candidates,
     load_manifest,
     save_manifest,
@@ -37,13 +42,33 @@ from lsm.signs import (
     MANIFEST_SCHEMA_VERSION,
     AssetReview,
     AssetSource,
+    Faster,
     Manifest,
+    Next,
+    PlayerInput,
+    PlayerState,
+    Prev,
     ReferenceChoice,
+    Restart,
+    Scene,
     SignAsset,
+    Slower,
+    Step,
+    Tick,
+    TogglePause,
+    Token,
+    UnsupportedCharacters,
+    WordGap,
+    asset_frame,
+    build_playlist,
     choose_reference,
     expected_filename,
     manifest_drift,
+    player_step,
     project_frames,
+    render_tokens,
+    start,
+    text_to_symbols,
 )
 from lsm.vocabulary import ALPHABET, LETTERS, Label
 
@@ -265,5 +290,164 @@ def main(argv: list[str] | None = None) -> int:
     return reproducir(args.texto, args.assets, config)
 
 
-def reproducir(texto: str, assets: Path, config: Config) -> int:
-    raise NotImplementedError("Task 8")
+# --------------------------------------------------------------------------- #
+# reproducir
+# --------------------------------------------------------------------------- #
+
+_SALIR: Final = frozenset({ord("q"), 27})
+_TECLAS: Final[dict[int, PlayerInput]] = {
+    ord(" "): TogglePause(),
+    ord("n"): Next(),
+    ord("p"): Prev(),
+    ord("r"): Restart(),
+    ord("+"): Faster(),
+    ord("="): Faster(),
+    ord("-"): Slower(),
+}
+
+
+class Ventana(Protocol):
+    """Lo que el bucle necesita de una ventana. La real es OpenCV; los tests
+    inyectan una falsa con teclas programadas."""
+
+    def mostrar(self, imagen: Any) -> None: ...
+    def tecla(self, espera_ms: int) -> int: ...
+    def cerrar(self) -> None: ...
+
+
+class VentanaOpenCV:
+    def __init__(self, titulo: str) -> None:
+        self.titulo = titulo
+
+    def mostrar(self, imagen: Any) -> None:
+        import cv2
+        import numpy as np
+
+        # Pillow entrega RGB; OpenCV espera BGR.
+        cv2.imshow(self.titulo, np.asarray(imagen)[:, :, ::-1])
+
+    def tecla(self, espera_ms: int) -> int:
+        import cv2
+
+        return int(cv2.waitKey(espera_ms) & 0xFF)
+
+    def cerrar(self) -> None:
+        import cv2
+
+        cv2.destroyAllWindows()
+
+
+def bucle(
+    playlist: tuple[Step, ...],
+    tokens: tuple[Token, ...],
+    manifest: Manifest,
+    cuadros: Mapping[Label, list[Any]],
+    config: Config,
+    ventana: Ventana,
+    reloj: Callable[[], float],
+    componer: Callable[[Scene], Any],
+) -> PlayerState:
+    """Mostrar, leer tecla, medir el tiempo, avanzar. Hasta `q`.
+
+    El `dt` de cada `Tick` es tiempo de pared entre vueltas, medido con `reloj`:
+    `config.signs.tick_ms` solo dice cuánto espera `waitKey`. Una tecla sustituye
+    al tick de esa vuelta; el par de milisegundos que se pierden no se notan.
+    """
+    estado = start(playlist)
+    anterior = reloj()
+    try:
+        while True:
+            paso = playlist[estado.index]
+            asset = manifest.letras[paso.label] if paso.label is not None else None
+            frame: Any | None = None
+            if paso.label is not None and asset is not None:
+                imagenes = cuadros[paso.label]
+                if asset.es_dinamica and asset.duracion_ms is not None:
+                    frame = imagenes[
+                        asset_frame(estado, len(imagenes), asset.duracion_ms)
+                    ]
+                else:
+                    frame = imagenes[0]
+            ventana.mostrar(componer(Scene(tokens, playlist, estado, asset, frame)))
+
+            tecla = ventana.tecla(config.signs.tick_ms)
+            ahora = reloj()
+            dt_ms = (ahora - anterior) * 1000.0
+            anterior = ahora
+            if tecla in _SALIR:
+                return estado
+            evento = _TECLAS.get(tecla, Tick(dt_ms))
+            estado, _ = player_step(estado, evento, playlist, config)
+    finally:
+        ventana.cerrar()
+
+
+def reproducir(
+    texto: str,
+    assets: Path,
+    config: Config,
+    ventana: Ventana | None = None,
+    reloj: Callable[[], float] | None = None,
+) -> int:
+    """Texto → símbolos → pasos → ventana. Todo lo que puede fallar, falla
+    antes de abrir la ventana y con un mensaje concreto."""
+    try:
+        tokens = text_to_symbols(texto)
+    except UnsupportedCharacters as error:
+        print(error)
+        return 1
+    if not any(not isinstance(token, WordGap) for token in tokens):
+        print("el texto no tiene ninguna letra que deletrear")
+        return 1
+
+    ruta_manifest = assets / MANIFEST_FILENAME
+    if not ruta_manifest.is_file():
+        print(SIN_MANIFEST.format(ruta=ruta_manifest))
+        return 1
+    manifest = load_manifest(ruta_manifest)
+
+    try:
+        playlist = build_playlist(tokens, manifest, config)
+    except ValueError as error:
+        print(error)
+        return 1
+
+    letras = {paso.label for paso in playlist if paso.label is not None}
+    faltan = [
+        manifest.letras[label].archivo
+        for label in sorted(letras)
+        if not (assets / manifest.letras[label].archivo).is_file()
+    ]
+    if faltan:
+        print(
+            f"faltan assets en {assets}: {', '.join(faltan)}. Corre lsm-signs render."
+        )
+        return 1
+
+    if ventana is None:
+        try:
+            import cv2  # noqa: F401
+            import numpy  # noqa: F401
+        except ImportError as error:
+            print(MENSAJE_SIN_EXTRAS.format(modulo=error.name))
+            return 1
+        ventana = VentanaOpenCV("lsm-signs — texto a señas (deletreo manual)")
+    if reloj is None:
+        reloj = time.perf_counter
+
+    cuadros = {
+        label: load_asset_frames(assets / manifest.letras[label].archivo)
+        for label in letras
+    }
+    print(render_tokens(tokens))
+    bucle(
+        playlist,
+        tokens,
+        manifest,
+        cuadros,
+        config,
+        ventana,
+        reloj,
+        lambda escena: draw_scene(escena, config),
+    )
+    return 0
