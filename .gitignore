@@ -2,10 +2,9 @@
 data/*
 !data/.gitkeep
 
-# Assets binarios grandes de la dirección texto → señas (Fase 4).
-assets/signs/*.webp
-assets/signs/*.gif
-assets/signs/*.mp4
+# assets/signs/ SE VERSIONA: son esqueletos de pocos KB renderizados desde el
+# dataset propio, y el test del manifest (tests/test_signs_manifest.py) los
+# necesita para exigir el criterio de la Fase 4 en CI.
 
 # Python
 __pycache__/
