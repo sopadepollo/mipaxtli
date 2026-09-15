@@ -1,0 +1,644 @@
+{
+  "fuente_normativa": "Serafín de Fleischmann, M. E. y González Pérez, R. Manos con voz. Diccionario de Lengua de Señas Mexicana. CONAPRED / Libre Acceso A.C. Abecedario: pp. 15-19.",
+  "letras": {
+    "A": {
+      "archivo": "A.png",
+      "descripcion": "Mano cerrada, se muestran las uñas y se estira el dedo pulgar hacia un lado. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-manana/A/011.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "A",
+      "pagina": 15,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "cuatro dedos recogidos con las yemas a la altura de los nudillos (uñas al frente); pulgar largo hacia un lado",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "B": {
+      "archivo": "B.png",
+      "descripcion": "Dedos índice, medio, anular y meñique se estiran unidos y el pulgar se dobla dirección a la palma, la cual mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/B/001.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "B",
+      "pagina": 15,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "cuatro dedos largos y juntos; pulgar doblado sobre la palma",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "C": {
+      "archivo": "C.png",
+      "descripcion": "Dedos índice, medio, anular y meñique se mantienen unidos y en posición cóncava; el pulgar también se pone de esa forma. La palma mira a un lado",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/C/012.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "C",
+      "pagina": 15,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "vista de lado: los cuatro dedos se solapan en un arco y el pulgar cierra por abajo dejando hueco; palma de lado no apreciable en 2D, la descripción lo cubre",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "D": {
+      "archivo": "D.png",
+      "descripcion": "Dedos medio, anular, meñique y pulgar se unen por las puntas y el dedo índice se estira. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/D/017.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "D",
+      "pagina": 15,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice largo; medio, anular y meñique caen hasta juntarse con la yema del pulgar",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "DOBLE_L": {
+      "archivo": "DOBLE_L.gif",
+      "descripcion": "Mano cerrada y los dedos índice y pulgar alargados, se forma una letra l. La palma mira al frente y se hacen movimientos horizontales",
+      "duracion_ms": 5000,
+      "es_dinamica": true,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-manana/DOBLE_L/005.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "LL",
+      "pagina": 16,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "misma mano que L; desplazamiento horizontal de un solo sentido (~330 px) con leve deriva vertical",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "movimientos horizontales"
+    },
+    "DOBLE_R": {
+      "archivo": "DOBLE_R.gif",
+      "descripcion": "Mano cerrada, se alargan y entrelazan los dedos índice y medio. La palma mira al frente y hace movimientos horizontales",
+      "duracion_ms": 5000,
+      "es_dinamica": true,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/DOBLE_R/024.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "RR",
+      "pagina": 18,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "misma mano que R; desplazamiento horizontal de un solo sentido (~240 px) sin deriva vertical",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "movimientos horizontales"
+    },
+    "E": {
+      "archivo": "E.png",
+      "descripcion": "Dedos completamente doblados, se muestran las uñas. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/E/005.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "E",
+      "pagina": 15,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "los cuatro dedos y el pulgar doblados; se distingue de A porque el pulgar no sale al lado",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "ENIE": {
+      "archivo": "ENIE.gif",
+      "descripcion": "Mano cerrada, se ponen los dedos índice y medio sobre el pulgar. Se mueve la muñeca a los lados",
+      "duracion_ms": 5000,
+      "es_dinamica": true,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/ENIE/027.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "Ñ",
+      "pagina": 17,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "misma mano que N; la muñeca gira ida y vuelta (~40°) dos veces",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "rotacion de ida y vuelta"
+    },
+    "F": {
+      "archivo": "F.png",
+      "descripcion": "Mano abierta y los dedos unidos, se dobla el índice hasta que su parte lateral toque la yema del pulgar. La palma mira a un lado",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-tarde/F/008.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "F",
+      "pagina": 15,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice doblado hasta tocar la yema del pulgar; medio, anular y meñique largos y juntos; palma de lado no apreciable en 2D, la descripción lo cubre",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "G": {
+      "archivo": "G.png",
+      "descripcion": "Mano cerrada y los dedos índice y pulgar estirados. La palma mira adentro",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s03/2026-09-09-manana/G/001.json",
+        "signer_id": "s03",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "G",
+      "pagina": 16,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "mano horizontal: índice largo apuntando al lado, pulgar arriba, resto recogido; palma adentro no apreciable en 2D, la descripción lo cubre",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "H": {
+      "archivo": "H.png",
+      "descripcion": "Mano cerrada y los dedos índice y medio estirados y unidos, se extiende el dedo pulgar señalando hacia arriba. La palma mira adentro",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-tarde/H/014.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "H",
+      "pagina": 16,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "como G con índice y medio largos y juntos; pulgar arriba; palma adentro no apreciable en 2D, la descripción lo cubre",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "I": {
+      "archivo": "I.png",
+      "descripcion": "Mano cerrada, el dedo meñique se estira señalando hacia arriba. La palma se pone de lado",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-tarde/I/005.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "I",
+      "pagina": 16,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "meñique largo en el borde opuesto al pulgar; los otros tres recogidos; palma de lado no apreciable en 2D, la descripción lo cubre",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "J": {
+      "archivo": "J.gif",
+      "descripcion": "Mano cerrada, el dedo meñique bien estirado señalando hacia arriba y la palma a un lado dibuja una j en el aire",
+      "duracion_ms": 5000,
+      "es_dinamica": true,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/J/023.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "J",
+      "pagina": 16,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "misma mano que I; la tira baja y remata en gancho hacia arriba (vista de cámara, no espejo)",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "dibuja una j en el aire"
+    },
+    "K": {
+      "archivo": "K.gif",
+      "descripcion": "Se cierra la mano con los dedos índice, medio y pulgar estirados. La yema del pulgar se pone entre el índice y el medio. Se mueve la muñeca hacia arriba",
+      "duracion_ms": 5000,
+      "es_dinamica": true,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s03/2026-09-09-manana/K/010.json",
+        "signer_id": "s03",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "K",
+      "pagina": 16,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "misma mano que P; en el pico del movimiento el dedo medio, que apunta a la cámara, se proyecta largo hacia abajo más allá de la muñeca (19 de 90 frames); en reposo se acorta. Propio del signo en 2D, no de la muestra. La muñeca sube y baja dos veces (~30°)",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "se mueve la muneca hacia arriba"
+    },
+    "L": {
+      "archivo": "L.png",
+      "descripcion": "Mano cerrada y los dedos índice y pulgar estirados, se forma una letra l. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/L/021.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "L",
+      "pagina": 16,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice largo arriba, pulgar largo al lado en ángulo recto; resto recogido",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "M": {
+      "archivo": "M.png",
+      "descripcion": "Mano cerrada, se ponen los dedos índice, medio y anular sobre el pulgar",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s03/2026-09-09-manana/M/004.json",
+        "signer_id": "s03",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "M",
+      "pagina": 17,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice, medio y anular caen largos sobre el pulgar; meñique recogido; el pulgar queda tapado debajo",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "N": {
+      "archivo": "N.png",
+      "descripcion": "Con la mano cerrada, se ponen los dedos índice y medio sobre el dedo pulgar",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-tarde/N/001.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "N",
+      "pagina": 17,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice y medio caen largos sobre el pulgar; anular y meñique recogidos",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "O": {
+      "archivo": "O.png",
+      "descripcion": "Con la mano se forma una letra o. Todos los dedos se tocan por las puntas",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-manana/O/007.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "O",
+      "pagina": 17,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "vista de lado: los cuatro dedos y el pulgar se juntan por las yemas sin hueco, a diferencia de C",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "P": {
+      "archivo": "P.png",
+      "descripcion": "Mano cerrada y los dedos índice, medio y pulgar estirados, se pone la yema del pulgar entre el índice y el medio",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/P/003.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "P",
+      "pagina": 17,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice arriba, medio estirado hacia un lado, yema del pulgar entre ambos; anular y meñique recogidos",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "Q": {
+      "archivo": "Q.gif",
+      "descripcion": "Mano cerrada, se ponen los dedos índice y pulgar en posición de garra. La palma mira hacia abajo, y se mueve la muñeca hacia los lados",
+      "duracion_ms": 5000,
+      "es_dinamica": true,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/Q/005.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "Q",
+      "pagina": 17,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice en gancho y pulgar apartado del puño formando la garra; medio a medio recoger; palma abajo no apreciable en 2D, la descripción lo cubre; la muñeca gira ida y vuelta (~30°) dos veces",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "rotacion de ida y vuelta"
+    },
+    "R": {
+      "archivo": "R.png",
+      "descripcion": "Mano cerrada, se estiran y entrelazan los dedos índice y medio. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/R/008.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "R",
+      "pagina": 18,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice y medio largos y cruzados a media altura; pulgar recogido",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "S": {
+      "archivo": "S.png",
+      "descripcion": "Mano cerrada, se pone el pulgar sobre los otros dedos. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s03/2026-09-09-manana/S/007.json",
+        "signer_id": "s03",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "S",
+      "pagina": 18,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "puño: cuatro dedos recogidos y el pulgar cruza por encima de ellos",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "T": {
+      "archivo": "T.png",
+      "descripcion": "Mano cerrada, el pulgar se pone entre el índice y el medio. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-tarde/T/001.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "T",
+      "pagina": 18,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "puño de frente; el pulgar sube entre los nudillos del índice y el medio y asoma por encima",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "U": {
+      "archivo": "U.png",
+      "descripcion": "Mano cerrada, se estiran los dedos índice y medio unidos. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s03/2026-09-09-manana/U/009.json",
+        "signer_id": "s03",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "U",
+      "pagina": 18,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice y medio largos, paralelos y juntos; resto recogido",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "V": {
+      "archivo": "V.png",
+      "descripcion": "Mano cerrada, se estiran los dedos índice y medio separados. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/V/010.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "V",
+      "pagina": 18,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice y medio largos y separados; resto recogido",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "W": {
+      "archivo": "W.png",
+      "descripcion": "Mano cerrada, se estiran los dedos índice, medio y anular separados. La palma mira al frente",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-tarde/W/001.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "W",
+      "pagina": 18,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice, medio y anular largos y separados; meñique recogido con el pulgar encima (las yemas se solapan en 2D)",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "X": {
+      "archivo": "X.gif",
+      "descripcion": "Mano cerrada, el índice y el pulgar en posición de garra y la palma dirigida a un lado, se realiza un movimiento al frente y de regreso",
+      "duracion_ms": 5000,
+      "es_dinamica": true,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s03/2026-09-09-manana/X/006.json",
+        "signer_id": "s03",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "X",
+      "pagina": 19,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "mano de lado, pulgar e índice en gancho enfrentados (garra); el ida y vuelta al frente solo se ve como un cambio de escala leve (~20 %)",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "movimiento al frente y de regreso"
+    },
+    "Y": {
+      "archivo": "Y.png",
+      "descripcion": "Mano cerrada, se estira el meñique y el pulgar. La palma mira hacia dentro",
+      "duracion_ms": null,
+      "es_dinamica": false,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s02/2026-09-09-manana/Y/011.json",
+        "signer_id": "s02",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "Y",
+      "pagina": 19,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "pulgar y meñique largos en direcciones opuestas; palma adentro: la fila de nudillos queda vertical",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "—"
+    },
+    "Z": {
+      "archivo": "Z.gif",
+      "descripcion": "Mano cerrada, el dedo índice estirado y la palma al frente, se dibuja una letra z en el aire",
+      "duracion_ms": 5000,
+      "es_dinamica": true,
+      "fuente": {
+        "espejada": false,
+        "lateralidad_original": "RIGHT",
+        "muestra": "s01/2026-09-09-manana/Z/003.json",
+        "signer_id": "s01",
+        "tipo": "esqueleto_desde_dataset"
+      },
+      "letra": "Z",
+      "pagina": 19,
+      "revision": {
+        "fecha": "2026-09-14",
+        "nota": "índice largo, resto recogido; tres tramos: horizontal, diagonal, horizontal (espejada por la vista de cámara); en el último tramo el índice apunta al frente y se acorta en 2D",
+        "resultado": "coincide",
+        "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
+      },
+      "trayectoria": "dibuja una letra z en el aire"
+    }
+  },
+  "schema_version": 1
+}

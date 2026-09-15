@@ -83,6 +83,14 @@ temporales pasan a milisegundos derivados de la tasa **medida**, que resultó se
 17.8 fps y no los 30 que suponían los comentarios. `lsm-demo --medir-fps` mide esa
 tasa; ver la sección 6.1 de `docs/COMO-PROBAR.md`.
 
+**Fase 4 — texto a señas, cerrada.** Texto → señas: `lsm-signs reproducir
+"casa"`. Los 29 assets son esqueletos renderizados desde el dataset propio, con
+fuente y revisión por letra en `assets/signs/manifest.json`; ver ADR 0014. La
+revisión registrada la hizo un agente contra la descripción del glosario, no
+una persona: **ninguna persona ha mirado todavía los 29 assets**, y la
+validación por persona usuaria de LSM (el PENDIENTE-HUMANO G del glosario)
+sigue pendiente.
+
 **Nada de eso hace falta para trabajar en el núcleo.** MediaPipe y OpenCV son
 dependencias opcionales: `make test` pasa sin cámara, sin modelo y sin ninguna de
 las dos instaladas.

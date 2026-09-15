@@ -84,17 +84,21 @@ lsm-translator/
 │   │   └── registry.py           # selección por configuración
 │   ├── export.py                 # modelo entrenado → JSON portable
 │   ├── spelling.py               # letras → palabras (buffer, espacio, borrado)
+│   ├── signs.py                  # texto → símbolos, lista de pasos, reproductor — SIN I/O
 │   ├── io/
 │   │   ├── camera.py             # OpenCV: única fuente de frames
 │   │   ├── hands.py              # wrapper de MediaPipe, aislado tras interfaz
 │   │   ├── preview.py            # dibujo del preview: landmarks y HUD
 │   │   ├── dataset.py            # lectura/escritura de muestras
-│   │   └── corpus.py             # de dónde salen las muestras y cómo se identifica
+│   │   ├── corpus.py             # de dónde salen las muestras y cómo se identifica
+│   │   ├── signs.py              # manifest en disco, render PNG/GIF, cuadro de la ventana
+│   │   └── fonts/                # DejaVuSans.ttf empaquetada: Aileron no dibuja Ñ ni acentos
 │   └── cli/
 │       ├── capture.py            # recolección de dataset
 │       ├── train.py
 │       ├── evaluate.py           # métricas + matriz de confusión
-│       └── demo.py               # demo en vivo, ambas direcciones
+│       ├── demo.py               # demo en vivo, señas → texto
+│       └── signs.py              # lsm-signs: render / verificar / reproducir
 │
 ├── tests/
 │   ├── fixtures/
@@ -430,6 +434,12 @@ tiene su propio riesgo: **la corrección de los materiales**.
   confunden constantemente en internet) y, si es posible, revisarse con una persona
   usuaria de LSM o un intérprete. Anotar la fuente de cada asset en el manifest.
 
+Resuelto en la Fase 4 (`docs/adr/0014-assets-como-esqueleto-del-dataset-propio.md`):
+los assets son esqueletos renderizados desde `data/raw`, el manifest apunta a la
+muestra de origen y a la página del diccionario, y el reproductor muestra siempre
+la descripción del glosario junto al dibujo. `signs.py` es puro; el reloj entra
+por ticks como en `telemetry.py`.
+
 ### 4.11 Ética, privacidad y validación
 
 - El procesamiento ocurre en el dispositivo. Ningún frame sale a un servidor.
@@ -451,7 +461,7 @@ tiene su propio riesgo: **la corrección de los materiales**.
 | 1 | `capture.py` + dataset de 1 persona, letras estáticas | ≥100 muestras por letra estática con metadatos |
 | 2 | `static_knn` + `train`/`evaluate` + matriz de confusión | ≥90% con validación leave-one-signer-out |
 | 3 | `segmentation.py` + `demo.py` (señas → texto en vivo) | deletrear una palabra de 5 letras sin errores de segmentación |
-| 4 | Dirección texto → señas + assets verificados | 27 letras con asset y fuente documentada |
+| 4 | Dirección texto → señas + assets verificados | 29 letras (26 sin CH, más Ñ, LL y RR) con asset y fuente documentada |
 | 5 | `dynamic_dtw` + señas con movimiento | letras dinámicas reconocidas en vivo |
 | 6 | Dataset multi-persona, ajuste de umbrales | métricas estables entre firmantes |
 | 7 | Web app (MediaPipe JS) + paridad de features | test de golden vectors pasa en TS; funciona en celular |

@@ -17,6 +17,9 @@ capture = [
     "mediapipe>=1.0",
     "opencv-python>=4.10",
     "numpy>=1.26",
+    # Escribe los GIF de las letras dinamicas y compone el cuadro del reproductor
+    # (la fuente de OpenCV es ASCII y las descripciones llevan acentos).
+    "pillow>=10.1",
 ]
 
 [project.scripts]
@@ -25,6 +28,7 @@ lsm-capture = "lsm.cli.capture:main"
 lsm-train = "lsm.cli.train:main"
 lsm-eval = "lsm.cli.evaluate:main"
 lsm-demo = "lsm.cli.demo:main"
+lsm-signs = "lsm.cli.signs:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -39,6 +43,8 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.6",
     "types-PyYAML>=6.0",
+    # La suite renderiza assets en tmp_path y lee los GIF del manifest real.
+    "pillow>=10.1",
 ]
 
 [tool.ruff]

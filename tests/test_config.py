@@ -130,3 +130,25 @@ def test_una_ventana_de_fps_vacia_se_rechaza() -> None:
 def test_una_medicion_de_duracion_cero_se_rechaza() -> None:
     with pytest.raises(ValidationError):
         Config.model_validate({"telemetry": {"benchmark_seconds": 0.0}})
+
+
+def test_texto_a_senas_tiene_su_seccion() -> None:
+    """Duraciones, fps del render y límites de velocidad son umbrales: viven en
+    `config.yaml` como los demás (`CLAUDE.md` regla 5)."""
+    signs = Config().signs
+
+    assert signs.static_hold_ms > 0.0
+    assert signs.dynamic_loops >= 1
+    assert signs.word_gap_ms > 0.0
+    assert signs.render_fps >= 1
+    assert signs.canvas_px >= 64
+    assert 0.0 <= signs.canvas_margin < 0.5
+    assert signs.speed_min < 1.0 <= signs.speed_max
+    assert signs.tick_ms >= 1
+
+
+def test_un_rango_de_velocidad_vacio_se_rechaza() -> None:
+    """`Faster`/`Slower` acotan entre `speed_min` y `speed_max`; con el rango al
+    revés no hay velocidad válida y el reproductor no debería descubrirlo."""
+    with pytest.raises(ValidationError):
+        Config.model_validate({"signs": {"speed_min": 2.0, "speed_max": 1.0}})

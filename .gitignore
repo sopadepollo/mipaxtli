@@ -2,10 +2,9 @@
 data/*
 !data/.gitkeep
 
-# Assets binarios grandes de la dirección texto → señas (Fase 4).
-assets/signs/*.webp
-assets/signs/*.gif
-assets/signs/*.mp4
+# assets/signs/ SE VERSIONA: esqueletos renderizados desde el dataset propio,
+# PNG de pocos KB y GIF de ~100-175 KB (1.2 MB en total). Siguen versionándose
+# porque el test de la fase (tests/test_signs_manifest.py) los necesita en CI.
 
 # Python
 __pycache__/
