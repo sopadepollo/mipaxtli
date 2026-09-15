@@ -92,7 +92,7 @@
     "DOBLE_L": {
       "archivo": "DOBLE_L.gif",
       "descripcion": "Mano cerrada y los dedos índice y pulgar alargados, se forma una letra l. La palma mira al frente y se hacen movimientos horizontales",
-      "duracion_ms": 7500,
+      "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
         "espejada": false,
@@ -114,7 +114,7 @@
     "DOBLE_R": {
       "archivo": "DOBLE_R.gif",
       "descripcion": "Mano cerrada, se alargan y entrelazan los dedos índice y medio. La palma mira al frente y hace movimientos horizontales",
-      "duracion_ms": 7500,
+      "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
         "espejada": false,
@@ -158,7 +158,7 @@
     "ENIE": {
       "archivo": "ENIE.gif",
       "descripcion": "Mano cerrada, se ponen los dedos índice y medio sobre el pulgar. Se mueve la muñeca a los lados",
-      "duracion_ms": 7500,
+      "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
         "espejada": false,
@@ -268,7 +268,7 @@
     "J": {
       "archivo": "J.gif",
       "descripcion": "Mano cerrada, el dedo meñique bien estirado señalando hacia arriba y la palma a un lado dibuja una j en el aire",
-      "duracion_ms": 7500,
+      "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
         "espejada": false,
@@ -290,7 +290,7 @@
     "K": {
       "archivo": "K.gif",
       "descripcion": "Se cierra la mano con los dedos índice, medio y pulgar estirados. La yema del pulgar se pone entre el índice y el medio. Se mueve la muñeca hacia arriba",
-      "duracion_ms": 7500,
+      "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
         "espejada": false,
@@ -422,7 +422,7 @@
     "Q": {
       "archivo": "Q.gif",
       "descripcion": "Mano cerrada, se ponen los dedos índice y pulgar en posición de garra. La palma mira hacia abajo, y se mueve la muñeca hacia los lados",
-      "duracion_ms": 7500,
+      "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
         "espejada": false,
@@ -576,7 +576,7 @@
     "X": {
       "archivo": "X.gif",
       "descripcion": "Mano cerrada, el índice y el pulgar en posición de garra y la palma dirigida a un lado, se realiza un movimiento al frente y de regreso",
-      "duracion_ms": 7500,
+      "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
         "espejada": false,
@@ -620,7 +620,7 @@
     "Z": {
       "archivo": "Z.gif",
       "descripcion": "Mano cerrada, el dedo índice estirado y la palma al frente, se dibuja una letra z en el aire",
-      "duracion_ms": 7500,
+      "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
         "espejada": false,

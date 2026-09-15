@@ -355,15 +355,18 @@ signs:
   static_hold_ms: 1500.0
 
   # Vueltas completas del GIF de una dinámica. La duración del paso es
-  # duracion_ms del manifest por este número.
-  dynamic_loops: 2
+  # duracion_ms del manifest por este número. Con 2 vueltas y render_fps a 12
+  # una letra dinámica tardaba 15 s; con 1 vuelta son ~5 s.
+  dynamic_loops: 1
 
   # Pausa entre palabras: lo que ocupa un espacio del texto.
   word_gap_ms: 800.0
 
   # Cuadros por segundo del GIF al renderizar. Fija duracion_ms de cada
-  # dinámica en el manifest: round(1000 * frames / render_fps).
-  render_fps: 12
+  # dinámica en el manifest: round(1000 * frames / render_fps). 18, no 12: es
+  # la tasa medida en la Fase 3 (17.8 fps, ver ADR 0013), para que el GIF
+  # reproduzca el trazo a la velocidad real de la grabación.
+  render_fps: 18
 
   # Lado del lienzo cuadrado de cada asset, en píxeles, y aire alrededor de la
   # mano como fracción del lienzo por cada lado.

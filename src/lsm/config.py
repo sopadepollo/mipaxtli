@@ -399,15 +399,19 @@ class SignsConfig(_Section):
 
     #: Vueltas completas del GIF de una letra dinámica. La duración del paso es
     #: `duracion_ms` del manifest por este número: el movimiento se ve entero
-    #: tantas veces como diga.
-    dynamic_loops: int = Field(default=2, ge=1, le=20)
+    #: tantas veces como diga. Con dos vueltas y `render_fps` a 12, una letra
+    #: dinámica tardaba 15 s en pasar; a 1 vuelta son ~5 s (ver `render_fps`).
+    dynamic_loops: int = Field(default=1, ge=1, le=20)
 
     #: Pausa entre palabras: lo que ocupa un espacio del texto.
     word_gap_ms: float = Field(default=800.0, gt=0.0, le=60000.0)
 
     #: Cuadros por segundo del GIF al renderizar. Fija `duracion_ms` de cada
-    #: dinámica: `round(1000 · frames / render_fps)`.
-    render_fps: int = Field(default=12, ge=1, le=60)
+    #: dinámica: `round(1000 · frames / render_fps)`. 18, no 12: es la tasa que
+    #: `lsm-demo --medir-fps` midió en la Fase 3 (17.8 fps, ADR 0013), así que
+    #: el GIF reproduce el trazo a la velocidad real de la grabación en vez de
+    #: más lento.
+    render_fps: int = Field(default=18, ge=1, le=60)
 
     #: Lado, en píxeles, del lienzo cuadrado de cada asset.
     canvas_px: int = Field(default=320, ge=64, le=2048)
