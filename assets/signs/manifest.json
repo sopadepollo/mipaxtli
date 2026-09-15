@@ -303,7 +303,7 @@
       "pagina": 16,
       "revision": {
         "fecha": "2026-09-14",
-        "nota": "misma mano que P; el medio apunta al frente y en 2D se acorta; la muñeca sube y baja dos veces (~30°)",
+        "nota": "misma mano que P; en el pico del movimiento el dedo medio, que apunta a la cámara, se proyecta largo hacia abajo más allá de la muñeca (19 de 90 frames); en reposo se acorta. Propio del signo en 2D, no de la muestra. La muñeca sube y baja dos veces (~30°)",
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },

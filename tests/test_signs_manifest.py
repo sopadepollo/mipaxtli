@@ -74,3 +74,11 @@ def test_todas_las_revisiones_coinciden_con_la_descripcion() -> None:
         if asset.revision.resultado != "coincide"
     }
     assert pendientes == {}, f"revisiones sin cerrar: {pendientes}"
+
+
+def test_cada_revision_lleva_la_etiqueta_de_honestidad() -> None:
+    """La revisión coteja dibujo y descripción; no es validación por persona usuaria."""
+    manifest = load_manifest(ASSETS / MANIFEST_FILENAME)
+
+    for label, asset in manifest.letras.items():
+        assert "no validación por persona usuaria" in asset.revision.revisor, label

@@ -2,9 +2,9 @@
 data/*
 !data/.gitkeep
 
-# assets/signs/ SE VERSIONA: son esqueletos de pocos KB renderizados desde el
-# dataset propio, y el test del manifest (tests/test_signs_manifest.py) los
-# necesita para exigir el criterio de la Fase 4 en CI.
+# assets/signs/ SE VERSIONA: esqueletos renderizados desde el dataset propio,
+# PNG de pocos KB y GIF de ~100-175 KB (1.2 MB en total). Siguen versionándose
+# porque el test de la fase (tests/test_signs_manifest.py) los necesita en CI.
 
 # Python
 __pycache__/
