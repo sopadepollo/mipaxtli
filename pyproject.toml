@@ -28,6 +28,7 @@ lsm-capture = "lsm.cli.capture:main"
 lsm-train = "lsm.cli.train:main"
 lsm-eval = "lsm.cli.evaluate:main"
 lsm-demo = "lsm.cli.demo:main"
+lsm-signs = "lsm.cli.signs:main"
 
 [build-system]
 requires = ["hatchling"]
