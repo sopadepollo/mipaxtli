@@ -11,13 +11,18 @@ muestra las señas correspondientes a un texto escrito.
 Lee `docs/ARQUITECTURA.md` antes de hacer cambios estructurales. Ese documento es la
 fuente de verdad sobre el diseño.
 
+`docs/COMO-PROBAR.md` reúne todos los comandos ejecutables del proyecto y qué hace
+falta para cada uno. **Si añades, quitas o cambias un comando, actualízalo ahí**:
+es lo primero que lee quien llega al repositorio.
+
 ## Reglas no negociables
 
 1. **El tipo base de entrada es una secuencia temporal `(T, 21, 3)`, nunca un frame
    suelto.** Una seña estática es una secuencia corta y estable. No introduzcas APIs
    que acepten un solo frame.
 
-2. **`src/lsm/features.py`, `segmentation.py` y `classifiers/` son código puro.** Sin
+2. **`src/lsm/features.py`, `segmentation.py`, `capture.py`, `evaluation.py` y
+   `classifiers/` son código puro.** Sin
    OpenCV, sin MediaPipe, sin acceso a disco, sin cámara. Toda la I/O vive en
    `src/lsm/io/` y en `src/lsm/cli/`. Esto permite testear el núcleo en CI sin
    hardware.

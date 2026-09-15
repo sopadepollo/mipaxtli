@@ -75,6 +75,8 @@ lsm-translator/
 │   ├── types.py                  # LandmarkFrame, Sequence, Prediction, Handedness
 │   ├── features.py               # normalización y extracción — SIN I/O
 │   ├── segmentation.py           # máquina de estados: cuándo empieza/termina seña
+│   ├── capture.py                # criterio de aceptación de una muestra — SIN I/O
+│   ├── evaluation.py             # splits, matriz, barrido, contraste — SIN I/O
 │   ├── classifiers/
 │   │   ├── base.py               # Protocol común
 │   │   ├── static_knn.py
@@ -85,7 +87,9 @@ lsm-translator/
 │   ├── io/
 │   │   ├── camera.py             # OpenCV: única fuente de frames
 │   │   ├── hands.py              # wrapper de MediaPipe, aislado tras interfaz
-│   │   └── dataset.py            # lectura/escritura de muestras
+│   │   ├── preview.py            # dibujo del preview: landmarks y HUD
+│   │   ├── dataset.py            # lectura/escritura de muestras
+│   │   └── corpus.py             # de dónde salen las muestras y cómo se identifica
 │   └── cli/
 │       ├── capture.py            # recolección de dataset
 │       ├── train.py
@@ -120,6 +124,23 @@ lsm-translator/
     ├── docker-compose.yml
     └── README.md                 # cómo pasar la cámara al contenedor
 ```
+
+**`capture.py` no estaba en el plan original y se añadió en la Fase 1.** Contiene
+el criterio que decide si una ventana de frames sirve como muestra, y es puro por
+el mismo motivo que `features.py` y `segmentation.py`: si estuviera enredado con la
+cámara y el teclado, el criterio de aceptación de la fase —veinte muestras, features
+re-derivadas idénticas— solo se podría comprobar delante de una webcam, y no en CI.
+Ver `docs/adr/0006-deteccion-de-manos-y-captura.md`.
+
+**`evaluation.py` y `io/corpus.py` tampoco estaban en el plan y se añadieron en la
+Fase 2**, por el mismo motivo y con el mismo reparto. `evaluation.py` es puro y
+contiene todo lo que decide qué significa un número: los splits leave-one-signer-out,
+la matriz de confusión, el barrido de calibración y el contraste contra la columna
+`confundible_con` del glosario. `cli/evaluate.py` solo lee el glosario y escribe
+archivos. `io/corpus.py` responde de dónde salen las muestras y cómo se identifica
+ese conjunto: `lsm-train` y `lsm-eval` tienen que estar de acuerdo en las dos cosas,
+o un modelo puede quedar entrenado con un corpus y evaluado con otro sin que nada
+lo diga. Ver `docs/adr/0008-clasificador-estatico-y-protocolo-de-evaluacion.md`.
 
 ---
 
@@ -311,6 +332,7 @@ Un solo archivo JSON versionado:
 {
   "schema_version": 1,
   "feature_spec_version": 1,
+  "handedness_convention": "SIGNER",
   "classifier": "static_knn",
   "labels": ["A", "B", "..."],
   "params": { "...": "..." },
@@ -320,6 +342,23 @@ Un solo archivo JSON versionado:
 
 `feature_spec_version` es obligatorio: si cambia la normalización, los modelos
 viejos deben rechazarse en carga en vez de dar predicciones silenciosamente malas.
+
+`handedness_convention` es obligatorio por el mismo motivo y protege un fallo más
+escurridizo. Dice qué mano nombra el campo `handedness`: la anatómica de quien
+firma (`SIGNER`, la del proyecto) o la que se ve en la imagen espejada (`IMAGE`,
+que es como MediaPipe decide la lateralidad).
+
+Elegir mal **no degrada nada**. El paso 2 de `feature-spec.md` espeja en X según
+ese valor, así que con la convención contraria *todas* las muestras se canonizan
+hacia la otra mano: las dos poblaciones difieren por un espejo global, el modelo
+entrena igual de bien y la precisión es idéntica. El error solo aparece cuando dos
+implementaciones no coinciden — el caso de la Fase 7 con MediaPipe JS.
+
+Y **los golden vectors no lo cubren**: reciben la lateralidad ya resuelta como
+entrada, de modo que el test de paridad pasaría en verde mientras la app web
+confunde cada seña con su espejo. Rechazar el modelo al cargarlo es el único
+mecanismo que fuerza el acuerdo. Ver
+`docs/adr/0007-cierre-de-captura.md`.
 
 ### 4.7 Dataset: el cuello de botella real
 
@@ -348,6 +387,13 @@ En LSM varias letras comparten configuración de puño con diferencias sutiles d
 pulgar. Se abordará con:
 
 - Matriz de confusión obligatoria en el reporte de `evaluate.py`.
+- **Contraste de hipótesis.** La columna `confundible_con` del glosario predice qué
+  pares se confundirán, y se llenó leyendo la fuente primaria antes de grabar nada.
+  El reporte la cruza con la matriz real y separa cuatro casos: predicho y ocurrió,
+  predicho y no ocurrió, ocurrió sin estar predicho, y predicho pero no evaluable en
+  esta fase. El cuarto existe porque trece de los veintiséis pares tocan una letra
+  dinámica: contarlos entre los refutados diría que el glosario se equivocó cuando
+  lo que pasa es que todavía no se ha medido.
 - Si un par concentra el error, agregar features específicas (ángulos entre falanges,
   distancias pulgar-dedos) antes que cambiar de modelo.
 

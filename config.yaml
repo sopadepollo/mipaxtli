@@ -31,6 +31,62 @@ features:
   # 4.0 es un punto de partida razonado, no medido. Ajustar con datos reales.
   trajectory_weight: 4.0
 
+# Clasificador de letras estáticas por centroides (ARQUITECTURA.md §4.3).
+#
+# Los tres valores viajan DENTRO del modelo exportado, no solo aquí: la
+# reimplementación de JavaScript tiene que poder reproducir la decisión completa.
+# Una que acertara la etiqueta pero no supiera cuándo callarse no serviría de
+# nada (ARQUITECTURA.md §4.4 y §4.6).
+static_knn:
+  # Distancia con la que se compara contra los centroides: euclidean o cosine.
+  # La euclidiana mira magnitud y dirección; la coseno ignora la magnitud, lo que
+  # la hace más tolerante a una normalización de escala imperfecta y más ciega a
+  # las diferencias de apertura de la mano.
+  #
+  # MEDIDO con el barrido completo de `make eval` (2250 puntos, leave-one-signer-out)
+  # contra el dataset `fe0ada8710b6`: la coseno gana por +9 puntos de accuracy.
+  # No es un ajuste fino, es la diferencia entre cumplir el criterio de la fase y
+  # no cumplirlo, y quien lo paga son las letras de puño cerrado. `M` pasa de
+  # 0.4474 a más de 0.90 y `S` de 0.4625 a 0.7750: las dos tenían la σ más baja
+  # del dataset y cero confusiones —estaban bien grabadas— pero el puño comprime
+  # la referencia muñeca-nudillo del paso 4, así que su vector apuntaba en la
+  # dirección correcta con la magnitud equivocada. La euclidiana las rechazaba por
+  # lejanas. Ver `docs/adr/0011-calibracion-de-la-fase-2.md`.
+  metric: cosine
+
+  # Distancia máxima al centroide más cercano para no devolver UNKNOWN, en
+  # unidades de mano. Es la puerta que tapa lo que no se parece a ninguna letra:
+  # una mano saludando cae lejos de las 22 clases, pero ALGUNA será la menos
+  # lejana, y sin este umbral esa gana.
+  #
+  # MEDIDO contra el dataset `fe0ada8710b6`. El 1.0 anterior era un punto de
+  # partida razonado sobre el corpus sintético y con distancia euclidiana; al
+  # cambiar a coseno cambia la escala entera —la coseno vive en [0, 2]— y el
+  # valor ya no es comparable con el viejo. No lo leas como "se hizo más
+  # estricto": es otra unidad.
+  max_distance: 0.25
+
+  # Confianza mínima para no devolver UNKNOWN, en la escala del margen
+  # normalizado d2 / (d1 + d2): vale 0.5 con dos centroides empatados y tiende a
+  # 1 cuando el más cercano gana con holgura.
+  #
+  # Es la puerta que tapa las letras confundibles del §4.8 —M y N, S y T, V y W—,
+  # donde el fallo no es que la mano esté lejos de todo sino que está igual de
+  # cerca de dos cosas. Un 0.5 la desactiva.
+  #
+  # Comparte escala con segmentation.min_confidence a propósito: esta es el piso
+  # del clasificador, aquella es el piso más alto que la máquina de estados exige
+  # antes de escribir una letra en el texto.
+  #
+  # MEDIDO contra `fe0ada8710b6`, y elegido a mano en contra del barrido. El
+  # barrido recomienda 0.5, que da el mejor accuracy (0.9578) porque APAGA esta
+  # puerta: en la evaluación offline toda ventana es una letra de verdad, así que
+  # callarse solo puede restar. En video en vivo la mayoría de los frames no son
+  # ninguna letra y esta puerta es lo que impide escribir basura, de modo que
+  # optimizarla contra el protocolo offline es optimizarla contra el caso
+  # equivocado. 0.6 rechaza el 5.7% y aún deja 0.9261, por encima del criterio.
+  min_margin: 0.6
+
 # Suavizado temporal opcional sobre landmarks crudos (feature-spec.md §4).
 smoothing:
   # α = 1.0 desactiva el suavizado (cada frame se usa tal cual). Valores menores
@@ -86,3 +142,107 @@ segmentation:
 
   # Frames consecutivos sin mano válida que llevan de vuelta a IDLE.
   missing_frames_to_idle: 8
+
+# Detector de manos: los knobs que MediaPipe consume antes de que exista un
+# frame de landmarks (src/lsm/io/hands.py). No van en `segmentation` porque la
+# máquina de estados decide qué hacer con los frames ya detectados, no cómo
+# detectarlos.
+hands:
+  # Bundle del modelo de MediaPipe Tasks. Pesa ~8 MB y no se versiona en el
+  # repositorio: se descarga con `make model`. Ver docs/dataset-schema.md.
+  model_path: data/models/hand_landmarker.task
+
+  # Cuántas manos busca el detector. No es 1 a propósito: feature-spec.md §0.3
+  # manda quedarse con la de mayor score cuando hay varias en el encuadre, y para
+  # poder elegir hay que verlas. Con num_hands = 1 MediaPipe entrega la que él
+  # prefiera y la regla del contrato queda sin efecto.
+  num_hands: 2
+
+  # Umbral de detección de palma, aplicado dentro de MediaPipe. Es el mismo
+  # concepto que segmentation.min_detection_score, un paso más arriba: lo que no
+  # lo supera ni llega a ser candidato.
+  min_hand_detection_confidence: 0.5
+
+  # Umbral de presencia de la mano entre frames de video.
+  min_hand_presence_confidence: 0.5
+
+  # Umbral del rastreador temporal. Por debajo, MediaPipe vuelve a detectar desde
+  # cero en vez de seguir la mano del frame anterior. Bajarlo da más continuidad
+  # y más deriva; subirlo, lo contrario.
+  min_tracking_confidence: 0.5
+
+  # Si hay que INVERTIR la lateralidad que reporta el detector.
+  #
+  # MEDIDO el 2026-09-08 con MediaPipe 1.0.1 (Tasks API, modo VIDEO, webcam por el
+  # backend MSMF): alimentado con el cuadro sin espejar —como obliga
+  # feature-spec.md §0.3— devuelve la mano ANATÓMICA. Mano derecha real -> "Right".
+  # No hay que invertir nada, de ahí el false.
+  #
+  # La documentación histórica de MediaPipe decía lo contrario, y ese fue el valor
+  # por defecto hasta que se comprobó contra una cámara de verdad. El interruptor
+  # se conserva porque la convención ya cambió una vez entre versiones.
+  #
+  # Equivocarse aquí no rompe nada visible: el paso 2 canoniza TODAS las muestras
+  # hacia la mano contraria, el vector queda coherente consigo mismo y el modelo
+  # entrena sin quejarse. Por eso no se decide leyendo esto, se decide mirando:
+  # `lsm-capture calibrar` lo verifica y lo registra, y `grabar` no arranca sin
+  # ese registro. Cambiar este valor invalida las calibraciones anteriores.
+  mediapipe_reports_mirrored_handedness: false
+
+# Recolección de dataset (src/lsm/cli/capture.py, ARQUITECTURA.md §4.7).
+capture:
+  # Cámara y resolución pedidas a OpenCV. Es una petición: si el driver no la
+  # soporta entrega otra, y por eso width/height viajan en cada frame guardado en
+  # vez de darse por sabidos — el paso 1 de feature-spec.md los necesita.
+  camera_index: 0
+  frame_width: 1280
+  frame_height: 720
+
+  # Cuadros por segundo pedidos a la cámara. Además fija el paso de los
+  # timestamps que consume el modo VIDEO de MediaPipe.
+  camera_fps: 30
+
+  # Espejar el preview, que es lo que espera quien se ve en pantalla. SOLO afecta
+  # a lo que se dibuja: el frame que recibe el detector nunca va espejado
+  # (feature-spec.md §0.3). Ponerlo en false no cambia ni un bit de lo grabado.
+  preview_mirror: true
+
+  # Frames que componen una muestra estática. A 30 fps, 24 frames son 800 ms de
+  # mano sostenida. Subirlo exige más quietud y da una σ más representativa;
+  # bajarlo hace la sesión más ágil y más ruidosa.
+  static_frames: 24
+
+  # Límites de una muestra dinámica. El mínimo evita guardar un trazo cortado —y
+  # no puede bajar de dtw.min_source_frames, que config.py valida—; el máximo
+  # impide que una grabación olvidada crezca sin fin.
+  dynamic_min_frames: 12
+  dynamic_max_frames: 90
+
+  # Longitud de arco mínima de la trayectoria (feature-spec.md §3.1) para aceptar
+  # una muestra DINÁMICA, en unidades de mano.
+  #
+  # Es el espejo de quality.max_dispersion: σ rechaza a la estática que se movió,
+  # esto rechaza a la dinámica que no se movió. Sin él se puede grabar una "J" en
+  # la que la mano apenas se desplazó, y en el dataset es indistinguible de una
+  # "I" — envenena al clasificador dinámico por el lado contrario al que tapa la
+  # clase negativa, y no hay forma de detectarla después mirando el archivo.
+  #
+  # Se mide sobre τ, que ya está dividida por la escala de la mano: el mismo trazo
+  # cuenta igual de cerca que de lejos de la cámara.
+  #
+  # Es longitud de ARCO y no desplazamiento neto, y tiene que serlo: la Ñ y la Q
+  # son rotaciones de ida y vuelta, la Z y la X vuelven cerca de donde empezaron.
+  # Para todas ellas el neto es casi cero y el recorrido es largo. El precio es que
+  # el arco acumula el temblor del detector, así que el umbral debe dejar margen
+  # sobre ese ruido de fondo.
+  #
+  # 0.8 es un punto de partida RAZONADO, NO MEDIDO. Se calibra en la Fase 2 con
+  # trazos reales: grabar una tanda, mirar la distribución de arcos por letra y
+  # ponerlo donde separe. El razonamiento de partida: el gancho de una J recorre
+  # del orden de una o dos veces la distancia muñeca-nudillo.
+  min_trajectory_arc: 0.8
+
+  # Meta de repeticiones por letra y sesión. Solo alimenta el contador en
+  # pantalla: al alcanzarla no se bloquea nada. ARQUITECTURA.md §4.7 pide ~20 por
+  # letra, 2 sesiones por persona, 3 personas.
+  target_samples_per_label: 20

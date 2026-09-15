@@ -30,6 +30,7 @@ from lsm.types import (
     LightLevel,
     Prediction,
     Sample,
+    SampleKind,
     Sequence,
 )
 
@@ -51,6 +52,7 @@ def a_sample(label: str) -> Sample:
         distance=Distance.MEDIUM,
         mean_luminance=0.42,
         mean_scale_px=100.2,
+        kind=SampleKind.STATIC,
     )
 
 
@@ -97,7 +99,7 @@ def test_fit_recoge_las_etiquetas_del_dataset() -> None:
     assert classifier.export()["labels"] == ["A", "B"]
 
 
-def test_el_export_lleva_los_seis_campos_del_contrato() -> None:
+def test_el_export_lleva_los_siete_campos_del_contrato() -> None:
     classifier = DummyClassifier()
     classifier.fit([a_sample("A")])
 
@@ -106,6 +108,7 @@ def test_el_export_lleva_los_seis_campos_del_contrato() -> None:
     assert set(payload) == {
         "schema_version",
         "feature_spec_version",
+        "handedness_convention",
         "classifier",
         "labels",
         "params",

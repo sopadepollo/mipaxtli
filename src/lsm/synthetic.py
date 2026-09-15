@@ -20,17 +20,28 @@ mundo, no en el vector normalizado.
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime, timedelta
+from typing import Final
 
 from lsm.types import (
     NUM_LANDMARKS,
+    Distance,
     Handedness,
     Landmark,
     LandmarkIndex,
+    LightDirection,
+    LightLevel,
     Point3,
     Points3,
     RawFrame,
+    Sample,
+    SampleKind,
     Sequence,
 )
+
+#: Instante de referencia de las muestras sintéticas. Fijo a propósito: un
+#: `now()` haría que dos ejecuciones de `make eval` produjeran archivos distintos.
+_SYNTHETIC_EPOCH: Final = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
 
 #: Mano derecha canónica: palma hacia la cámara, dedos extendidos hacia arriba,
 #: muñeca en el origen. En píxeles, con `y` hacia abajo (por eso los dedos tienen
@@ -242,3 +253,251 @@ def arc_offsets(
         t = index / (count - 1)
         offsets.append((-width_px * t * t, depth_px * math.sin(math.pi * t)))
     return tuple(offsets)
+
+
+# --------------------------------------------------------------------------- #
+# Dataset sintético (Fase 2)
+# --------------------------------------------------------------------------- #
+#
+# La Fase 2 entrega el clasificador estático, el barrido de calibración y el
+# contraste de hipótesis. Ninguna de esas tres cosas debería quedar inejecutable
+# mientras no haya grabaciones: el día que el dataset exista, lo que hay que
+# poder hacer es apuntar `lsm-eval` a `data/raw` y leer el reporte, no empezar
+# entonces a escribir y depurar el reporte.
+#
+# De ahí este generador. **No se parece a LSM y no lo pretende**: produce manos
+# separables y deterministas para que la tubería tenga sobre qué correr. El
+# reporte que sale de él lleva un aviso que lo dice, porque una matriz de
+# confusión sin procedencia acaba citada como si fuera una medición.
+
+
+def _fnv1a(text: str) -> int:
+    """Hash determinista de 64 bits (FNV-1a).
+
+    `hash()` de Python va aleatorizado por proceso desde la 3.3, así que usarlo
+    aquí haría que dos ejecuciones de `make eval` produjeran datasets distintos —
+    y el criterio de aceptación de la fase es que el reporte sea reproducible.
+    """
+    value = 0xCBF29CE484222325
+    for byte in text.encode("utf-8"):
+        value = ((value ^ byte) * 0x100000001B3) % (1 << 64)
+    return value
+
+
+class _Noise:
+    """Generador congruencial lineal, escrito a mano y a propósito.
+
+    `random.Random` es determinista dentro de una versión de CPython, pero su
+    contrato no promete estabilidad entre versiones. Estos números acaban en un
+    reporte que se compara entre ejecuciones y entre máquinas, así que el
+    generador se escribe aquí, donde se puede leer y no puede cambiar debajo.
+    """
+
+    __slots__ = ("_state",)
+
+    _MULTIPLIER = 6364136223846793005
+    _INCREMENT = 1442695040888963407
+    _MODULUS = 1 << 64
+
+    def __init__(self, seed: str) -> None:
+        self._state = _fnv1a(seed)
+
+    def next(self) -> float:
+        """Siguiente valor en `[-1, 1)`."""
+        self._state = (self._state * self._MULTIPLIER + self._INCREMENT) % self._MODULUS
+        return ((self._state >> 11) / float(1 << 53)) * 2.0 - 1.0
+
+
+#: Ancla y falanges de cada dedo: el nudillo no se mueve al flexionar, las tres
+#: articulaciones distales sí. El ancla del pulgar es la CMC.
+_FINGERS: Final[tuple[tuple[int, tuple[int, int, int]], ...]] = (
+    (LandmarkIndex.THUMB_CMC, (2, 3, 4)),
+    (LandmarkIndex.INDEX_MCP, (6, 7, 8)),
+    (LandmarkIndex.MIDDLE_MCP, (10, 11, 12)),
+    (LandmarkIndex.RING_MCP, (14, 15, 16)),
+    (LandmarkIndex.PINKY_MCP, (18, 19, 20)),
+)
+
+#: Tres grados de flexión por dedo. 3⁵ = 243 configuraciones distintas, de sobra
+#: para las 22 clases de la Fase 2.
+_CURLS: Final[tuple[float, ...]] = (1.0, 0.62, 0.34)
+
+#: Separación lateral que acompaña a cada grado de flexión. Sin ella, dos manos
+#: que solo difieren en un dedo quedan demasiado cerca en ℝ⁴².
+_SPREADS: Final[tuple[float, ...]] = (0.0, 9.0, -9.0)
+
+
+def _bend(
+    points: Points3, anchor: int, joints: tuple[int, int, int], digit: int
+) -> Points3:
+    """Flexiona un dedo hacia su nudillo y lo abre o cierra lateralmente."""
+    curl = _CURLS[digit]
+    spread = _SPREADS[digit]
+    anchor_x, anchor_y, _ = points[anchor]
+    mutated = list(points)
+    for joint in joints:
+        x, y, z = points[joint]
+        mutated[joint] = (
+            anchor_x + (x - anchor_x) * curl + spread,
+            anchor_y + (y - anchor_y) * curl,
+            z * curl,
+        )
+    return tuple(mutated)
+
+
+def class_hand(ordinal: int) -> Points3:
+    """Una configuración de mano distinta y determinista por ordinal.
+
+    Los dígitos en base 3 del ordinal eligen el grado de flexión de cada dedo, de
+    modo que dos ordinales distintos dan manos distintas por construcción y no
+    por suerte. El ordinal 0 es la mano canónica.
+
+    Los nudillos no se mueven, y en particular tampoco el 9: la distancia
+    muñeca → nudillo del dedo medio es la unidad de escala del paso 4 de
+    `feature-spec.md`, y moverla haría que dos clases se distinguieran por su
+    tamaño aparente, que es justo lo que la normalización borra.
+    """
+    if ordinal < 0:
+        raise ValueError(f"el ordinal de clase no puede ser negativo: {ordinal}")
+    points = canonical_hand()
+    resto = ordinal
+    for anchor, joints in _FINGERS:
+        points = _bend(points, anchor, joints, resto % len(_CURLS))
+        resto //= len(_CURLS)
+    if resto:
+        msg = f"ordinal {ordinal} fuera del alcance del generador (máximo 242)"
+        raise ValueError(msg)
+    return points
+
+
+def _signer_hand(points: Points3, signer: int) -> Points3:
+    """Anatomía y estilo de una persona: mano más grande o más pequeña, muñeca
+    más o menos inclinada, dedos que se cierran un poco más o un poco menos.
+
+    Es lo que hace que leave-one-signer-out mida algo. Sin esta variación el fold
+    de prueba sería una copia exacta del de entrenamiento, el accuracy saldría del
+    100% y no diría nada.
+    """
+    ruido = _Noise(f"firmante:{signer}")
+    inclinacion = 18.0 * ruido.next()
+    tamano = 0.80 + 0.20 * (ruido.next() + 1.0)
+    sesgos = tuple(1.0 + 0.18 * ruido.next() for _ in _FINGERS)
+
+    ajustados = points
+    for (anchor, joints), factor in zip(_FINGERS, sesgos, strict=True):
+        anchor_x, anchor_y, _ = ajustados[anchor]
+        mutados = list(ajustados)
+        for joint in joints:
+            x, y, z = ajustados[joint]
+            mutados[joint] = (
+                anchor_x + (x - anchor_x) * factor,
+                anchor_y + (y - anchor_y) * factor,
+                z,
+            )
+        ajustados = tuple(mutados)
+    return scaled(rotated(ajustados, inclinacion), tamano)
+
+
+def synthetic_samples(
+    labels: tuple[str, ...],
+    *,
+    signers: int = 3,
+    sessions: int = 2,
+    repetitions: int = 6,
+    frames: int = 8,
+    jitter_px: float = 0.9,
+    style_jitter: float = 0.16,
+    width: int = 1280,
+    height: int = 720,
+) -> tuple[Sample, ...]:
+    """Un dataset etiquetado completo, con metadatos y sin tocar una cámara.
+
+    La configuración de mano de cada clase sale de su **posición en `labels`**, no
+    de su nombre: dos llamadas con la misma tupla dan las mismas manos, y con
+    tuplas distintas no tienen por qué. Quien lo consuma debe pasar siempre el
+    mismo vocabulario, ordenado.
+
+    El jitter por frame no es adorno: sin él σ sale exactamente cero y
+    `quality.max_dispersion` no se podría calibrar contra nada.
+    """
+    if not labels:
+        raise ValueError("un dataset necesita al menos una etiqueta")
+    for nombre, valor in (
+        ("signers", signers),
+        ("sessions", sessions),
+        ("repetitions", repetitions),
+    ):
+        if valor < 1:
+            raise ValueError(f"{nombre} debe ser ≥ 1, no {valor}")
+    if frames < 2:
+        raise ValueError(f"una muestra estática necesita ≥ 2 frames, no {frames}")
+
+    muestras: list[Sample] = []
+    for ordinal, label in enumerate(labels):
+        base = class_hand(ordinal)
+        for signer in range(signers):
+            mano = _signer_hand(base, signer)
+            signer_id = f"sint{signer:02d}"
+            for session in range(sessions):
+                session_id = f"{signer_id}-s{session:02d}"
+                for repeticion in range(repetitions):
+                    ruido = _Noise(f"{label}|{signer}|{session}|{repeticion}")
+                    # Nadie hace dos veces exactamente la misma seña. Sin esta
+                    # variación por repetición, la única diferencia dentro de una
+                    # clase sería el jitter por landmark, que la normalización
+                    # casi borra: cada clase quedaría en un punto y no en una
+                    # nube, leave-one-signer-out daría 100% siempre y el barrido
+                    # no tendría nada que optimizar.
+                    ejecutada = mano
+                    for anchor, joints in _FINGERS:
+                        factor = 1.0 + style_jitter * ruido.next()
+                        anchor_x, anchor_y, _ = ejecutada[anchor]
+                        mutados = list(ejecutada)
+                        for joint in joints:
+                            x, y, z = ejecutada[joint]
+                            mutados[joint] = (
+                                anchor_x + (x - anchor_x) * factor,
+                                anchor_y + (y - anchor_y) * factor,
+                                z,
+                            )
+                        ejecutada = tuple(mutados)
+                    colocada = translated(
+                        rotated(ejecutada, 6.0 * ruido.next()),
+                        480.0 + 120.0 * ruido.next(),
+                        420.0 + 90.0 * ruido.next(),
+                    )
+                    secuencia = Sequence(
+                        frames=tuple(
+                            to_frame(
+                                tuple(
+                                    (
+                                        x + jitter_px * ruido.next(),
+                                        y + jitter_px * ruido.next(),
+                                        z,
+                                    )
+                                    for x, y, z in colocada
+                                ),
+                                width=width,
+                                height=height,
+                            )
+                            for _ in range(frames)
+                        )
+                    )
+                    muestras.append(
+                        Sample(
+                            sequence=secuencia,
+                            label=label,
+                            signer_id=signer_id,
+                            session_id=session_id,
+                            timestamp=_SYNTHETIC_EPOCH
+                            + timedelta(minutes=len(muestras)),
+                            handedness=Handedness.RIGHT,
+                            light_level=LightLevel.INDOOR,
+                            light_direction=LightDirection.FRONTAL,
+                            distance=Distance.MEDIUM,
+                            mean_luminance=0.35 + 0.05 * signer,
+                            mean_scale_px=100.0 + 6.0 * signer,
+                            kind=SampleKind.STATIC,
+                        )
+                    )
+    return tuple(muestras)
