@@ -220,6 +220,11 @@ Sin Pillow ni OpenCV: devuelve puntos. Se testea con secuencias sintéticas.
 - Pillow entra como dependencia del extra `capture` en `pyproject.toml` (ya está
   en `uv.lock` de forma transitiva; OpenCV no escribe GIF). No es dependencia del
   núcleo: la suite sigue corriendo sin ella.
+- Nota de implementación: el plan puso además Pillow en el grupo `dev` de
+  `pyproject.toml`, porque la suite renderiza assets en `tmp_path` y lee los
+  GIF del manifest real (`tests/test_io_signs.py`, `tests/test_signs_manifest.py`).
+  Por eso `uv sync` (sin extras) sí instala Pillow y la suite la necesita; lo
+  que sigue siendo opcional es OpenCV, para la ventana de `reproducir`.
 
 ### 4.4 El comando
 

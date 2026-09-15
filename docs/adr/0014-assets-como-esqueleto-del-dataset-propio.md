@@ -71,10 +71,16 @@ en Windows sin depender de qué fuentes tenga instaladas el sistema.
 - **Legibilidad frente a una foto.** El manifest admite otros orígenes por
   `fuente.tipo`: una letra puede sustituirse por una foto verificada cambiando
   su entrada y su archivo, sin tocar código.
-- **El peso de las dinámicas.** 90 frames a 12 fps (7.5 s) por GIF es más de lo
-  que hace falta para transmitir el trazo, y es un peso pensado para
-  escritorio. Recortar frames o acortar la duración es una palanca del
-  renderizador para la Fase 7 (móvil), sin tocar el esquema del manifest.
+- **El peso de las dinámicas.** Una letra dinámica tardaba 15 s en pasar: 90
+  frames a `render_fps: 12` (7.5 s) por `dynamic_loops: 2`. `render_fps` sube a
+  18 —la tasa que `lsm-demo --medir-fps` midió en la Fase 3, 17.8 fps, ADR
+  0013— para que el GIF reproduzca el trazo a la velocidad real de la
+  grabación en vez de más lento, y `dynamic_loops` baja a 1: con los dos
+  cambios una letra dinámica dura ~5 s. El GIF sigue llevando los 90 frames
+  del buffer de captura completo, muchos de ellos con la mano ya quieta antes
+  y después del trazo; recortarlos para dejar solo el movimiento es una
+  palanca del renderizador que queda pendiente para la Fase 7 (móvil), sin
+  tocar el esquema del manifest.
 
 ## Qué NO cierra este ADR
 
@@ -82,9 +88,11 @@ La revisión registrada en `revision` de cada letra es **contra la descripción
 del glosario**, hecha por "Claude Opus 5 — revisión contra la descripción del
 glosario, no validación por persona usuaria de LSM" mirando el dibujo con la
 fila del glosario al lado; un segundo pase independiente repasó 21 de los
-dibujos y coincidió. No es la validación por persona usuaria de LSM o
-intérprete que pide `ARQUITECTURA.md` §4.11: el PENDIENTE-HUMANO G del
-glosario sigue abierto y aplica también a estos assets.
+dibujos y coincidió (registro completo en el apéndice de más abajo). **Ninguna
+persona ha mirado todavía los 29 assets:** las dos revisiones que hay son de
+agentes contra la descripción escrita, no de una persona usuaria o intérprete
+de LSM. No es la validación que pide `ARQUITECTURA.md` §4.11: el
+PENDIENTE-HUMANO G del glosario sigue abierto y aplica también a estos assets.
 
 ## Alternativas descartadas
 
@@ -93,3 +101,32 @@ glosario sigue abierto y aplica también a estos assets.
 - **Recortes del PDF de CONAPRED.** Fidelidad máxima, pero es material con
   derechos y no da movimiento para las dinámicas.
 - **No versionar los assets.** Habría dejado el criterio de la fase fuera de CI.
+
+## Apéndice: registro de la segunda pasada (revisión independiente, 2026-09-14)
+
+21 de los 29 dibujos, repasados por un segundo agente revisor contra la
+columna `coincide` del glosario, mirando el mismo dibujo y la misma
+descripción que la primera pasada. Sigue siendo revisión contra la
+descripción, no validación por persona usuaria de LSM: ver la advertencia de
+arriba.
+
+| letra | lo que se ve | de acuerdo con `coincide` |
+|---|---|---|
+| L | índice largo arriba, pulgar largo a la derecha en ángulo recto, tres cortos | sí |
+| LL | misma mano; muñeca barre de derecha a izquierda (~150 px) en un solo sentido | sí |
+| R | dos cadenas largas que se cruzan a media altura, yemas juntas arriba; pulgar recogido | sí |
+| RR | misma mano que R; barrido horizontal a la izquierda, un solo sentido | sí |
+| N | mano colgando, dos dedos largos hacia abajo en el lado del pulgar, dos cortos; pulgar por debajo | sí |
+| Ñ | misma mano; los dedos pasan de apuntar abajo-derecha a abajo y vuelven, dos veces | sí |
+| I | un dedo largo en el borde opuesto al pulgar, tres recogidos, pulgar corto apoyado | sí |
+| J | misma mano; baja y luego se desplaza a la derecha y sube: gancho de j | sí |
+| C | vista lateral: cuatro dedos solapados en arco, pulgar curvo por abajo, hueco claro | sí |
+| F | índice corto con la yema del pulgar sobre él; medio/anular/meñique largos y paralelos | sí |
+| G | mano horizontal, índice largo a la derecha, pulgar largo arriba, tres cortos | sí |
+| H | igual que G con dos dedos largos juntos | sí |
+| Y | pulgar largo arriba, meñique largo abajo, tres cortos | sí |
+| Z | índice largo; la yema va ←, ↘, ←: tres tramos; en los últimos frames el índice se acorta (apunta a cámara) | sí |
+| X | mano de lado, pulgar arqueado e índice en gancho enfrentados; el movimiento se ve como cambio de escala/inclinación | sí, con la nota |
+| K | como P con el medio corto en reposo; en el pico el medio se proyecta largo por debajo de la muñeca | sí, tras corregir la nota |
+| Q | índice arqueado en gancho, pulgar debajo, giro de muñeca | sí |
+| P, T, M, W | P: índice arriba, medio al lado, pulgar entre ambos. T: puño con pulgar entre índice y medio. M: tres largos sobre pulgar tapado. W: tres largos separados | sí |

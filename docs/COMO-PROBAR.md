@@ -423,13 +423,16 @@ uv run lsm-signs reproducir "hola mundo"
 ```
 
 Se abre una ventana: la seña a la izquierda; la letra, su descripción del
-glosario y la barra de progreso a la derecha; el texto completo abajo con el
-símbolo actual resaltado. `"ll"` y `"rr"` son un solo símbolo; los acentos se
-quitan; `ñ` es `Ñ`. Dígitos y puntuación se rechazan con la lista exacta.
+glosario, el estado (`REPRODUCIENDO` / `PAUSA` / `FIN`) y la barra de progreso
+a la derecha; el texto completo abajo con el símbolo actual resaltado. `"ll"`
+y `"rr"` son un solo símbolo; los acentos se quitan; `ñ` es `Ñ`. Dígitos y
+puntuación se rechazan con la lista exacta.
 
 **Controles:** `ESPACIO` pausa, `n`/`p` siguiente/anterior, `r` reinicia,
 `+`/`-` velocidad, `q` sale. Las duraciones viven en `config.yaml`, sección
-`signs`.
+`signs`: una letra estática se sostiene `static_hold_ms`; una dinámica,
+`duracion_ms` (del manifest) `× dynamic_loops` — con los valores por defecto,
+~5 s.
 
 ### 7.1 Regenerar los assets
 

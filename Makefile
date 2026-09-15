@@ -24,8 +24,8 @@ help:
 	@echo "medir-fps      mide la tasa de cuadros del bucle en vivo (60 s)"
 	@echo ""
 	@echo "Texto a senas (sin camara; necesita Pillow y OpenCV: setup-capture):"
-	@echo "signs          reproduce un texto; pasa TEXTO=\"hola mundo\""
-	@echo "signs-render   regenera assets/signs desde data/raw; pasa REVISOR=..."
+	@echo "signs            reproduce un texto; pasa TEXTO=\"hola mundo\""
+	@echo "signs-render     regenera assets/signs desde data/raw; pasa REVISOR=..."
 	@echo "signs-verificar  manifest completo y revisado"
 
 setup:
@@ -167,7 +167,8 @@ medir-fps:
 	$(UV) run lsm-demo --medir-fps $(ARGS)
 
 # --------------------------------------------------------------------------- #
-# Texto -> senas (Fase 4). Sin camara. Ver docs/adr/0014-...
+# Texto -> senas (Fase 4). Sin camara.
+# Ver docs/adr/0014-assets-como-esqueleto-del-dataset-propio.md
 # --------------------------------------------------------------------------- #
 
 TEXTO ?= hola
