@@ -246,8 +246,9 @@ Token: TypeAlias = Label | WordGap
 #: simétrico a `spelling.py`, donde `DOBLE_L` es un símbolo y no dos.
 _DIGRAPHS: Final[dict[str, Label]] = {"LL": Label.DOBLE_L, "RR": Label.DOBLE_R}
 
-#: Cómo se lee cada símbolo en pantalla.
-_GAP_DISPLAY: Final = "·"
+#: Cómo se lee cada símbolo en pantalla. Pública porque `io/signs.py` la
+#: reutiliza al componer el pie del cuadro: un solo punto de verdad para "·".
+GAP_DISPLAY: Final = "·"
 
 
 class UnsupportedCharacters(ValueError):  # noqa: N818
@@ -281,42 +282,26 @@ def text_to_symbols(text: str) -> tuple[Token, ...]:
     for palabra in unicodedata.normalize("NFC", text).split():
         if tokens:
             tokens.append(WordGap())
-        # Map each character and track its origin in case it expands (e.g., ß → SS).
-        mapped_chars: list[str] = []
-        char_origins: list[str] = []  # original character for each mapped character
+        # Cada carácter se lleva a su letra base en mayúsculas; uno que se
+        # expande al pasarlo (p. ej. ß → SS) o que no es una letra del
+        # alfabeto se marca como sin seña, sin detener el resto del texto.
+        letras: list[str] = []
         for char in palabra:
             mapped = _base_letter(char)
-            # Reject characters that expand to multiple characters or are not valid
-            # letters.
-            if len(mapped) != 1:
-                if char not in unsupported:
-                    unsupported.append(char)
-                continue
-            m = mapped[0]
-            if m in "ABCDEFGHIJKLMNOPQRSTUVWXYZÑ":
-                mapped_chars.append(m)
-                char_origins.append(char)
-            else:
-                if char not in unsupported:
-                    unsupported.append(char)
-        letras = "".join(mapped_chars)
+            if len(mapped) == 1 and mapped in "ABCDEFGHIJKLMNOPQRSTUVWXYZÑ":
+                letras.append(mapped)
+            elif char not in unsupported:
+                unsupported.append(char)
+        letras_str = "".join(letras)
         i = 0
-        while i < len(letras):
-            digrafo = _DIGRAPHS.get(letras[i : i + 2])
+        while i < len(letras_str):
+            digrafo = _DIGRAPHS.get(letras_str[i : i + 2])
             if digrafo is not None:
                 tokens.append(digrafo)
                 i += 2
                 continue
-            char = letras[i]
-            if char == "Ñ":
-                tokens.append(Label.ENIE)
-            elif "A" <= char <= "Z":
-                tokens.append(Label(char))
-            else:
-                # This shouldn't happen as we already filter above.
-                original = char_origins[i]
-                if original not in unsupported:
-                    unsupported.append(original)
+            char = letras_str[i]
+            tokens.append(Label.ENIE if char == "Ñ" else Label(char))
             i += 1
     if unsupported:
         raise UnsupportedCharacters(tuple(unsupported))
@@ -326,7 +311,7 @@ def text_to_symbols(text: str) -> tuple[Token, ...]:
 def render_tokens(tokens: SequenceABC[Token]) -> str:
     """`A Ñ O · LL`: cada símbolo como se escribe, los espacios como `·`."""
     partes = [
-        _GAP_DISPLAY if isinstance(token, WordGap) else LETTERS[token].display
+        GAP_DISPLAY if isinstance(token, WordGap) else LETTERS[token].display
         for token in tokens
     ]
     return " ".join(partes)
@@ -349,7 +334,8 @@ class Step:
     kind: StepKind
     #: `None` si es una pausa.
     label: Label | None
-    #: A velocidad 1.0. El reproductor la divide por la velocidad al comparar.
+    #: A velocidad 1.0. El reproductor multiplica `dt` por la velocidad antes
+    #: de compararlo con esta duración: a más velocidad, menos ticks hacen falta.
     duration_ms: float
 
 
@@ -493,6 +479,7 @@ def player_step(
 def _advance(
     state: PlayerState, ultimo: int
 ) -> tuple[PlayerState, tuple[PlayerEvent, ...]]:
+    """Pasa al siguiente paso, o marca `finished` si ya estaba en el último."""
     if state.index >= ultimo:
         if state.finished:
             return state, ()
@@ -504,7 +491,7 @@ def _advance(
 
 
 def asset_frame(state: PlayerState, n_frames: int, duracion_ms: int) -> int:
-    """Qué frame del GIF mostrar. Da vueltas: con `dynamic_loops = 2`, dos."""
+    """Qué frame del GIF mostrar. Da vueltas: con `dynamic_loops` a 2, dos."""
     posicion = int(state.elapsed_ms / duracion_ms * n_frames)
     return posicion % n_frames
 

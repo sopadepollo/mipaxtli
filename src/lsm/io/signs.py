@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from lsm.config import Config
 from lsm.io.dataset import DatasetError, iter_sample_paths, read_sample
-from lsm.signs import Candidate, Manifest, Scene, WordGap
+from lsm.signs import GAP_DISPLAY, Candidate, Manifest, Scene, SignAsset, WordGap
 from lsm.types import HAND_CONNECTIONS, LandmarkIndex, Point2
 from lsm.vocabulary import LETTERS, Label
 
@@ -88,8 +88,8 @@ def load_candidates(root: Path) -> dict[Label, list[Candidate]]:
     """
     por_letra: dict[Label, list[Candidate]] = {}
     for ruta in iter_sample_paths(root):
-        stored = read_sample(ruta)
         try:
+            stored = read_sample(ruta)
             label = Label(stored.metadata.label)
             sample = stored.to_sample()
         except (ValueError, DatasetError):
@@ -263,11 +263,47 @@ def _ventana_de_simbolos(
     return inicio, fin
 
 
+def _layout_panel(
+    asset: SignAsset | None, lado: int, n_lineas_descripcion: int
+) -> tuple[float, float]:
+    """Dónde termina el bloque de texto (letra + descripción + trayectoria) y
+    dónde tiene que empezar el bloque de estado para no solaparse con él.
+
+    Con la descripción por defecto y `canvas_px=320` el bloque de estado cabe
+    pegado al borde inferior del lienzo (`lado - _MARGEN_TEXTO - 32`); una
+    descripción larga (p. ej. K, con cuatro líneas más la trayectoria) empuja
+    ese borde hacia abajo, y `draw_scene` crece el alto del panel para que
+    quepa en vez de dibujar uno encima del otro.
+    """
+    if asset is None:
+        y_texto_final = float(_MARGEN_TEXTO)
+    else:
+        y_texto_final = float(_MARGEN_TEXTO + 96 + n_lineas_descripcion * 24)
+        if asset.es_dinamica:
+            y_texto_final += 8 + 24
+    y_barra = max(lado - _MARGEN_TEXTO - 32, y_texto_final + 40)
+    return y_texto_final, y_barra
+
+
 def draw_scene(scene: Scene, config: Config) -> Image.Image:
     """Asset a la izquierda; letra, descripción, progreso y estado a la derecha;
-    el texto completo con el símbolo actual resaltado abajo."""
+    el texto completo con el símbolo actual resaltado abajo. El alto del panel
+    crece cuando la descripción no cabe en el tamaño por defecto (`_layout_panel`)."""
     lado = config.signs.canvas_px
-    ancho, alto = lado + _PANEL_ANCHO, lado + _PIE_ALTO
+    medidor = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lineas_descripcion = (
+        _envolver(
+            scene.asset.descripcion,
+            _PANEL_ANCHO - 2 * _MARGEN_TEXTO,
+            _fuente(18),
+            medidor,
+        )
+        if scene.asset is not None
+        else []
+    )
+    _, y_barra = _layout_panel(scene.asset, lado, len(lineas_descripcion))
+    alto_panel = max(lado, int(y_barra) + 40)
+    ancho, alto = lado + _PANEL_ANCHO, alto_panel + _PIE_ALTO
     cuadro = Image.new("RGB", (ancho, alto), _FONDO)
     lapiz = ImageDraw.Draw(cuadro)
 
@@ -298,12 +334,7 @@ def draw_scene(scene: Scene, config: Config) -> Image.Image:
     if scene.asset is not None:
         lapiz.text((x, y), scene.asset.letra, fill=_TINTA, font=_fuente(72))
         y += 96
-        for linea in _envolver(
-            scene.asset.descripcion,
-            _PANEL_ANCHO - 2 * _MARGEN_TEXTO,
-            _fuente(18),
-            lapiz,
-        ):
+        for linea in lineas_descripcion:
             lapiz.text((x, y), linea, fill=_TINTA, font=_fuente(18))
             y += 24
         if scene.asset.es_dinamica:
@@ -318,13 +349,13 @@ def draw_scene(scene: Scene, config: Config) -> Image.Image:
     else:
         lapiz.text((x, y), "pausa entre palabras", fill=_TINTA_SUAVE, font=_fuente(28))
 
-    # Estado, velocidad y barra de progreso, pegados al borde inferior del panel.
+    # Estado, velocidad y barra de progreso. `y_barra` viene de `_layout_panel`:
+    # pegado al borde inferior del panel salvo que la descripción lo empuje.
     estado = (
         "PAUSA"
         if scene.state.paused
         else ("FIN" if scene.state.finished else "REPRODUCIENDO")
     )
-    y_barra = lado - _MARGEN_TEXTO - 32
     lapiz.text(
         (x, y_barra - 28),
         f"{estado}   {scene.state.speed:.2f}x",
@@ -336,8 +367,10 @@ def draw_scene(scene: Scene, config: Config) -> Image.Image:
     lapiz.rectangle(
         [x, y_barra, x + int(ancho_barra * scene.progress), y_barra + 12], fill=_ACENTO
     )
-    transcurrido = scene.state.elapsed_ms / 1000.0
+    # `scene.progress`, no `elapsed_ms`: en FIN el paso se reinicia a 0 (ver su
+    # docstring) y el cronómetro mostraría "0.0 s" sobre una barra ya llena.
     total = scene.step.duration_ms / 1000.0
+    transcurrido = scene.progress * total
     lapiz.text(
         (x + ancho_barra, y_barra + 16),
         f"{transcurrido:.1f} s / {total:.1f} s",
@@ -350,10 +383,10 @@ def draw_scene(scene: Scene, config: Config) -> Image.Image:
     # texto largo no cabe entero: `_ventana_de_simbolos` elige un rango
     # contiguo que sí cabe y que mantiene el símbolo actual centrado; "…" en
     # los bordes avisa que hay más texto fuera de cuadro.
-    y_pie = lado + 20
+    y_pie = alto_panel + 20
     fuente_pie = _fuente(26)
     simbolos = [
-        "·" if isinstance(token, WordGap) else LETTERS[token].display
+        GAP_DISPLAY if isinstance(token, WordGap) else LETTERS[token].display
         for token in scene.tokens
     ]
     anchos = [

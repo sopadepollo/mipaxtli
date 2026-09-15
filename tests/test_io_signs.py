@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from lsm.config import Config
 from lsm.io.dataset import SampleMetadata, StoredSample, write_sample
 from lsm.io.signs import (
+    _MARGEN_TEXTO,
+    _PANEL_ANCHO,
     MANIFEST_FILENAME,
+    _envolver,
     _fuente,
+    _layout_panel,
     _ventana_de_simbolos,
     draw_scene,
     gif_frame_count,
@@ -31,6 +36,8 @@ from lsm.signs import (
     PlayerState,
     Scene,
     SignAsset,
+    Step,
+    StepKind,
     build_playlist,
     expected_filename,
     project_frames,
@@ -137,6 +144,22 @@ def test_las_candidatas_se_agrupan_por_letra_con_su_ruta_relativa(
     assert len(candidatas[Label.A]) == 2
     assert candidatas[Label.A][0].path == "s01/2026-09-09-manana/A/001.json"
     assert candidatas[Label.J][0].sample.kind is SampleKind.DYNAMIC
+
+
+def test_una_muestra_con_otra_version_de_esquema_se_salta(tmp_path: Path) -> None:
+    """`read_sample` rechaza otra `schema_version` con `DatasetError`; el
+    docstring de `load_candidates` promete saltarla, no reventar (M2)."""
+    write_sample(
+        tmp_path,
+        guardada("A", still_sequence(canonical_hand(), length=8), SampleKind.STATIC),
+    )
+    mala = tmp_path / "s01" / "2026-09-09-manana" / "A" / "002.json"
+    mala.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+
+    candidatas = load_candidates(tmp_path)
+
+    assert len(candidatas[Label.A]) == 1
+    assert candidatas[Label.A][0].path == "s01/2026-09-09-manana/A/001.json"
 
 
 def test_el_png_es_cuadrado_y_del_tamano_pedido(tmp_path: Path) -> None:
@@ -257,6 +280,39 @@ def test_la_ventana_de_simbolos_es_completa_si_el_texto_es_corto() -> None:
     inicio, fin = _ventana_de_simbolos(anchos, actual=1, disponible=1000)
 
     assert (inicio, fin) == (0, len(anchos))
+
+
+def test_el_bloque_de_estado_no_se_solapa_con_la_descripcion() -> None:
+    """K y otras letras con descripción larga empujaban el bloque de estado
+    hasta escribirlo encima de la última línea de texto (F1). Se comprueba
+    con las 29 letras, estáticas y dinámicas, contra el `canvas_px` por
+    defecto: es donde menos aire hay."""
+    config = Config()
+    manifest = manifiesto()
+    medidor = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lienzo = Image.new(
+        "RGB", (config.signs.canvas_px, config.signs.canvas_px), (0, 0, 0)
+    )
+    for label, asset in manifest.letras.items():
+        paso = Step(kind=StepKind.LETTER, label=label, duration_ms=1000.0)
+        escena = Scene(
+            tokens=(label,),
+            playlist=(paso,),
+            state=PlayerState(index=0, elapsed_ms=250.0),
+            asset=asset,
+            frame=lienzo,
+        )
+
+        cuadro = draw_scene(escena, config)
+
+        lineas = _envolver(
+            asset.descripcion, _PANEL_ANCHO - 2 * _MARGEN_TEXTO, _fuente(18), medidor
+        )
+        y_texto_final, y_barra = _layout_panel(
+            asset, config.signs.canvas_px, len(lineas)
+        )
+        assert y_barra - 28 >= y_texto_final, label
+        assert cuadro.height >= int(y_barra) + 40, label
 
 
 def test_el_pie_no_revienta_con_un_texto_largo_y_el_indice_al_final() -> None:

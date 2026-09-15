@@ -88,6 +88,10 @@ def render(raw: Path, assets: Path, config: Config, revisor: str, hoy: date) -> 
     """Dibuja un asset por letra y escribe el manifest. Falla antes de escribir
     nada si a alguna letra le faltan candidatas válidas (incluida una letra sin
     ninguna muestra) o si el manifest previo no se puede leer."""
+    if not raw.is_dir():
+        print(f"{raw} no existe o no es un directorio")
+        return 1
+
     candidatas = load_candidates(raw)
 
     # Fase 1: elegir la referencia de las 29 letras antes de tocar disco.
@@ -191,7 +195,10 @@ def verificar(assets: Path, config: Config) -> list[str]:
     ruta_manifest = assets / MANIFEST_FILENAME
     if not ruta_manifest.is_file():
         return [SIN_MANIFEST.format(ruta=ruta_manifest)]
-    manifest = load_manifest(ruta_manifest)
+    try:
+        manifest = load_manifest(ruta_manifest)
+    except (ValidationError, json.JSONDecodeError) as error:
+        return [f"{ruta_manifest} no se puede leer ({error.__class__.__name__})"]
     problemas = manifest_drift(manifest)
     for label, asset in manifest.letras.items():
         archivo = assets / asset.archivo
@@ -324,7 +331,7 @@ class VentanaOpenCV:
         import numpy as np
 
         # Pillow entrega RGB; OpenCV espera BGR.
-        cv2.imshow(self.titulo, np.asarray(imagen)[:, :, ::-1])
+        cv2.imshow(self.titulo, cv2.cvtColor(np.asarray(imagen), cv2.COLOR_RGB2BGR))
 
     def tecla(self, espera_ms: int) -> int:
         import cv2
@@ -404,7 +411,11 @@ def reproducir(
     if not ruta_manifest.is_file():
         print(SIN_MANIFEST.format(ruta=ruta_manifest))
         return 1
-    manifest = load_manifest(ruta_manifest)
+    try:
+        manifest = load_manifest(ruta_manifest)
+    except (ValidationError, json.JSONDecodeError) as error:
+        print(f"{ruta_manifest} no se puede leer ({error.__class__.__name__})")
+        return 1
 
     try:
         playlist = build_playlist(tokens, manifest, config)

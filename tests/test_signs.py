@@ -255,9 +255,13 @@ def test_la_forma_de_escribir_la_letra_tambien_se_compara() -> None:
             "pingüino",
             (Label.P, Label.I, Label.N, Label.G, Label.U, Label.I, Label.N, Label.O),
         ),
+        ("a\tb", (Label.A, WordGap(), Label.B)),
+        ("a\nb", (Label.A, WordGap(), Label.B)),
     ],
 )
-def test_texto_a_simbolos(texto: str, esperado: tuple[Label, ...]) -> None:
+def test_texto_a_simbolos(texto: str, esperado: tuple[Label | WordGap, ...]) -> None:
+    """`str.split()` separa por cualquier espacio en blanco, no solo `" "`:
+    un tabulador o un salto de línea también cierran palabra (`WordGap`)."""
     assert text_to_symbols(texto) == esperado
 
 

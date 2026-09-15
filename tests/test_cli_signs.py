@@ -11,14 +11,20 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from lsm.cli.signs import bucle, main, reproducir
-from lsm.config import Config
+from lsm.config import Config, SignsConfig
 from lsm.io.dataset import SampleMetadata, StoredSample, write_sample
 from lsm.io.signs import MANIFEST_FILENAME, load_asset_frames, load_manifest
-from lsm.signs import build_playlist, manifest_drift, text_to_symbols
+from lsm.signs import (
+    MANIFEST_SCHEMA_VERSION,
+    build_playlist,
+    manifest_drift,
+    text_to_symbols,
+)
 from lsm.synthetic import (
     arc_offsets,
     class_hand,
@@ -205,6 +211,23 @@ def test_render_con_un_manifest_previo_corrupto_lo_dice_y_no_lo_pisa(
     assert ruta.read_text(encoding="utf-8") == "{not json"
 
 
+def test_render_sin_directorio_raw_lo_dice_y_no_intenta_29_veces(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """M3: antes de este fix, un `--raw` inexistente producía 29 líneas
+    idénticas de "sin candidatas válidas", una por letra."""
+    assets = tmp_path / "signs"
+    no_existe = tmp_path / "no-existe"
+
+    codigo = render(no_existe, assets)
+
+    assert codigo == 1
+    salida = capsys.readouterr().out
+    assert str(no_existe) in salida
+    assert "no existe" in salida
+    assert salida.count("candidatas") == 0
+
+
 def test_verificar_exige_archivos_presentes_y_revisiones_cerradas(
     dataset: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -229,6 +252,63 @@ def test_verificar_sin_manifest_lo_dice(
 
     assert codigo == 1
     assert "lsm-signs render" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "contenido",
+    [
+        "{not json",
+        json.dumps(
+            {
+                "schema_version": MANIFEST_SCHEMA_VERSION + 1,
+                "fuente_normativa": "x",
+                "letras": {},
+            }
+        ),
+    ],
+    ids=["json_invalido", "schema_version_incompatible"],
+)
+def test_verificar_con_manifest_corrupto_no_revienta(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], contenido: str
+) -> None:
+    """F2: `verificar` daba traceback con un manifest corrupto o de otra
+    versión; `render` ya lo manejaba, ahora lo hace también este comando."""
+    (tmp_path / MANIFEST_FILENAME).write_text(contenido, encoding="utf-8")
+
+    codigo = main(
+        ["verificar", "--assets", str(tmp_path), "--config", str(CONFIG_YAML)]
+    )
+
+    salida = capsys.readouterr().out
+    assert codigo == 1
+    assert MANIFEST_FILENAME in salida
+
+
+@pytest.mark.parametrize(
+    "contenido",
+    [
+        "{not json",
+        json.dumps(
+            {
+                "schema_version": MANIFEST_SCHEMA_VERSION + 1,
+                "fuente_normativa": "x",
+                "letras": {},
+            }
+        ),
+    ],
+    ids=["json_invalido", "schema_version_incompatible"],
+)
+def test_reproducir_con_manifest_corrupto_no_revienta(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], contenido: str
+) -> None:
+    """F2: mismo caso que `verificar`, para `reproducir`."""
+    (tmp_path / MANIFEST_FILENAME).write_text(contenido, encoding="utf-8")
+
+    codigo = reproducir("casa", tmp_path, Config())
+
+    salida = capsys.readouterr().out
+    assert codigo == 1
+    assert MANIFEST_FILENAME in salida
 
 
 # --------------------------------------------------------------------------- #
@@ -299,6 +379,46 @@ def test_el_bucle_termina_con_q_y_los_ticks_salen_del_reloj(
     assert ventana.mostrados == 21
     assert ventana.cerrada
     assert set(ventana.esperas) == {config.signs.tick_ms}
+
+
+def test_el_bucle_avanza_los_cuadros_del_gif_y_da_la_vuelta(
+    dataset: Path, tmp_path: Path
+) -> None:
+    """M11: la rama dinámica de `bucle` (`asset_frame` sobre el GIF) no tenía
+    ningún test con la ventana falsa. Con `dynamic_loops=2` una sola letra
+    dura dos vueltas del GIF: se comprueba que los cuadros compuestos avanzan
+    en orden y que, tras el último, se vuelve al primero."""
+    assets = tmp_path / "signs"
+    render(dataset, assets)
+    manifest = load_manifest(assets / MANIFEST_FILENAME)
+    config = Config(signs=SignsConfig(dynamic_loops=2))
+    tokens = text_to_symbols("j")
+    playlist = build_playlist(tokens, manifest, config)
+    cuadros_j = load_asset_frames(assets / manifest.letras[Label.J].archivo)
+    cuadros = {Label.J: cuadros_j}
+    duracion = manifest.letras[Label.J].duracion_ms
+    assert duracion is not None
+
+    grabados: list[Any] = []
+    n_ticks = int(duracion * 1.5)
+    ventana = VentanaFalsa(teclas=[-1] * n_ticks + [ord("q")])
+
+    bucle(
+        playlist,
+        tokens,
+        manifest,
+        cuadros,
+        config,
+        ventana,
+        RelojFalso(0.001),
+        lambda escena: grabados.append(escena.frame),
+    )
+
+    indices = [cuadros_j.index(cuadro) for cuadro in grabados]
+    assert indices[0] == 0
+    ultimo = len(cuadros_j) - 1
+    assert ultimo in indices
+    assert 0 in indices[indices.index(ultimo) + 1 :]
 
 
 def test_las_teclas_controlan_el_reproductor(dataset: Path, tmp_path: Path) -> None:
