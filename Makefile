@@ -4,7 +4,7 @@
 
 UV ?= uv
 
-.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval demo medir-fps
+.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval demo medir-fps signs signs-render signs-verificar
 
 help:
 	@echo "setup        instala dependencias con uv"
@@ -22,6 +22,11 @@ help:
 	@echo "capture        sesion de captura; pasa ARGS=..."
 	@echo "verify         relee data/raw y re-deriva las features"
 	@echo "medir-fps      mide la tasa de cuadros del bucle en vivo (60 s)"
+	@echo ""
+	@echo "Texto a senas (sin camara; necesita Pillow y OpenCV: setup-capture):"
+	@echo "signs          reproduce un texto; pasa TEXTO=\"hola mundo\""
+	@echo "signs-render   regenera assets/signs desde data/raw; pasa REVISOR=..."
+	@echo "signs-verificar  manifest completo y revisado"
 
 setup:
 	$(UV) sync
@@ -160,3 +165,21 @@ demo:
 # se mide es la tuberia completa, clasificador incluido.
 medir-fps:
 	$(UV) run lsm-demo --medir-fps $(ARGS)
+
+# --------------------------------------------------------------------------- #
+# Texto -> senas (Fase 4). Sin camara. Ver docs/adr/0014-...
+# --------------------------------------------------------------------------- #
+
+TEXTO ?= hola
+REVISOR ?= $(USER)
+
+signs:
+	$(UV) run lsm-signs reproducir "$(TEXTO)"
+
+# Regenera los 29 assets desde el dataset propio. Conserva las revisiones cuya
+# muestra de origen no cambio; las demas vuelven a "pendiente".
+signs-render:
+	$(UV) run lsm-signs render --revisor "$(REVISOR)"
+
+signs-verificar:
+	$(UV) run lsm-signs verificar

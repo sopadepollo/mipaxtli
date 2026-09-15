@@ -22,7 +22,7 @@ es lo primero que lee quien llega al repositorio.
    que acepten un solo frame.
 
 2. **`src/lsm/features.py`, `segmentation.py`, `capture.py`, `evaluation.py`,
-   `telemetry.py` y `classifiers/` son código puro.** Sin
+   `telemetry.py`, `signs.py` y `classifiers/` son código puro.** Sin
    OpenCV, sin MediaPipe, sin acceso a disco, sin cámara. Toda la I/O vive en
    `src/lsm/io/` y en `src/lsm/cli/`. Esto permite testear el núcleo en CI sin
    hardware. `telemetry.py` mide tiempo, así que además **no llama a `time`**: el

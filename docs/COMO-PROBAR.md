@@ -412,7 +412,59 @@ pantalla.
 
 ---
 
-## 7. Cuando algo falla
+## 7. Texto a señas 🖼️
+
+La dirección inversa: escribes y ves las señas. No necesita cámara ni MediaPipe,
+pero sí Pillow y OpenCV (`make setup-capture`) para la ventana.
+
+```bash
+uv run lsm-signs reproducir "hola mundo"
+# o: make signs TEXTO="hola mundo"
+```
+
+Se abre una ventana: la seña a la izquierda; la letra, su descripción del
+glosario y la barra de progreso a la derecha; el texto completo abajo con el
+símbolo actual resaltado. `"ll"` y `"rr"` son un solo símbolo; los acentos se
+quitan; `ñ` es `Ñ`. Dígitos y puntuación se rechazan con la lista exacta.
+
+**Controles:** `ESPACIO` pausa, `n`/`p` siguiente/anterior, `r` reinicia,
+`+`/`-` velocidad, `q` sale. Las duraciones viven en `config.yaml`, sección
+`signs`.
+
+### 7.1 Regenerar los assets
+
+Los 29 assets de `assets/signs/` están versionados y se dibujan desde el
+dataset propio, nunca de internet (`docs/adr/0014-assets-como-esqueleto-del-dataset-propio.md`).
+Para regenerarlos tras regrabar:
+
+```bash
+uv run lsm-signs render --revisor "tu nombre"
+# o: make signs-render REVISOR="tu nombre"
+```
+
+Elige por letra la muestra más típica de `data/raw` (mano derecha si la hay) y
+escribe `manifest.json`. Las revisiones ya hechas se conservan si la muestra
+elegida no cambió; si cambió, la letra vuelve a `pendiente` y hay que mirarla
+otra vez contra `docs/glosario-lsm.md` §3 y ponerla en `coincide` a mano.
+
+### 7.2 Verificar
+
+```bash
+uv run lsm-signs verificar
+# o: make signs-verificar
+```
+
+Exige 29 letras, archivos presentes, dinámicas en GIF con los frames que dice
+`duracion_ms`, cero deriva contra el glosario y todas las revisiones en
+`coincide`. Es lo mismo que exige `tests/test_signs_manifest.py` en CI.
+
+La revisión registrada es contra la descripción del glosario, no una
+validación por persona usuaria de LSM o intérprete: ese pendiente sigue
+abierto (`docs/adr/0014-assets-como-esqueleto-del-dataset-propio.md`).
+
+---
+
+## 8. Cuando algo falla
 
 ### `ModuleNotFoundError: No module named 'lsm'`
 
@@ -465,7 +517,7 @@ esperando no lo lee nadie, así que son rechazos y no avisos.
 
 ---
 
-## 8. Dónde seguir leyendo
+## 9. Dónde seguir leyendo
 
 En este orden:
 

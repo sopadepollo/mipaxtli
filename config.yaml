@@ -346,7 +346,7 @@ spelling:
   # parpadeo del detector partiría una palabra en dos.
   space_after_absent_ms: 1000.0
 
-# Dirección texto → señas (src/lsm/signs.py, docs/adr/0014-...).
+# Dirección texto → señas (src/lsm/signs.py, docs/adr/0014-assets-como-esqueleto-del-dataset-propio.md).
 #
 # Aquí no hay clasificador: hay tiempos. Todos en milisegundos a velocidad 1.0;
 # el reproductor los multiplica por la velocidad elegida con + y -.
