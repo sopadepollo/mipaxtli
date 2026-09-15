@@ -11,6 +11,8 @@ from lsm.config import Config
 from lsm.io.dataset import SampleMetadata, StoredSample, write_sample
 from lsm.io.signs import (
     MANIFEST_FILENAME,
+    _fuente,
+    _ventana_de_simbolos,
     draw_scene,
     gif_frame_count,
     load_asset_frames,
@@ -208,6 +210,65 @@ def test_una_pausa_se_dibuja_sin_asset() -> None:
         playlist=build_playlist(tokens, manifest, config),
         state=PlayerState(index=1),
         asset=None,
+        frame=None,
+    )
+
+    cuadro = draw_scene(escena, config)
+
+    assert cuadro.width > 0
+
+
+# --------------------------------------------------------------------------- #
+# Fuente empaquetada
+# --------------------------------------------------------------------------- #
+
+
+def test_la_fuente_empaquetada_dibuja_ene_con_tilde_y_acentos() -> None:
+    """Con Aileron (la fuente por defecto de Pillow) estos glifos no existen y
+    salen como el glifo `.notdef` (mismo tamaño e histograma); con DejaVu Sans,
+    empaquetada, el glifo real es distinto del `.notdef`."""
+    fuente = _fuente(48)
+    notdef = fuente.getmask("͸")  # punto de código sin asignar: siempre .notdef
+
+    ene = fuente.getmask("Ñ")
+    assert ene.size != notdef.size or ene.histogram() != notdef.histogram()
+
+    e_acento = fuente.getmask("é")
+    assert e_acento.size != notdef.size or e_acento.histogram() != notdef.histogram()
+
+
+# --------------------------------------------------------------------------- #
+# La ventana deslizante del pie
+# --------------------------------------------------------------------------- #
+
+
+def test_la_ventana_de_simbolos_contiene_el_actual_y_cabe_en_el_ancho() -> None:
+    anchos = [20] * 30
+
+    inicio, fin = _ventana_de_simbolos(anchos, actual=25, disponible=100)
+
+    assert inicio <= 25 < fin
+    assert sum(anchos[inicio:fin]) <= 100
+
+
+def test_la_ventana_de_simbolos_es_completa_si_el_texto_es_corto() -> None:
+    anchos = [10, 12, 8, 15]
+
+    inicio, fin = _ventana_de_simbolos(anchos, actual=1, disponible=1000)
+
+    assert (inicio, fin) == (0, len(anchos))
+
+
+def test_el_pie_no_revienta_con_un_texto_largo_y_el_indice_al_final() -> None:
+    config = Config()
+    manifest = manifiesto()
+    tokens = text_to_symbols("a" * 60)
+    playlist = build_playlist(tokens, manifest, config)
+    escena = Scene(
+        tokens=tokens,
+        playlist=playlist,
+        state=PlayerState(index=len(playlist) - 1),
+        asset=manifest.letras[Label.A],
         frame=None,
     )
 

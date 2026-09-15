@@ -29,6 +29,7 @@ from lsm.signs import (
     PlayerState,
     Prev,
     Restart,
+    Scene,
     SignAsset,
     Slower,
     Step,
@@ -390,6 +391,33 @@ def test_al_agotar_el_ultimo_paso_termina_y_se_queda_en_el() -> None:
     otra, mas = avanzar(estado, Tick(5000.0))
     assert otra == estado
     assert mas == []
+
+
+def test_el_progreso_es_cero_al_terminar_porque_elapsed_ms_se_reinicia() -> None:
+    """`_advance` reinicia `elapsed_ms` a 0 al marcar `finished`: la barra de
+    progreso queda vacía bajo "FIN" en vez de llena, aunque el paso terminó."""
+    estado, _ = avanzar(PlayerState(index=1, elapsed_ms=400.0), Tick(100.0))
+    assert estado.finished
+    escena = Scene(
+        tokens=(Label.A, Label.B),
+        playlist=DOS_PASOS,
+        state=estado,
+        asset=None,
+        frame=None,
+    )
+
+    assert escena.progress == 0.0
+
+
+def test_scene_exige_que_tokens_y_playlist_tengan_la_misma_longitud() -> None:
+    with pytest.raises(ValueError, match="tokens"):
+        Scene(
+            tokens=(Label.A,),
+            playlist=DOS_PASOS,
+            state=start(DOS_PASOS),
+            asset=None,
+            frame=None,
+        )
 
 
 def test_en_pausa_los_ticks_no_avanzan() -> None:

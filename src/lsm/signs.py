@@ -661,6 +661,15 @@ class Scene:
     asset: SignAsset | None
     frame: Any | None
 
+    def __post_init__(self) -> None:
+        if len(self.tokens) != len(self.playlist):
+            msg = (
+                f"Scene: tokens ({len(self.tokens)}) y playlist "
+                f"({len(self.playlist)}) no tienen la misma longitud; "
+                "token_index los da por acoplados uno a uno"
+            )
+            raise ValueError(msg)
+
     @property
     def step(self) -> Step:
         return self.playlist[self.state.index]

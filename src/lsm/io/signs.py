@@ -10,7 +10,9 @@ Se importa arriba porque este módulo entero es I/O; nadie del núcleo lo import
 
 from __future__ import annotations
 
+import functools
 import json
+import logging
 from collections.abc import Sequence as SequenceABC
 from pathlib import Path
 from typing import Any, Final
@@ -22,6 +24,8 @@ from lsm.io.dataset import DatasetError, iter_sample_paths, read_sample
 from lsm.signs import Candidate, Manifest, Scene, WordGap
 from lsm.types import HAND_CONNECTIONS, LandmarkIndex, Point2
 from lsm.vocabulary import LETTERS, Label
+
+_logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME: Final = "manifest.json"
 DEFAULT_ASSETS_DIR: Final = Path("assets/signs")
@@ -180,11 +184,26 @@ _ATAJOS: Final = (
     "ESPACIO pausa | n/p siguiente/anterior | r reinicio | +/- velocidad | q salir"
 )
 
+#: Empaquetada en `io/fonts/` (ver el README ahí): la fuente por defecto de
+#: Pillow (Aileron) no tiene glifos de Ñ/ñ ni vocales acentuadas y los dibuja
+#: como recuadros. DejaVu Sans sí los tiene, y viaja con el paquete para que
+#: el cuadro se vea igual en cualquier entorno (CI, Docker, Windows).
+_FONT_PATH: Final = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
 
+
+@functools.cache
 def _fuente(tamano: int) -> Any:
-    # La fuente por defecto de Pillow ≥ 10.1 es escalable y cubre latín con
-    # acentos y Ñ, que es lo que la Hershey de OpenCV no hace.
-    return ImageFont.load_default(size=tamano)
+    # `functools.cache` evita reabrir y reparsear el archivo en cada símbolo de
+    # cada cuadro: `draw_scene` pide la misma fuente ~10 veces por llamada.
+    try:
+        return ImageFont.truetype(str(_FONT_PATH), tamano)
+    except OSError:
+        _logger.warning(
+            "no se encontró la fuente empaquetada %s; usando la fuente por "
+            "defecto de Pillow, que no dibuja Ñ ni acentos",
+            _FONT_PATH,
+        )
+        return ImageFont.load_default(size=tamano)
 
 
 def _envolver(
@@ -202,6 +221,46 @@ def _envolver(
     if actual:
         lineas.append(actual)
     return lineas
+
+
+def _ventana_de_simbolos(
+    anchos: SequenceABC[int], actual: int, disponible: int
+) -> tuple[int, int]:
+    """Un rango `[inicio, fin)` de símbolos que cabe en `disponible` píxeles,
+    contiene `actual` y lo deja lo más centrado posible.
+
+    Parte de una ventana de un solo símbolo (`actual`) y la expande alternando
+    izquierda y derecha mientras siga cabiendo; cuando un lado ya no cabe (o se
+    acaban los símbolos de ese lado) se abandona ese lado y se sigue intentando
+    con el otro, hasta que ninguno de los dos puede crecer más. Con un texto
+    corto, eso agota los dos lados en los extremos y el rango es el completo.
+    """
+    n = len(anchos)
+    inicio = fin = actual
+    total = anchos[actual]
+    fin += 1
+    izquierda_agotada = inicio == 0
+    derecha_agotada = fin == n
+    turno_izquierda = True
+    while not (izquierda_agotada and derecha_agotada):
+        if turno_izquierda and not izquierda_agotada:
+            candidato = anchos[inicio - 1]
+            if total + candidato <= disponible:
+                total += candidato
+                inicio -= 1
+                izquierda_agotada = inicio == 0
+            else:
+                izquierda_agotada = True
+        elif not turno_izquierda and not derecha_agotada:
+            candidato = anchos[fin]
+            if total + candidato <= disponible:
+                total += candidato
+                fin += 1
+                derecha_agotada = fin == n
+            else:
+                derecha_agotada = True
+        turno_izquierda = not turno_izquierda
+    return inicio, fin
 
 
 def draw_scene(scene: Scene, config: Config) -> Image.Image:
@@ -287,15 +346,33 @@ def draw_scene(scene: Scene, config: Config) -> Image.Image:
         anchor="ra",
     )
 
-    # Pie: el texto completo, símbolo a símbolo, con el actual resaltado.
+    # Pie: el texto completo, símbolo a símbolo, con el actual resaltado. Un
+    # texto largo no cabe entero: `_ventana_de_simbolos` elige un rango
+    # contiguo que sí cabe y que mantiene el símbolo actual centrado; "…" en
+    # los bordes avisa que hay más texto fuera de cuadro.
     y_pie = lado + 20
-    x_pie = _MARGEN_TEXTO
     fuente_pie = _fuente(26)
-    for indice, token in enumerate(scene.tokens):
-        simbolo = "·" if isinstance(token, WordGap) else LETTERS[token].display
+    simbolos = [
+        "·" if isinstance(token, WordGap) else LETTERS[token].display
+        for token in scene.tokens
+    ]
+    anchos = [
+        int(lapiz.textlength(simbolo + "  ", font=fuente_pie)) for simbolo in simbolos
+    ]
+    elipsis_ancho = int(lapiz.textlength("… ", font=fuente_pie))
+    disponible = ancho - 2 * _MARGEN_TEXTO - 2 * elipsis_ancho
+    inicio, fin = _ventana_de_simbolos(anchos, scene.token_index, disponible)
+
+    x_pie = _MARGEN_TEXTO
+    if inicio > 0:
+        lapiz.text((x_pie, y_pie), "… ", fill=_TINTA_SUAVE, font=fuente_pie)
+        x_pie += elipsis_ancho
+    for indice in range(inicio, fin):
         color = _ACENTO if indice == scene.token_index else _TINTA
-        lapiz.text((x_pie, y_pie), simbolo, fill=color, font=fuente_pie)
-        x_pie += int(lapiz.textlength(simbolo + "  ", font=fuente_pie))
+        lapiz.text((x_pie, y_pie), simbolos[indice], fill=color, font=fuente_pie)
+        x_pie += anchos[indice]
+    if fin < len(simbolos):
+        lapiz.text((x_pie, y_pie), "…", fill=_TINTA_SUAVE, font=fuente_pie)
     lapiz.text((_MARGEN_TEXTO, alto - 40), _ATAJOS, fill=_TINTA_SUAVE, font=_fuente(14))
     lapiz.text((_MARGEN_TEXTO, alto - 22), _AVISO, fill=_TINTA_SUAVE, font=_fuente(14))
     return cuadro
