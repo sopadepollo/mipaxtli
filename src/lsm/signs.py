@@ -676,7 +676,14 @@ class Scene:
 
     @property
     def progress(self) -> float:
-        """Fracción del paso actual ya reproducida, en `[0, 1]`."""
+        """Fracción del paso actual ya reproducida, en `[0, 1]`.
+
+        En `FIN` la barra va llena: el paso se consumió entero, aunque
+        `player_step`/`_advance` reinician `elapsed_ms` a `0` al marcar
+        `finished` (para que un `Restart`/`Prev` posterior arranque limpio).
+        """
+        if self.state.finished:
+            return 1.0
         return min(self.state.elapsed_ms / self.step.duration_ms, 1.0)
 
     @property

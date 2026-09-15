@@ -393,11 +393,13 @@ def test_al_agotar_el_ultimo_paso_termina_y_se_queda_en_el() -> None:
     assert mas == []
 
 
-def test_el_progreso_es_cero_al_terminar_porque_elapsed_ms_se_reinicia() -> None:
-    """`_advance` reinicia `elapsed_ms` a 0 al marcar `finished`: la barra de
-    progreso queda vacía bajo "FIN" en vez de llena, aunque el paso terminó."""
+def test_el_progreso_queda_lleno_al_terminar_aunque_elapsed_ms_se_reinicio() -> None:
+    """`_advance` reinicia `elapsed_ms` a 0 al marcar `finished` (para que un
+    `Restart`/`Prev` posterior arranque limpio), pero el paso sí se consumió
+    entero: la barra tiene que verse llena bajo "FIN", no vacía."""
     estado, _ = avanzar(PlayerState(index=1, elapsed_ms=400.0), Tick(100.0))
     assert estado.finished
+    assert estado.elapsed_ms == 0.0
     escena = Scene(
         tokens=(Label.A, Label.B),
         playlist=DOS_PASOS,
@@ -406,7 +408,19 @@ def test_el_progreso_es_cero_al_terminar_porque_elapsed_ms_se_reinicia() -> None
         frame=None,
     )
 
-    assert escena.progress == 0.0
+    assert escena.progress == 1.0
+
+
+def test_el_progreso_es_parcial_mientras_no_ha_terminado() -> None:
+    escena = Scene(
+        tokens=(Label.A, Label.B),
+        playlist=DOS_PASOS,
+        state=PlayerState(index=0, elapsed_ms=250.0),
+        asset=None,
+        frame=None,
+    )
+
+    assert escena.progress == pytest.approx(0.25)
 
 
 def test_scene_exige_que_tokens_y_playlist_tengan_la_misma_longitud() -> None:
