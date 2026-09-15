@@ -17,7 +17,13 @@ from lsm.cli.signs import main
 from lsm.io.dataset import SampleMetadata, StoredSample, write_sample
 from lsm.io.signs import MANIFEST_FILENAME, load_manifest
 from lsm.signs import manifest_drift
-from lsm.synthetic import arc_offsets, class_hand, moving_sequence, synthetic_samples
+from lsm.synthetic import (
+    arc_offsets,
+    class_hand,
+    moving_sequence,
+    still_sequence,
+    synthetic_samples,
+)
 from lsm.types import (
     Distance,
     Handedness,
@@ -151,6 +157,50 @@ def test_render_sin_una_letra_no_escribe_nada_y_dice_cual(
 
     assert not (assets / MANIFEST_FILENAME).exists()
     assert "Q" in capsys.readouterr().out
+
+
+def test_render_no_escribe_nada_si_una_letra_solo_tiene_grabaciones_del_kind_equivocado(
+    dataset: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """J es dinámica; si solo hay grabaciones estáticas de J, `choose_reference`
+    la descarta por `kind` y no debe quedar ni un archivo a medio escribir."""
+    carpeta_j = dataset / "s01" / "2026-09-09-manana" / "J"
+    for ruta in carpeta_j.glob("*.json"):
+        ruta.unlink()
+    write_sample(
+        dataset,
+        _stored(
+            "J",
+            still_sequence(class_hand(1), length=6),
+            SampleKind.STATIC,
+            "s01",
+        ),
+    )
+    assets = tmp_path / "signs"
+
+    assert render(dataset, assets) == 1
+
+    salida = capsys.readouterr().out
+    assert "J" in salida
+    assert not (assets / MANIFEST_FILENAME).exists()
+    if assets.is_dir():
+        assert not list(assets.glob("*.png"))
+        assert not list(assets.glob("*.gif"))
+
+
+def test_render_con_un_manifest_previo_corrupto_lo_dice_y_no_lo_pisa(
+    dataset: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assets = tmp_path / "signs"
+    render(dataset, assets)
+    ruta = assets / MANIFEST_FILENAME
+    ruta.write_text("{not json", encoding="utf-8")
+
+    assert render(dataset, assets) == 1
+
+    salida = capsys.readouterr().out
+    assert MANIFEST_FILENAME in salida
+    assert ruta.read_text(encoding="utf-8") == "{not json"
 
 
 def test_verificar_exige_archivos_presentes_y_revisiones_cerradas(

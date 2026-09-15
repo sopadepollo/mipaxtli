@@ -13,9 +13,12 @@ ventana, y se importa ahí dentro.
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import date
 from pathlib import Path
 from typing import Final
+
+from pydantic import ValidationError
 
 from lsm.config import Config, load_config
 from lsm.io.signs import (
@@ -35,6 +38,7 @@ from lsm.signs import (
     AssetReview,
     AssetSource,
     Manifest,
+    ReferenceChoice,
     SignAsset,
     choose_reference,
     expected_filename,
@@ -57,20 +61,46 @@ SIN_MANIFEST: Final = (
 
 def render(raw: Path, assets: Path, config: Config, revisor: str, hoy: date) -> int:
     """Dibuja un asset por letra y escribe el manifest. Falla antes de escribir
-    nada si a alguna letra le faltan candidatas."""
+    nada si a alguna letra le faltan candidatas válidas (incluida una letra sin
+    ninguna muestra) o si el manifest previo no se puede leer."""
     candidatas = load_candidates(raw)
-    faltan = [str(label) for label in ALPHABET if not candidatas.get(label)]
-    if faltan:
-        print(f"sin muestras en {raw} para: {', '.join(faltan)}. No se escribe nada.")
+
+    # Fase 1: elegir la referencia de las 29 letras antes de tocar disco.
+    # `choose_reference` filtra por `kind` (una letra dinámica grabada solo como
+    # estática, por ejemplo) y lanza `ValueError` nombrando la letra; se recogen
+    # todos los fallos para no escribir nada a medias.
+    elecciones: dict[Label, ReferenceChoice] = {}
+    errores: list[str] = []
+    for label in ALPHABET:
+        try:
+            elecciones[label] = choose_reference(
+                candidatas.get(label, []), label, config
+            )
+        except ValueError as error:
+            errores.append(str(error))
+    if errores:
+        print("No se escribe nada:")
+        for mensaje in errores:
+            print(f"  {mensaje}")
         return 1
 
     ruta_manifest = assets / MANIFEST_FILENAME
-    previo = load_manifest(ruta_manifest) if ruta_manifest.is_file() else None
+    previo: Manifest | None = None
+    if ruta_manifest.is_file():
+        try:
+            previo = load_manifest(ruta_manifest)
+        except (ValidationError, json.JSONDecodeError) as error:
+            print(
+                f"{ruta_manifest} no se puede leer ({error.__class__.__name__}): "
+                "corrígelo o bórralo antes de renderizar; sus revisiones se perderían"
+            )
+            return 1
 
+    # Fase 2: ya se sabe que las 29 letras tienen referencia; dibujar y escribir.
     letras: dict[Label, SignAsset] = {}
     for label in ALPHABET:
         letra = LETTERS[label]
-        eleccion = choose_reference(candidatas[label], label, config)
+        eleccion = elecciones[label]
         puntos = project_frames(
             eleccion.sample.sequence.frames,
             mirrored=eleccion.mirrored,
