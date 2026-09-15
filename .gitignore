@@ -23,3 +23,6 @@ __pycache__/
 # Sin los dos puntos: WSL no guarda un ':' ASCII en el nombre sino U+F03A del
 # area privada Unicode, asi que un patron con ':' no casa con nada.
 *Zone.Identifier
+
+# Andamiaje de ejecucion por subagentes: ledger, briefs e informes.
+.superpowers/

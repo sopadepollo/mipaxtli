@@ -213,11 +213,16 @@ documentados en `src/lsm/segmentation.py`:
    una emisión, una letra que quedó apenas bajo el umbral obliga a rehacer la seña
    completa.
 
-   **Se resuelve con dos cooldowns distintos**: `emit_cooldown_frames` tras emitir
-   y `reject_cooldown_frames`, más corto, tras rechazar. El rechazo no cambia de
+   **Se resuelve con dos cooldowns distintos**: `emit_cooldown_ms` tras emitir
+   y `reject_cooldown_ms`, más corto, tras rechazar. El rechazo no cambia de
    estado —la mano sigue quieta y la ventana sigue siendo estable—, solo suspende
    la clasificación unos frames. `config.py` valida que el cooldown de rechazo no
    supere al de emisión.
+
+   Un matiz que llegó con la emisión progresiva (`feature-spec.md` §6.6): una
+   confianza entre `min_confidence` y `high_confidence` **no rechaza, acumula**, y
+   eso no paga cooldown ninguno — se reclasifica en el frame siguiente con un
+   frame más de evidencia. El cooldown de rechazo es para los rechazos de verdad.
 
 #### Regla de letras dobles
 
@@ -247,7 +252,7 @@ todos los estados, incluido el cooldown de EMIT: si el rebote cayera entero dent
 del cooldown y no se mirara, la segunda letra quedaría bloqueada sin que quien
 firma pueda hacer nada.
 
-El `emit_cooldown_frames` sigue existiendo y resuelve otro problema: no emitir
+El `emit_cooldown_ms` sigue existiendo y resuelve otro problema: no emitir
 treinta veces por segundo mientras la ventana sigue estable.
 
 Esto es solo la lógica de estados. Cómo se acumulan las letras en palabras, y en

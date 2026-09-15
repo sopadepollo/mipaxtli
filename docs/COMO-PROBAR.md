@@ -16,6 +16,7 @@ grabar y la demo en vivo— y están marcados con 📷.
 | Calibrar una cámara | 📷 | [4.2](#42-calibrar-la-cámara-una-vez-por-cámara) |
 | Grabar dataset | 📷 | [4.4](#44-grabar) |
 | La demo en vivo | 📷 | [6](#6-la-demo) |
+| Medir la tasa de cuadros | 📷 | [6.1](#61-medir-la-tasa-de-cuadros-) |
 
 ---
 
@@ -250,21 +251,164 @@ train y test mide memorización, no generalización.
 
 ## 6. La demo
 
-> **Fase 3, en construcción.** El diseño está en
-> `docs/superpowers/specs/2026-09-09-fase-3-deletreo-en-vivo-design.md`. Esta
-> sección se completa cuando `lsm-demo` exista; hasta entonces, `make demo`
-> avisa de que todavía no está.
-
-Lo que habrá:
+Necesita cámara, MediaPipe y un modelo entrenado (`make train`):
 
 ```bash
 uv run lsm-demo                          # 📷 sesión en vivo
-uv run lsm-demo --desde-dataset RUTA     # reproduce grabaciones, sin cámara
 ```
 
-Y el criterio de la fase —deletrear una palabra de cinco letras sin errores de
-segmentación— se comprueba en la suite, sin cámara, con
-`tests/test_cli_demo.py`.
+Sin `--extra capture` instalado, imprime el mismo aviso que `make setup-capture`
+y sale con código 1: el resto del proyecto corre sin esas dependencias y la
+demo no es la excepción a la hora de fallar con un mensaje útil.
+
+Para probarla **sin cámara**, reproduce una sesión ya grabada en `data/raw/`:
+
+```bash
+uv run lsm-demo --desde-dataset data/raw
+# o: make demo ARGS="--desde-dataset data/raw"
+```
+
+La ruta es la **raíz del dataset**, la misma que consume `lsm-eval`: dentro se
+buscan `<firmante>/<sesion>/<letra>/NNN.json`. Apuntar a una sesión concreta no
+encuentra nada — antes eso salía como una línea en blanco y código 0, que es
+indistinguible de «no reconoció nada»; ahora lo dice y sale con 1.
+
+Esto es lo que ejercita `tests/test_cli_demo.py` en CI, sin cámara y sin
+MediaPipe: el criterio de la fase —deletrear una palabra de cinco letras sin
+errores de segmentación— pasa ahí, con secuencias sintéticas.
+`test_una_palabra_de_cinco_letras_produce_cinco_simbolos` produce `"casas"` a
+partir de cinco señas.
+
+### Controles
+
+| Tecla / gesto | Efecto |
+|---|---|
+| bajar la mano | cierra la palabra en curso y abre una nueva |
+| `BACKSPACE` | borra el último símbolo escrito |
+| `ENTER` | cierra la frase entera (se imprime y el buffer se vacía) |
+| `q` | sale; lo que quedó sin cerrar con `ENTER` se imprime igual |
+
+### Qué esperar en pantalla
+
+La demo **mide la tasa antes de arrancar** (los primeros
+`telemetry.fps_window_frames` cuadros) y la imprime junto a en cuántos cuadros se
+tradujo cada umbral. Esa tasa se congela para toda la sesión: los umbrales de
+`config.yaml` están en milisegundos y esto es lo que los convierte.
+
+Una vez dentro, arriba a la derecha van las dos tasas en vivo (`fps` de entrega,
+`proc` de procesamiento) y se ponen en rojo por debajo de `telemetry.min_fps`,
+con un aviso que sustituye al de las letras dinámicas: a esa tasa el problema es
+de rendimiento y no de la seña.
+
+En la línea de mensajes, una letra que no acaba de salir dice `acumulando C: 9
+frames`: está por encima del piso de confianza y por debajo del umbral que emite
+sin esperar, así que sigue juntando evidencia. Es lo que distingue «la máquina
+está dudando entre C y O» de «el detector no encuentra la mano», que antes se
+veían igual.
+
+Bajar la mano es el único gesto de control del proyecto, y no está clasificado:
+es la ausencia de mano que la segmentación ya detecta, con un umbral propio y
+más largo (`spelling.space_after_absent_ms`, un segundo) para que
+no baste un parpadeo del detector. Borrar y cerrar la frase van por teclado
+porque el clasificador ya usa sus 22 clases en las 21 letras más `NONE`, y no
+hay ninguna libre para un gesto de control sin grabar una clase nueva. El
+razonamiento completo está en `docs/adr/0012-controles-del-deletreo.md`, y su
+consecuencia se dice ahí sin adornos: la demo **no es señable de extremo a
+extremo** — cerrar la frase o corregir un error necesita un teclado.
+
+Las **ocho letras dinámicas** (`J`, `K`, `LL`, `Ñ`, `Q`, `RR`, `X`, `Z`) no se
+reconocen todavía: llegan en la Fase 5 con `dynamic_dtw`. El HUD lo avisa en
+pantalla, en la franja inferior, mientras dura la sesión.
+
+**La sesión en vivo —con cámara de verdad— no se ha ejecutado todavía.** Lo
+único verificado hasta ahora es `--desde-dataset`, que no abre cámara ni toca
+MediaPipe. Cómo se ve el HUD con una persona firmando delante no lo dice ningún
+test. La **latencia** sí se puede medir ya, y es lo que hace la sección
+siguiente.
+
+### 6.1 Medir la tasa de cuadros 📷
+
+```bash
+uv run lsm-demo --medir-fps                    # 60 s y vuelca el resumen
+uv run lsm-demo --medir-fps --medir-segundos 20
+# o: make medir-fps ARGS="--medir-segundos 20"
+```
+
+Corre una sesión de demo normal —se puede deletrear mientras mide— durante
+`telemetry.benchmark_seconds` y al terminar imprime la distribución. Necesita lo
+mismo que la demo: cámara, MediaPipe y modelo entrenado. Sobre
+`--desde-dataset` se niega a correr: sin cámara no hay tasa de entrega que medir
+y el número no diría nada sobre la máquina.
+
+> **Con el repositorio en WSL, esto se ejecuta desde Windows**, como la captura
+> y como la demo en vivo: WSL no ve la webcam (sección 4.1). Con el entorno de
+> Windows de `docker/README.md` (b) ya creado:
+>
+> ```powershell
+> $repo = "\wsl.localhost\Ubuntu\home\<usuario>\mipaxtli"
+> Set-Location $repo; $env:PYTHONPATH = "$repo\src"
+> & $HOME\lsm-win\Scripts\python.exe -m lsm.cli.demo --medir-fps
+> ```
+>
+> Y **la medida es de esa máquina**: los fps de Windows con el backend `MSMF` no
+> son los de WSL ni los de otro equipo. Anotar con qué se midió, igual que se
+> anota con qué dataset se calibró un umbral.
+
+**Por qué hace falta antes de tocar cualquier umbral.** Todos los umbrales de
+`segmentation` están ahora expresados en **milisegundos** y se convierten a
+frames con la tasa que mide este comando. Antes estaban en frames y los
+comentarios de `config.yaml` los traducían suponiendo 30 fps: la primera medición
+dio 17.8, así que cada umbral duraba 1.7 veces lo que su comentario afirmaba — el
+buffer eran 1348 ms y no 800. Ver `docs/adr/0013-la-ventana-mezclada.md`.
+
+Por eso esta medición sigue haciendo falta después del cambio: **la tasa de tu
+máquina es lo que decide en cuántos cuadros se traduce cada umbral**, y la demo
+la mide sola al arrancar (los primeros `telemetry.fps_window_frames` cuadros) y
+la imprime antes de empezar.
+
+El volcado tiene esta forma:
+
+```
+== medicion de fps ==
+cuadros: 300   pared: 10.28 s   fps sostenido: 29.2
+
+fps por cuadro      media  mediana       p5      p95      min      max
+entrega              29.8     29.7     26.1     34.9     12.1     38.1
+procesamiento        35.5     35.5     30.7     42.6     13.0     45.1
+
+latencia (ms)       media  mediana       p5      p95      min      max
+camara                1.9      1.8      1.1      2.9      1.0      3.0
+deteccion            22.9     22.0     18.4     25.8     18.0     70.5
+segmentacion          6.0      6.1      4.2      7.8      4.0      8.0
+preview               3.4      3.3      2.1      4.9      2.0      5.0
+
+manda la tubería: el reconocimiento tarda más que la espera de la cámara, ...
+```
+
+Cómo leerlo:
+
+| Fila | Qué es |
+|---|---|
+| `entrega` | cuadros por segundo que completa el bucle. Es la tasa en la que están expresados los umbrales, y su techo es `capture.camera_fps`. |
+| `procesamiento` | los que sostendría la tubería si la cámara entregara infinitamente rápido: sin la espera de `camera.read()` ni el dibujo del preview. |
+| `camara` | espera, no trabajo. Si la tubería es más lenta que la cámara, el cuadro ya está en el buffer del driver y esto sale casi cero. |
+| `deteccion` | MediaPipe. |
+| `segmentacion` | features + máquina de estados + clasificador, cuando toca. |
+| `preview` | HUD, `imshow` y `waitKey`. |
+
+**Los percentiles no son adorno: son el dato.** Una tubería que promedia 28 fps
+pero cae a 9 durante medio segundo produce exactamente la lentitud que se
+percibe, y en la media no se ve — el `p5` es el que la denuncia. La última línea
+dice quién es el cuello de botella, que es la pregunta que cambia qué hacer con
+el número: si manda la cámara, subir `capture.camera_fps` o bajar la resolución;
+si manda la tubería, el tiempo está en `deteccion` o en `segmentacion` y ahí es
+donde hay que mirar.
+
+Los mismos dos números —`fps` de entrega y `proc` de procesamiento— van **en
+vivo** arriba a la derecha del HUD, promediados sobre los últimos
+`telemetry.fps_window_frames` cuadros (30, un segundo a 30 fps). Sin verlos, «la
+demo tarda en confirmar» y «la tubería va a 9 fps» se ven exactamente igual en
+pantalla.
 
 ---
 

@@ -22,7 +22,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from lsm.capture import WindowQuality, explain, preview_position
-from lsm.types import HAND_CONNECTIONS, Handedness, RawFrame, SampleKind
+from lsm.segmentation import State
+from lsm.telemetry import render_fps, tasa_insuficiente
+from lsm.types import HAND_CONNECTIONS, Handedness, Prediction, RawFrame, SampleKind
 
 #: Colores BGR, que es el orden de OpenCV.
 _VERDE = (120, 220, 120)
@@ -60,6 +62,42 @@ class HudState:
     #: Último mensaje que mostrar, ya sea de éxito o de rechazo.
     mensaje: str
     guarda_video: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DemoHudState:
+    """Todo lo que la demo tiene que decir en un instante.
+
+    `HudState` es de captura —letra objetivo, muestras guardadas, si graba
+    video— y no sirve aquí. Lo que la demo necesita enseñar es otra cosa: qué
+    lleva escrito y por qué la máquina de estados está donde está.
+    """
+
+    #: El texto completo, palabras cerradas incluidas.
+    texto: str
+    #: La palabra en curso, para verla crecer letra a letra.
+    palabra: str
+    estado: State
+    #: Última predicción, aunque se haya rechazado. `None` antes de la primera.
+    ultima: Prediction | None
+    #: σ de la ventana actual, si la hay.
+    dispersion: float | None
+    #: Último mensaje: por qué se rechazó, o qué se acaba de borrar.
+    mensaje: str
+    #: Tasa de cuadros del bucle y de la tubería, promediadas sobre los últimos
+    #: `telemetry.fps_window_frames` cuadros. `None` mientras no haya medida: el
+    #: primer cuadro se dibuja antes de que su segmentación haya corrido, y
+    #: `--desde-dataset` no mide nada porque no hay bucle en vivo que medir.
+    #:
+    #: Van en el HUD porque la tasa es la unidad en la que están expresados
+    #: todos los umbrales de la segmentación: sin verla, "tarda en confirmar" no
+    #: se puede separar de "la tubería va a 9 fps".
+    fps_entrega: float | None = None
+    fps_procesamiento: float | None = None
+    #: Tasa por debajo de la cual el HUD avisa (`telemetry.min_fps`). Viaja en el
+    #: dato en vez de leerlo el dibujo: este módulo pinta, y quién decide qué
+    #: enseñar es el CLI.
+    fps_minimo: float | None = None
 
 
 def draw_landmarks(image: Any, frame: RawFrame, *, mirrored: bool) -> None:
@@ -253,6 +291,108 @@ def _draw_estado(image: Any, state: HudState, *, alto: int, ancho: int) -> None:
 
 #: Se escriben sin acentos: la fuente de OpenCV es ASCII y una `ó` sale como `?`.
 _ATAJOS = "ESPACIO guardar | n/p letra | m estatica/dinamica | r rehacer | q salir"
+
+#: Siempre visible, nunca condicionada a un intento fallido. Sin ella, quien
+#: prueba la demo hace una `J`, no ve nada, y concluye que el sistema falla —
+#: cuando lo que pasa es que esa letra llega en la Fase 5.
+_AVISO_DINAMICAS = "las 8 letras dinamicas no se reconocen aun: llegan en la Fase 5"
+
+#: Sustituye al aviso de las dinamicas cuando la tasa cae por debajo de
+#: `telemetry.min_fps`. Se cambia de mensaje en vez de anadir uno: a esa tasa,
+#: que las dinamicas no esten es el menor de los problemas, y dos avisos a la vez
+#: no se leen. Sin este, quien firma corrige la sena —lo unico que puede hacer—
+#: cuando lo que falla es la maquina.
+_AVISO_TASA_BAJA = (
+    "tasa baja: la deteccion no llega. Es rendimiento, no tu sena."
+    " Prueba con menos resolucion (capture.frame_width)."
+)
+
+
+def draw_demo_hud(image: Any, state: DemoHudState) -> None:
+    """Dibuja el HUD de la demo en vivo. Modifica `image` en el lugar.
+
+    Confianza y estado van **siempre**, no solo cuando hay letra: sin ellos, una
+    ventana rechazada por confianza baja y una mano que el detector no encuentra
+    se ven exactamente igual en pantalla, y depurar la demo se vuelve adivinar.
+    """
+    import cv2
+
+    height, width = int(image.shape[0]), int(image.shape[1])
+    _panel(image, 0, 0, width, 96)
+
+    cv2.putText(
+        image,
+        f"texto:   {state.texto}",
+        (18, 30),
+        _FUENTE,
+        0.7,
+        _BLANCO,
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        image,
+        f"palabra: {state.palabra}",
+        (18, 58),
+        _FUENTE,
+        0.6,
+        _GRIS,
+        1,
+        cv2.LINE_AA,
+    )
+
+    # Arriba a la derecha y siempre presente, con la misma prominencia que el
+    # texto que se está escribiendo: es el número que dice si lo que se percibe
+    # como lentitud del reconocimiento es en realidad una tubería que no llega.
+    lenta = state.fps_minimo is not None and tasa_insuficiente(
+        state.fps_entrega, minimo=state.fps_minimo
+    )
+    cv2.putText(
+        image,
+        render_fps(entrega=state.fps_entrega, procesamiento=state.fps_procesamiento),
+        (width - 250, 30),
+        _FUENTE,
+        0.55,
+        _ROJO if lenta else _BLANCO,
+        2 if lenta else 1,
+        cv2.LINE_AA,
+    )
+
+    confianza = "--" if state.ultima is None else f"{state.ultima.confidence:.2f}"
+    letra = "--" if state.ultima is None else state.ultima.label
+    sigma = "--" if state.dispersion is None else f"{state.dispersion:.3f}"
+    cv2.putText(
+        image,
+        f"{state.estado.value}   ultima: {letra} ({confianza})   sigma: {sigma}",
+        (18, 84),
+        _FUENTE,
+        0.55,
+        _BLANCO,
+        1,
+        cv2.LINE_AA,
+    )
+
+    _panel(image, 0, height - 64, width, 64)
+    cv2.putText(
+        image,
+        _AVISO_TASA_BAJA if lenta else _AVISO_DINAMICAS,
+        (18, height - 40),
+        _FUENTE,
+        0.45,
+        _ROJO if lenta else _GRIS,
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        image,
+        state.mensaje,
+        (18, height - 14),
+        _FUENTE,
+        0.5,
+        _AMBAR,
+        1,
+        cv2.LINE_AA,
+    )
 
 
 def _texto_lateralidad(side: Handedness | None) -> str:

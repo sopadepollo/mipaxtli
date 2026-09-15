@@ -418,7 +418,12 @@ porque los tres casos se comportan distinto y no basta con probar uno:
 
 ## 6. Velocidad y estabilidad — contrato de segmentación
 
-**`SEGMENTATION_SPEC_VERSION = 1`** (`src/lsm/segmentation.py`).
+**`SEGMENTATION_SPEC_VERSION = 2`** (`src/lsm/segmentation.py`).
+
+> **v2** — `docs/adr/0013-la-ventana-mezclada.md`. Se añaden §6.4 (qué ventana se
+> clasifica), §6.5 (los umbrales temporales en milisegundos) y §6.6 (emisión
+> progresiva). `FEATURE_SPEC_VERSION` no cambia: el promedio del §2 es el mismo y
+> ningún modelo entrenado se invalida — lo que cambia es **qué frames entran**.
 
 Esta sección **no está bajo `FEATURE_SPEC_VERSION`** y se versiona aparte. Las dos
 cosas cambian por motivos distintos: el vector de features cambia cuando cambia lo
@@ -448,7 +453,8 @@ v_t   = d_t / s_par
 - La suma recorre los landmarks en orden de índice ascendente y divide al final,
   igual que el §5.4 exige para el promedio del §2.
 - Una ventana de `T` frames produce `T - 1` velocidades. La máquina de estados usa
-  la del último par.
+  la del último par **para decidir si la mano se está moviendo ahora**. Cuál es la
+  ventana que se **clasifica** es otra pregunta, y la contesta la §6.4.
 - `q_t` **no está trasladado ni escalado**: es el paso 2, no el 5.
 
 ### 6.2 Por qué la escala del par y no otra
@@ -497,6 +503,99 @@ movimiento coherente, en vez de esperar a que se detenga.
 
 No se resuelve aquí. Se deja escrito para no descubrirlo en la Fase 5 con el
 dataset ya grabado. Ver `docs/adr/0004-contrato-de-segmentacion.md`.
+
+### 6.4 Qué ventana se clasifica
+
+Sea `stable_run` el número de **pares consecutivos** cuya velocidad quedó por
+debajo de `velocity_threshold`, contando desde el último par hacia atrás, y sea
+`T_max = buffer_size` (§6.5). La ventana que se le pasa al clasificador son los
+
+```
+longitud = min( max(stable_run, stable_frames), T_max )
+```
+
+últimos frames del buffer, y **no el buffer entero**.
+
+**La invariante deja de comprobarse y pasa a cumplirse por construcción.** El ADR
+0004 dice que «la ventana solo es estable si la mano ni viajó ni siguió
+acomodándose». Si la ventana *es* el tramo estable, todos sus frames lo son por
+definición: no hay ningún bucle que los revise, y el caso en que fallaría no
+existe. La v1 comprobaba quietud sobre los últimos `stable_run` frames y
+clasificaba los `buffer_size` del buffer circular — hasta 18 frames sin comprobar
+que, con un tránsito más corto que el buffer, eran la mano viajando de una letra
+a la siguiente. Medido: un tránsito de 4 frames entre dos letras producía una
+letra que nadie firmó.
+
+Dos consecuencias que una reimplementación tiene que reproducir exactamente:
+
+1. **Se toman `stable_run` frames, no `stable_run + 1`.** `stable_run` pares
+   involucran un frame más, pero el más viejo de ellos es aquel al que la mano
+   *llegó*, y su propia entrada pudo ser rápida. Dejarlo fuera es la lectura
+   conservadora.
+2. **Por eso el tope alcanzable es `T_max − 1` y no `T_max`.** Con un buffer lleno
+   de N frames hay N−1 pares, así que el frame más viejo del buffer nunca entra en
+   la ventana clasificada. No es un error de una unidad: es aritmética de la
+   definición.
+
+σ (§2) se calcula **sobre esta ventana**, no sobre el buffer.
+
+### 6.5 Los umbrales temporales están en milisegundos
+
+`buffer_ms`, `stable_ms`, `emit_cooldown_ms`, `reject_cooldown_ms`,
+`missing_to_idle_ms` y `spelling.space_after_absent_ms` son **duraciones**. Se
+convierten a cuadros con la tasa de la sesión:
+
+```
+cuadros(ms, fps) = max( 1, floor( ms · fps / 1000 + 0.5 ) )
+```
+
+- **La regla de redondeo es normativa.** `Math.round` de JavaScript redondea hacia
+  arriba en el empate y `round` de Python redondea al par más cercano: con 0.5
+  exacto darían cuadros distintos leyendo el mismo `config.yaml`. Se adopta
+  `floor(x + 0.5)`, que es la de JavaScript.
+- **El piso de 1 cuadro** también es normativo: un cooldown de cero cuadros no es
+  un cooldown y una ventana de cero frames no se puede clasificar.
+- **La tasa se congela antes del primer frame y no se re-deriva durante la
+  sesión.** Si cambiara a mitad de deletreo, la misma seña se comportaría distinto
+  según lo que la máquina llevara haciendo un segundo antes, y una grabación no
+  se podría reproducir. Dada `(ms, fps)`, la máquina vuelve a ser determinista bit
+  a bit, que es lo que permite validarla contra golden vectors.
+- Sin tasa medida —reproducir un dataset, un test— se usa la nominal,
+  `capture.camera_fps`.
+
+**Por qué**: en cuadros, el comportamiento cambiaba con la máquina sin que nadie
+lo notara. Los comentarios de `config.yaml` traducían los umbrales a milisegundos
+suponiendo 30 fps; la medición de `lsm-demo --medir-fps` en la máquina de
+referencia dio **17.8 fps sostenidos**, de modo que cada umbral duraba 1.7 veces
+lo que su comentario afirmaba: los 24 frames de buffer eran 1348 ms y no 800.
+
+**Excepción anotada:** `velocity_threshold` sigue en unidades de mano **por
+frame** y por tanto sigue dependiendo de la tasa — a menor tasa, dos frames
+consecutivos están más separados en el tiempo y la misma mano física da un `v_t`
+mayor. Expresarla por segundo es el arreglo pendiente; no se hizo con lo demás
+porque es un eje del barrido de calibración de la Fase 2 y cambiarle la unidad
+invalida esa calibración.
+
+### 6.6 Emisión progresiva
+
+A partir de `stable_frames`, la ventana se clasifica **en cada frame** mientras
+crece, y la decisión usa dos umbrales:
+
+| Confianza | Qué pasa |
+|---|---|
+| `≥ high_confidence` | emite ya |
+| `[min_confidence, high_confidence)` | **acumula**: no emite, no cuesta cooldown, y se reclasifica en el frame siguiente con un frame más de evidencia. Al llegar a `T_max − 1` —ya no puede crecer— emite con lo que tenga |
+| `< min_confidence` | rechaza, con `reject_cooldown_ms` de silencio |
+
+Acumular **no es rechazar** y por eso no paga cooldown: ese es todo el mecanismo
+de la latencia adaptativa. Una letra sin vecinos cercanos sale con la ventana
+mínima; un par confundible acumula hasta despegarse o hasta agotar la ventana.
+Medido bajo leave-one-signer-out sobre el dataset de la Fase 2, el 75.1% de las
+muestras cruzan `high_confidence = 0.82` y saldrían de inmediato.
+
+El cerrojo de letra repetida se evalúa **antes** de acumular: acumular evidencia
+de una letra que el cerrojo no va a dejar salir gastaría la ventana entera para
+terminar en el mismo rechazo.
 
 ---
 

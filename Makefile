@@ -4,7 +4,7 @@
 
 UV ?= uv
 
-.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval demo
+.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval demo medir-fps
 
 help:
 	@echo "setup        instala dependencias con uv"
@@ -21,6 +21,7 @@ help:
 	@echo "calibrar       confirma la lateralidad de la camara (una vez)"
 	@echo "capture        sesion de captura; pasa ARGS=..."
 	@echo "verify         relee data/raw y re-deriva las features"
+	@echo "medir-fps      mide la tasa de cuadros del bucle en vivo (60 s)"
 
 setup:
 	$(UV) sync
@@ -130,5 +131,32 @@ train:
 eval:
 	$(UV) run lsm-eval $(ARGS)
 
+# Demo en vivo: senas -> texto. Necesita camara, MediaPipe y un modelo
+# entrenado (`make train`). Controles: bajar la mano cierra la palabra,
+# BACKSPACE borra un simbolo, ENTER cierra la frase, q sale. Las 8 letras
+# dinamicas (J, K, LL, N~, Q, RR, X, Z) no se reconocen todavia: el HUD lo avisa
+# en pantalla (Fase 5). Para probarla sin camara, contra una sesion ya grabada:
+#
+# La ruta es la RAIZ del dataset (firmante/sesion/letra/NNN.json), no una
+# sesion concreta:
+#
+#   make demo ARGS="--desde-dataset data/raw"
 demo:
-	@echo "make demo: llega en la Fase 3 (src/lsm/cli/demo.py)."; exit 1
+	$(UV) run lsm-demo $(ARGS)
+
+# Mide la tasa de cuadros del bucle en vivo y vuelca el resumen estadistico:
+# media, mediana, percentil 5 y percentil 95 de los fps de entrega y de
+# procesamiento, mas el reparto de latencia por etapa.
+#
+# Es lo primero que hay que correr antes de tocar cualquier umbral de
+# `segmentation`: todos estan expresados en FRAMES, y 24 frames son 800 ms a 30
+# fps pero 2 segundos a 12. Ver docs/adr/0013-la-ventana-mezclada.md.
+#
+# Dura telemetry.benchmark_seconds (60 s). Para otra duracion:
+#
+#   make medir-fps ARGS="--medir-segundos 20"
+#
+# Necesita camara, MediaPipe y modelo entrenado, igual que `make demo`: lo que
+# se mide es la tuberia completa, clasificador incluido.
+medir-fps:
+	$(UV) run lsm-demo --medir-fps $(ARGS)

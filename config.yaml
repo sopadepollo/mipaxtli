@@ -106,10 +106,24 @@ dtw:
   min_source_frames: 4
 
 # Máquina de estados de segmentación (ARQUITECTURA.md §4.2).
+#
+# LOS UMBRALES TEMPORALES ESTÁN EN MILISEGUNDOS, no en frames, y se convierten a
+# frames con la tasa MEDIDA en tiempo de ejecución (`FrameThresholds`, y la §6.5
+# de docs/feature-spec.md).
+#
+# En frames, el comportamiento cambiaba con la máquina sin que nadie lo notara.
+# Los comentarios de este archivo decían "a 30 fps, 24 frames son 800 ms", y la
+# medición de `lsm-demo --medir-fps` en la máquina de referencia dio 17.8 fps
+# sostenidos: los mismos 24 frames eran 1348 ms. Cada umbral de esta sección
+# duraba 1.7 veces lo que su comentario afirmaba. Ver
+# docs/adr/0013-la-ventana-mezclada.md.
 segmentation:
-  # Buffer circular de frames recientes. La ventana que se clasifica sale de aquí.
-  # A 30 fps, 24 frames son unos 800 ms.
-  buffer_size: 24
+  # Cuánto pasado recuerda el buffer circular. La ventana que se clasifica sale
+  # de aquí y no puede ser más larga.
+  #
+  # 800 ms son los 24 frames de antes a 30 fps: el valor no cambia de intención,
+  # cambia de unidad. A los 17.8 fps medidos son 14 frames.
+  buffer_ms: 800.0
 
   # detection_score mínimo para aceptar el frame del detector. Por debajo, el
   # frame se marca inválido e interrumpe la secuencia.
@@ -121,27 +135,66 @@ segmentation:
   # menos del 2% del largo muñeca-nudillo entre frame y frame".
   velocity_threshold: 0.02
 
-  # Frames consecutivos por debajo del umbral de velocidad para pasar de TRACKING
-  # a STABLE. Subirlo reduce emisiones espurias durante el viaje de una letra a
-  # otra; bajarlo hace el deletreo más ágil.
-  stable_frames: 5
+  # Cuánta quietud continuada hace falta para pasar de TRACKING a STABLE.
+  # Subirlo reduce emisiones espurias durante el viaje de una letra a otra;
+  # bajarlo hace el deletreo más ágil.
+  #
+  # Es además el PISO de la ventana que se clasifica: desde la corrección del
+  # ADR 0013, lo que se le pasa al clasificador son exactamente los frames
+  # verificados estables, y esto es el mínimo de ellos. 167 ms son los 5 frames
+  # de antes a 30 fps.
+  stable_ms: 167.0
 
   # Confianza mínima para emitir. Por debajo se emite UNKNOWN y no se agrega nada
   # al texto. Ver ARQUITECTURA.md §4.4.
+  #
+  # Es el PISO. Con la emisión progresiva, una confianza entre este valor y
+  # `high_confidence` no escribe todavía: sigue acumulando evidencia frame a
+  # frame mientras la ventana crece, y emite al agotarla.
   min_confidence: 0.6
 
+  # Confianza que emite SIN esperar más evidencia. De aquí sale la latencia
+  # adaptativa: una letra sin vecinos cercanos se escribe con la ventana mínima
+  # (`stable_frames`), y un par confundible acumula hasta despegarse o hasta
+  # agotar la ventana.
+  #
+  # MEDIDO bajo leave-one-signer-out sobre el dataset de la Fase 2, 2437 muestras
+  # no rechazadas:
+  #
+  #   umbral   emite ya   precisión   errores que pasan
+  #     0.75      86.3%      0.9952        10
+  #     0.80      79.4%      0.9979         4
+  #     0.82      75.1%      0.9995         1
+  #     0.85      67.1%      0.9994         1
+  #
+  # 0.82 es la rodilla: por encima, la precisión ya no mejora —el único error que
+  # queda es un `E→C` con 0.9316 que ningún umbral por debajo de 0.94 excluye— y
+  # la emisión inmediata se desploma, o sea un tercio de las letras esperando la
+  # ventana entera sin ganar nada.
+  #
+  # LO QUE LA MEDIDA NO CUBRE: se midió sobre muestras completas de 24 frames, no
+  # sobre las ventanas cortas de la emisión progresiva, que son más ruidosas. Una
+  # ventana de 5 frames alcanzará 0.82 menos veces que una de 24, así que en vivo
+  # se acumulará más de lo que dice la tabla. El error va hacia tardar, no hacia
+  # escribir mal.
+  high_confidence: 0.82
+
   # Cooldown tras emitir una letra, para no repetirla mientras la mano sigue
-  # quieta. A 30 fps, 12 frames son 400 ms.
-  emit_cooldown_frames: 12
+  # quieta.
+  emit_cooldown_ms: 400.0
 
   # Cooldown tras un rechazo. Deliberadamente más corto que el de emisión: un
   # rechazo no debe castigar tanto como un acierto, o una letra que quedó apenas
   # bajo el umbral obligaría a rehacer la seña completa. Su otra función es
   # impedir que la máquina reclasifique la misma ventana en cada frame.
-  reject_cooldown_frames: 4
+  #
+  # OJO: solo se aplica a los rechazos de verdad. Una confianza entre
+  # `min_confidence` y `high_confidence` no rechaza, acumula, y eso NO cuesta
+  # cooldown: se reclasifica en el frame siguiente. Ver la emisión progresiva.
+  reject_cooldown_ms: 133.0
 
-  # Frames consecutivos sin mano válida que llevan de vuelta a IDLE.
-  missing_frames_to_idle: 8
+  # Ausencia de mano continuada que lleva de vuelta a IDLE.
+  missing_to_idle_ms: 267.0
 
 # Detector de manos: los knobs que MediaPipe consume antes de que exista un
 # frame de landmarks (src/lsm/io/hands.py). No van en `segmentation` porque la
@@ -246,3 +299,49 @@ capture:
   # pantalla: al alcanzarla no se bloquea nada. ARQUITECTURA.md §4.7 pide ~20 por
   # letra, 2 sesiones por persona, 3 personas.
   target_samples_per_label: 20
+
+# Instrumentación de la tasa de cuadros (src/lsm/telemetry.py).
+#
+# Existe porque TODOS los umbrales de `segmentation` están expresados en frames y
+# los comentarios de esta sección los traducen a milisegundos suponiendo 30 fps.
+# Esa suposición no se había medido nunca: si la tubería corre a 12 fps, los 24
+# frames del buffer son 2 segundos y no 800 ms, y el deletreo se siente lento sin
+# que ningún número de este archivo lo explique. Ver
+# docs/adr/0013-la-ventana-mezclada.md.
+telemetry:
+  # Tasa por debajo de la cual el preview avisa de que lo que falla es el
+  # rendimiento y no la seña.
+  #
+  # A tasas muy bajas ninguna ventana temporal razonable contiene frames
+  # suficientes: con `stable_ms: 167`, a 12 fps la estabilidad se decide con 2
+  # cuadros y a 6 fps con 1, que es no decidir nada. 12 va justo por debajo del
+  # percentil 5 medido en la máquina de referencia (13.8 fps), así que avisa
+  # cuando esa máquina cae por debajo de su propio peor caso normal y no en cada
+  # bache.
+  min_fps: 12.0
+
+  # Cuadros sobre los que se promedia el fps que se muestra en vivo en el
+  # preview. Es una media móvil a propósito: promediando la sesión entera, un
+  # arranque lento sigue tirando del número diez minutos después y el HUD deja de
+  # servir para ver el efecto de lo que se acaba de tocar. A 30 fps, 30 cuadros
+  # es un segundo de historia.
+  fps_window_frames: 30
+
+  # Cuánto dura `lsm-demo --medir-fps` cuando no se le pasa `--medir-segundos`.
+  # Un minuto: suficiente para que la distribución tenga cola —el percentil 5 de
+  # 1800 cuadros son los 90 peores— y corto para repetirlo tras cada ajuste.
+  benchmark_seconds: 60.0
+
+# Acumulación de letras en palabras (ARQUITECTURA.md §4.2, docs/adr/0012-...).
+spelling:
+  # Ausencia de mano que cierra la palabra en curso y empieza otra. Un segundo,
+  # y ahora un segundo de verdad: en frames eran 1685 ms en la máquina medida.
+  #
+  # Es el único gesto de control del proyecto. Bajar la mano entre palabras es lo
+  # que se hace de todos modos, y el clasificador no tiene clases libres: conoce
+  # 22 y las 21 letras están ocupadas, así que un gesto dedicado sería una clase
+  # nueva, y una clase nueva son tres personas citadas otra vez.
+  #
+  # config.py valida que supere a segmentation.missing_to_idle_ms. Si no, un
+  # parpadeo del detector partiría una palabra en dos.
+  space_after_absent_ms: 1000.0

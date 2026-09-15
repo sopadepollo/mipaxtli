@@ -116,13 +116,13 @@ Y la validación cruzada, como método de `Config` junto a las que ya hay:
         espacio se disparara ahí, un parpadeo del detector partiría una palabra
         en dos y quien firma no tendría forma de evitarlo.
         """
-        if self.spelling.space_after_absent_frames <= self.segmentation.missing_frames_to_idle:
+        espacio = self.spelling.space_after_absent_frames
+        idle = self.segmentation.missing_frames_to_idle
+        if espacio <= idle:
             msg = (
-                f"spelling.space_after_absent_frames "
-                f"({self.spelling.space_after_absent_frames}) no supera "
-                f"segmentation.missing_frames_to_idle "
-                f"({self.segmentation.missing_frames_to_idle}): un parpadeo del "
-                "detector escribiría un espacio"
+                f"spelling.space_after_absent_frames ({espacio}) no supera "
+                f"segmentation.missing_frames_to_idle ({idle}): un parpadeo "
+                "del detector escribiría un espacio"
             )
             raise ValueError(msg)
         return self
@@ -172,7 +172,7 @@ git commit -m "feat(config): el umbral del espacio, validado contra la vuelta a 
 - Test: `tests/test_spelling.py`
 
 **Interfaces:**
-- Consumes: `Config` de `lsm.config`; `Label`, `NEGATIVE_LABEL` de `lsm.types`; `spec` de `lsm.vocabulary`
+- Consumes: `Config` de `lsm.config`; `Label` y `spec` de `lsm.vocabulary` (**`Label` NO está en `types.py`**)
 - Produces: `SpellingState`, `LetterSignal`, `StepResult`, `LetterWritten`, `step()`, `render_word()`, `render_text()`
 
 - [ ] **Step 1: Escribe los tests que fallan**
@@ -199,7 +199,7 @@ from lsm.spelling import (
     render_word,
     step,
 )
-from lsm.types import Label
+from lsm.vocabulary import Label
 
 CONFIG = Config()
 
@@ -291,8 +291,7 @@ from dataclasses import dataclass, replace
 from typing import TypeAlias
 
 from lsm.config import Config
-from lsm.types import Label
-from lsm.vocabulary import spec
+from lsm.vocabulary import Label, spec
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,7 +338,9 @@ class StepResult:
     event: SpellingEvent | None = None
 
 
-def step(state: SpellingState, signal: Signal, config: Config) -> StepResult:
+def step(  # noqa: ARG001 — `config` lo usa el espacio, que llega en la tarea 3
+    state: SpellingState, signal: Signal, config: Config
+) -> StepResult:
     """Aplica una señal. Nunca muta `state`.
 
     `config` entra aunque esta versión todavía no lo use: el umbral del espacio
@@ -943,7 +944,7 @@ git commit -m "feat(preview): HUD de la demo con confianza y estado siempre visi
 
 **Interfaces:**
 - Consumes: `run_segmentation`, `LetterEmitted`, `WindowStable`, `WindowRejected`, `StateChanged`, `State` de `lsm.segmentation`; `StaticKnnClassifier` de `lsm.classifiers.static_knn`; todo `lsm.spelling`
-- Produces: `Sesion` (clase con `.aplicar(signal)`, `.hud()`, `.state`), `cargar_clasificador(path, config)`, `flujo_desde_dataset(raiz, config)`, `main(argv)`
+- Produces: `Sesion` (clase con `.aplicar(signal)`, `.hud()`, `.state`), `cargar_clasificador(path)`, `flujo_desde_dataset(raiz, config)`, `main(argv)`
 
 - [ ] **Step 1: Escribe el CLI**
 
@@ -1004,8 +1005,8 @@ from lsm.spelling import (
     render_word,
     step,
 )
-from lsm.types import InvalidFrame, InvalidReason, Label, Prediction
-from lsm.vocabulary import spec
+from lsm.types import InvalidFrame, InvalidReason, Prediction
+from lsm.vocabulary import Label, spec
 
 DEFAULT_MODEL = Path("data/models/static_knn.json")
 
@@ -1075,7 +1076,7 @@ def aplicar_evento(sesion: Sesion, evento: SegmentationEvent) -> None:
             pass
 
 
-def cargar_clasificador(path: Path, config: Config) -> StaticKnnClassifier:
+def cargar_clasificador(path: Path) -> StaticKnnClassifier:
     """Carga el modelo exportado.
 
     `from_export` rechaza un `feature_spec_version` o un
@@ -1148,7 +1149,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     config = load_config(args.config)
-    classifier = cargar_clasificador(args.modelo, config)
+    classifier = cargar_clasificador(args.modelo)
     sesion = Sesion(config=config)
 
     if args.desde_dataset is not None:
@@ -1232,7 +1233,8 @@ from lsm.cli.demo import Sesion, aplicar_evento
 from lsm.config import Config
 from lsm.segmentation import run_segmentation
 from lsm.spelling import render_text
-from lsm.types import InvalidFrame, InvalidReason, Label
+from lsm.types import InvalidFrame, InvalidReason
+from lsm.vocabulary import Label
 
 CONFIG = Config()
 PALABRA = (Label.C, Label.A, Label.S, Label.A, Label.S)
@@ -1248,6 +1250,7 @@ from collections.abc import Callable
 from lsm.segmentation import Classify
 from lsm.synthetic import canonical_hand, to_frame, translated
 from lsm.types import FrameSlot, Prediction, Sequence
+from lsm.vocabulary import Label
 
 
 def still_frames(count: int, *, at: tuple[float, float] = (640.0, 400.0)) -> list[FrameSlot]:
@@ -1268,13 +1271,14 @@ def moving_frames(count: int, *, step: float = 25.0) -> list[FrameSlot]:
     ]
 
 
-def _clasificador(confianza: float = 0.95) -> Classify:
-    """Devuelve las letras de PALABRA en orden, una por ventana estable.
+def _clasificador(labels: tuple[Label, ...], confianza: float = 0.95) -> Classify:
+    """Devuelve `labels` en orden, una por ventana estable.
 
     Determinista a proposito: lo que se testea es la segmentacion, no el
-    acierto del clasificador.
+    acierto del clasificador. Recibe las etiquetas en vez de leer una global
+    para que el test de la letra doble pueda pedir la suya.
     """
-    pendientes = [Prediction(label=l.value, confidence=confianza) for l in PALABRA]
+    pendientes = [Prediction(label=l.value, confidence=confianza) for l in labels]
 
     def classify(sequence: Sequence) -> Prediction:  # noqa: ARG001 — doble de pruebas
         return pendientes.pop(0) if len(pendientes) > 1 else pendientes[0]
@@ -1309,16 +1313,25 @@ def _deletrear(labels: tuple[Label, ...], *, rebote: bool) -> SpellingState:
         flujo += still_frames(CONFIG.segmentation.buffer_size + 2)
 
     sesion = Sesion(config=CONFIG)
-    clasificador = _clasificador()
-    for evento in run_segmentation(iter(flujo), CONFIG, clasificador):
+    for evento in run_segmentation(iter(flujo), CONFIG, _clasificador(labels)):
         aplicar_evento(sesion, evento)
     return sesion.state
-```
 
-> `_deletrear` usa `_clasificador()`, que recorre `PALABRA`. Para el test de la
-> letra doble, cambia `PALABRA` por un parámetro o define un segundo clasificador
-> que devuelva siempre `N`: lo que importa es que las dos ventanas reciban la
-> misma etiqueta, que es lo que ejercita el cerrojo.
+
+def _con_sesion(frames: list[FrameSlot], sesion: Sesion) -> Iterator[FrameSlot]:
+    """Cede los frames aplicando presencia y ausencia, como hace la demo real.
+
+    `run_segmentation` no emite un evento por frame, asi que la sesion no ve las
+    ausencias por esa via: en la demo se aplican dentro del generador del flujo,
+    un frame por vuelta. Esto lo replica, y testearlo aqui es lo que impide que
+    ese mecanismo se rompa sin avisar.
+    """
+    for slot in frames:
+        sesion.aplicar(
+            HandAbsent() if isinstance(slot, InvalidFrame) else HandPresent()
+        )
+        yield slot
+```
 
 El test central:
 
@@ -1360,25 +1373,19 @@ def test_nada_por_debajo_del_umbral_llega_al_buffer() -> None:
 
 def test_la_mano_abajo_entre_dos_palabras_pone_un_espacio_y_uno_solo() -> None:
     sesion = Sesion(config=CONFIG)
-    hueco = [
+    palabras = (Label.C, Label.A, Label.S, Label.A)
+    hueco: list[FrameSlot] = [
         InvalidFrame(reason=InvalidReason.NO_HAND)
     ] * (CONFIG.spelling.space_after_absent_frames * 2)
+    frames = [*_frames(palabras[:2]), *hueco, *_frames(palabras[2:])]
 
-    flujo = [*_frames((Label.C, Label.A)), *hueco, *_frames((Label.S, Label.A))]
-    for evento in run_segmentation(iter(flujo), CONFIG, _clasificador()):
+    for evento in run_segmentation(
+        _con_sesion(frames, sesion), CONFIG, _clasificador(palabras)
+    ):
         aplicar_evento(sesion, evento)
-        # La demo aplica la ausencia frame a frame; aqui se replica igual.
 
     assert render_text(sesion.state) == "ca sa"
 ```
-
-> **Ojo con el último test.** `run_segmentation` no emite un evento por frame, así
-> que la sesión no ve las ausencias por ahí. En la demo real, `HandPresent` y
-> `HandAbsent` se aplican dentro del generador del flujo, un frame por vuelta.
-> Replica eso en el test: envuelve la lista de frames en un generador que llame a
-> `sesion.aplicar(HandPresent() if isinstance(slot, RawFrame) else HandAbsent())`
-> antes de ceder cada `slot`. Es el mismo mecanismo que la tarea 6 documenta, y
-> testearlo aquí es lo que impide que se rompa sin avisar.
 
 - [ ] **Step 2: Corre los tests y comprueba que fallan**
 
@@ -1422,7 +1429,7 @@ def _sesion_en_vivo(
     from lsm.io.camera import Camera
     from lsm.io.preview import draw_demo_hud, draw_landmarks
 
-    from lsm.cli.capture import _construir_detector
+    from lsm.io.hands import build_detector
 
     ventana = "demo LSM — deletreo manual"
     salir = False
@@ -1456,7 +1463,7 @@ def _sesion_en_vivo(
             yield slot
 
     with Camera.from_config(config.capture).open() as camera:
-        detector = _construir_detector(config)
+        detector = build_detector(config)
         try:
             for evento in run_segmentation(flujo(camera, detector), config, classifier.predict):
                 aplicar_evento(sesion, evento)
@@ -1470,9 +1477,11 @@ def _sesion_en_vivo(
     return 0
 ```
 
-> Si `_construir_detector` es privado y te incomoda importarlo desde otro CLI,
-> muévelo a `src/lsm/io/hands.py` como función pública y actualiza los dos
-> llamantes. Es un cambio pequeño y deja el detector donde le corresponde.
+> **Antes de escribir esto**, mueve `_construir_detector` de `src/lsm/cli/capture.py`
+> a `src/lsm/io/hands.py` como `build_detector(config: Config) -> HandDetector`,
+> y haz que `cli/capture.py` la importe de ahí. Importar un privado de otro CLI es
+> exactamente lo que el revisor va a marcar, y el detector le corresponde a `io/`:
+> es la frontera con MediaPipe. El cuerpo de la función no cambia.
 
 - [ ] **Step 6: Corre todo**
 

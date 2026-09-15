@@ -24,6 +24,7 @@ lsm-golden = "lsm.cli.golden:main"
 lsm-capture = "lsm.cli.capture:main"
 lsm-train = "lsm.cli.train:main"
 lsm-eval = "lsm.cli.evaluate:main"
+lsm-demo = "lsm.cli.demo:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -44,6 +45,17 @@ dev = [
 line-length = 88
 target-version = "py311"
 src = ["src", "tests"]
+
+# `docs/` queda fuera. Desde la 0.16, ruff formatea los bloques ```python de los
+# archivos Markdown, y en documentacion eso no es formatear: es reescribir. Un
+# fragmento que ilustra el interior de una funcion va sangrado cuatro espacios a
+# proposito; ruff lo des-indenta a nivel de modulo porque no sabe donde vive, y
+# quien lo copie escribe codigo que no compila. Paso de verdad al ejecutar la
+# Fase 3: ver docs/superpowers/plans/ y el ledger de esa ejecucion.
+#
+# `--check` no lo denunciaba —el Markdown no cuenta para el codigo de salida—,
+# asi que el gate seguia verde mientras el dano se acumulaba.
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF", "PT", "ARG", "C4"]

@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol, TypeAlias, runtime_checkable
 
+from lsm.config import Config
 from lsm.types import (
     NUM_LANDMARKS,
     FrameSlot,
@@ -69,15 +70,49 @@ class HandDetector(Protocol):
 
     Si el detector encuentra varias manos se queda con la de mayor
     `detection_score`: el alfabeto dactilológico de LSM es monomanual.
+
+    ### El ciclo de vida es parte de la interfaz, no un detalle de MediaPipe
+
+    `open()` y el `with` están declarados aquí y no solo en el detector real
+    porque **quien consume un detector tiene que abrirlo y cerrarlo**, y si eso no
+    viaja en el `Protocol`, el `Protocol` describe menos de lo que sus
+    consumidores necesitan: no protege la frontera, la desplaza. Se ve enseguida
+    en la práctica —los dos CLI que abren cámara acabarían anotando el tipo
+    concreto para poder escribir `with detector:`, y la fábrica dejaría de
+    describir lo que produce.
+
+    La consecuencia que importa es que `FakeHandDetector` sea sustituible **en
+    todas partes** donde va el real, los CLI incluidos, y no solo en el núcleo
+    puro. Que abrir no cueste nada en el fake no es motivo para que no sepa
+    hacerlo: la interfaz la fija quien la usa, no la implementación más cara.
+
+    Que el detector real cargue 8 MB de modelo en `open()` y el fake no cargue
+    nada sí es un detalle de implementación. Lo que la interfaz promete es más
+    modesto y es lo único de lo que dependen los consumidores: hay un momento en
+    que el detector queda listo, y otro en que suelta lo que tuviera.
     """
 
     def detect(self, image: VideoImage) -> FrameSlot:
         """Procesa una imagen y devuelve la mano detectada, o el motivo."""
         ...
 
-    def close(self) -> None:
-        """Libera los recursos del detector."""
+    def open(self) -> HandDetector:
+        """Deja el detector listo para detectar. Devuelve `self` para encadenar.
+
+        Es un paso aparte del constructor porque construir no debe costar lo que
+        cuesta abrir ni fallar por lo que falla abrir.
+        """
         ...
+
+    def close(self) -> None:
+        """Libera los recursos del detector. Idempotente."""
+        ...
+
+    def __enter__(self) -> HandDetector:
+        """`with detector:` abre y garantiza el cierre."""
+        ...
+
+    def __exit__(self, *exc: object) -> None: ...
 
 
 @dataclass
@@ -316,6 +351,30 @@ class MediaPipeHandDetector:
         self.close()
 
 
+def build_detector(config: Config) -> HandDetector:
+    """El detector real, con todo lo que `config.yaml` dice sobre él.
+
+    Vive aquí y no en un CLI porque los CLI que abren cámara son ya dos —captura
+    y demo— y el segundo tendría que importar un privado del primero. Construir
+    el detector es traducir configuración a la frontera con MediaPipe, y esa
+    frontera es este módulo (`CLAUDE.md` §3).
+
+    Devuelve el `Protocol` y no el tipo concreto: es todo lo que sus consumidores
+    necesitan —detectar, abrir, cerrar— y anotarlo así es lo que deja la puerta
+    abierta a pasarles un `FakeHandDetector` sin tocar sus firmas.
+    """
+    return MediaPipeHandDetector(
+        model_path=config.hands.model_path,
+        min_detection_score=config.segmentation.min_detection_score,
+        num_hands=config.hands.num_hands,
+        min_hand_detection_confidence=config.hands.min_hand_detection_confidence,
+        min_hand_presence_confidence=config.hands.min_hand_presence_confidence,
+        min_tracking_confidence=config.hands.min_tracking_confidence,
+        frame_interval_ms=max(1, round(1000 / config.capture.camera_fps)),
+        swap_handedness=config.hands.mediapipe_reports_mirrored_handedness,
+    )
+
+
 def _flip(side: Handedness) -> Handedness:
     return Handedness.LEFT if side is Handedness.RIGHT else Handedness.RIGHT
 
@@ -350,8 +409,23 @@ class FakeHandDetector:
         """Recorre la grabación entera desde el principio, sin consumir `detect`."""
         yield from self.slots
 
+    def open(self) -> FakeHandDetector:
+        """No hay nada que abrir: la grabación ya está en memoria.
+
+        Existe porque el ciclo de vida es parte del `Protocol`, y sin él el fake
+        no sería sustituible donde va el real. Que abrir no cueste nada aquí es
+        justo lo que se quiere de un doble.
+        """
+        return self
+
     def close(self) -> None:
         self._position = 0
+
+    def __enter__(self) -> FakeHandDetector:
+        return self.open()
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 # --------------------------------------------------------------------------- #
