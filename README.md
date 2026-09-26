@@ -190,9 +190,9 @@ Y una vez por cámara, la calibración:
 uv run lsm-capture calibrar --confirmado-por "tu nombre"
 ```
 
-Levanta la mano **derecha** y comprueba que el preview dice `RIGHT`. Si dice
-`LEFT`, cancela con `q`, **invierte** `hands.mediapipe_reports_mirrored_handedness`
-en `config.yaml` y repite.
+Levanta la mano **derecha** junto a tu hombro derecho: arriba tiene que decir
+`entrada: SIN ESPEJAR` y entonces pulsas `S`. Comprueba que la cámara no espeje la
+imagen por su cuenta (ADR 0017).
 
 El valor de fábrica (`false`, o sea "no invertir") está medido contra MediaPipe
 1.0.1 y una webcam real, no deducido de la documentación — que dice lo contrario.
@@ -238,7 +238,7 @@ mirando el archivo después no hay forma de saber cuál era cuál.
 
 ```bash
 uv run lsm-capture grabar --sesion-prueba --firmante s01 --sesion ensayo \
-  --luz-nivel INDOOR --luz-direccion FRONTAL --distancia MEDIUM
+  --mano derecha --luz-nivel INDOOR --luz-direccion FRONTAL --distancia MEDIUM
 ```
 
 Escribe en `data/raw/pruebas/`, que no entra al dataset, y no exige el glosario

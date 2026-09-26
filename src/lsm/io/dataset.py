@@ -22,8 +22,9 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
 
@@ -40,13 +41,36 @@ from lsm.types import (
     LightLevel,
     Sample,
     SampleKind,
+    Sequence,
 )
 
 #: Versión del formato de archivo de una muestra. Un archivo de otra versión se
 #: rechaza al cargar, igual que un modelo exportado con otro `feature_spec`: leer
 #: un esquema viejo "lo mejor que se pueda" es la forma de meter basura en el
 #: dataset sin que nada avise.
-SAMPLE_SCHEMA_VERSION: Final = 2
+#:
+#: **v3** (ADR 0017): `handedness` es la mano **declarada** por quien firma, y
+#: `handedness_source` dice de dónde salió. La v2 se sigue leyendo —es todo el
+#: dataset de la Fase 1—, con `handedness_source = DETECTED`: ahí `handedness`
+#: es la etiqueta de MediaPipe, que la captura exigía constante en toda la
+#: muestra.
+SAMPLE_SCHEMA_VERSION: Final = 3
+
+#: Versiones que se leen. Solo la actual se escribe.
+READABLE_SAMPLE_SCHEMAS: Final = frozenset({2, 3})
+
+
+class HandSource(StrEnum):
+    """De dónde sale la `handedness` de una muestra."""
+
+    #: La declaró quien firma al abrir la sesión (`--mano`). Schema v3.
+    DECLARED = "DECLARED"
+    #: La dijo MediaPipe, igual en todos los frames (la captura rechazaba las
+    #: muestras con lateralidad mixta). Todo el dataset grabado antes del ADR
+    #: 0017. Si MediaPipe se equivocó de forma sostenida en una muestra entera,
+    #: aquí no hay manera de saberlo.
+    DETECTED = "DETECTED"
+
 
 #: Versión del registro de consentimiento.
 CONSENT_SCHEMA_VERSION: Final = 1
@@ -126,6 +150,8 @@ class SampleMetadata:
     #: semántica; `handedness_swapped` es cómo se llegó a ella.
     handedness_convention: HandednessConvention = HANDEDNESS_CONVENTION
     capture_spec_version: int = CAPTURE_SPEC_VERSION
+    #: De dónde sale `handedness`. Ver `HandSource`.
+    handedness_source: HandSource = HandSource.DECLARED
     #: Nombre del archivo de video junto a la muestra, o `None`. Solo se rellena
     #: con consentimiento explícito por escrito (`ARQUITECTURA.md` §4.11).
     video: str | None = None
@@ -165,8 +191,21 @@ class StoredSample:
             raise DatasetError(msg)
 
         meta = self.metadata
+        # La mano de la muestra gobierna a todos sus frames: es la declarada
+        # (`feature-spec.md` §1, paso 2, v2). Lo que dijo el detector se conserva
+        # en `detected_handedness` y no decide nada.
+        declarada = Sequence(
+            frames=tuple(
+                replace(
+                    frame,
+                    handedness=meta.handedness,
+                    detected_handedness=frame.detected_handedness or frame.handedness,
+                )
+                for frame in runs[0].frames
+            )
+        )
         return Sample(
-            sequence=runs[0],
+            sequence=declarada,
             label=meta.label,
             signer_id=meta.signer_id,
             session_id=meta.session_id,
@@ -261,6 +300,7 @@ def write_sample(root: Path, sample: StoredSample, index: int | None = None) -> 
         "arc_length": meta.arc_length,
         "handedness_swapped": meta.handedness_swapped,
         "handedness_convention": str(meta.handedness_convention),
+        "handedness_source": str(meta.handedness_source),
         "video": meta.video,
         "frames": frames_to_json(sample.frames),
     }
@@ -277,10 +317,10 @@ def read_sample(path: Path) -> StoredSample:
     """Lee una muestra. Rechaza los archivos de otra versión de esquema."""
     payload: Any = json.loads(path.read_text(encoding="utf-8"))
     version = payload.get("schema_version")
-    if version != SAMPLE_SCHEMA_VERSION:
+    if version not in READABLE_SAMPLE_SCHEMAS:
         msg = (
-            f"{path}: schema_version {version} incompatible; este código lee la "
-            f"versión {SAMPLE_SCHEMA_VERSION}"
+            f"{path}: schema_version {version} incompatible; este código lee las "
+            f"versiones {sorted(READABLE_SAMPLE_SCHEMAS)}"
         )
         raise DatasetError(msg)
 
@@ -306,6 +346,11 @@ def read_sample(path: Path) -> StoredSample:
         handedness_swapped=bool(payload["handedness_swapped"]),
         handedness_convention=HandednessConvention(payload["handedness_convention"]),
         capture_spec_version=payload["capture_spec_version"],
+        handedness_source=(
+            HandSource(payload["handedness_source"])
+            if version >= 3
+            else HandSource.DETECTED
+        ),
         video=payload.get("video"),
     )
     return StoredSample(metadata=metadata, frames=frames_from_json(payload["frames"]))

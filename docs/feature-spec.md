@@ -1,6 +1,13 @@
-# Especificación de Features — v1
+# Especificación de Features — v2
 
-**`FEATURE_SPEC_VERSION = 1`**
+**`FEATURE_SPEC_VERSION = 2`**
+
+> **v2** (2026-09-26, `docs/adr/0017-diagnostico-de-tracking.md`): la lateralidad
+> que entra al paso 2 es la **mano declarada** de la sesión, no la etiqueta que el
+> detector pone a cada frame. Las cuentas de los §1 a §6 no cambian; cambia de
+> dónde sale la entrada `handedness`, y un modelo v1 se entrenó con la otra. El
+> modelo exportado deja de llevar `handedness_convention` y lleva
+> `detector_input = "UNMIRRORED"` (§0.3).
 
 Este documento es un **contrato**. Define la transformación exacta desde los
 landmarks crudos de MediaPipe hasta el vector de características que consumen los
@@ -42,22 +49,36 @@ MediaPipe Hands entrega 21 landmarks por mano, cada uno con `(x, y, z)`:
 ### 0.2 Metadatos requeridos por frame
 
 - `width`, `height` del frame en píxeles
-- `handedness` ∈ `{LEFT, RIGHT}` y su score
+- `handedness` ∈ `{LEFT, RIGHT}`: **la mano declarada** de la sesión (v2). La
+  declara quien firma al abrir la captura o la demo (`--mano`) y es la misma en
+  todos los frames. La etiqueta del detector viaja aparte, como
+  `detected_handedness` con su score, y **no entra en ningún paso**: con la palma
+  de lado MediaPipe cambia de opinión a mitad de un trazo —217 veces en una
+  sesión de diagnóstico—, y cada cambio espejaba la mano de un frame al
+  siguiente (ADR 0017).
 - `detection_score`
 
 ### 0.3 Convenciones obligatorias de captura
 
 > **MediaPipe recibe siempre el frame sin espejar.** El espejado del preview (que se
 > hace por comodidad del usuario) ocurre únicamente en la capa de visualización. Si
-> se alimenta a MediaPipe la imagen espejada, la lateralidad reportada se invierte y
-> el paso 2 de esta especificación corrompe el vector de forma silenciosa.
+> se alimenta a MediaPipe la imagen espejada, la mano declarada derecha llega con la
+> geometría de una izquierda, el paso 2 la canoniza hacia el reflejo y el vector se
+> corrompe de forma silenciosa. Desde la v2 es **esto** lo que se verifica
+> (`lsm-capture calibrar`, geométricamente: la mano derecha levantada junto al
+> hombro derecho tiene que aparecer en la mitad izquierda de la imagen) y lo que
+> el modelo exportado declara en `detector_input`.
 
 - Si se detectan varias manos, se usa la de mayor `detection_score`. El alfabeto
   dactilológico de LSM es monomanual.
 - Si no se detecta ninguna mano, el frame se marca **inválido**. Los frames
   inválidos no se interpolan: interrumpen la secuencia.
 
-> **Nota (no altera ningún paso ni la versión del spec).** Lo anterior dice qué
+> **Nota — desde la v2 solo afecta a `detected_handedness`**, que es diagnóstico:
+> la etiqueta ya no llega al paso 2. Se conserva el texto porque la etiqueta sigue
+> sirviendo para el aviso «¿cambiaste de mano?» y para el diagnóstico de tracking.
+>
+> Lo anterior dice qué
 > imagen recibe el detector. Qué etiqueta **devuelve** es otra cosa, y en MediaPipe
 > las dos no coinciden: determina la lateralidad *asumiendo que la imagen está
 > espejada*, que es como se ve una persona en una cámara frontal. Alimentado sin
@@ -94,6 +115,10 @@ p_i.z ←  p_i.z * a
 ```
 
 ### Paso 2 — Canonicalización de lateralidad
+
+`handedness` es la **mano declarada** (§0.2), no la que diga el detector. Nunca
+se infiere ni se vota: una votación sobre la etiqueta del detector fallaría justo
+en las letras con la palma de lado y volcaría el trazo entero sin ningún síntoma.
 
 Todas las muestras se llevan a una mano derecha canónica. Esto evita duplicar el
 dataset y permite que una persona zurda use un modelo entrenado por diestros.

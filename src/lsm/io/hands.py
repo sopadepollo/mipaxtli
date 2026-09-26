@@ -194,6 +194,11 @@ class MediaPipeHandDetector:
     #: Ver el bloque sobre lateralidad de la docstring de la clase. Medido, no
     #: deducido: con MediaPipe 1.0.1 no hay que invertir nada.
     swap_handedness: bool = False
+    #: La mano que declaró quien firma. Si está, es la `handedness` de cada frame
+    #: y la etiqueta de MediaPipe se guarda aparte en `detected_handedness`, solo
+    #: para diagnóstico (ADR 0017). `None` deja la etiqueta del detector: solo lo
+    #: usa `lsm-capture calibrar`, que no necesita canonizar nada.
+    declared_hand: Handedness | None = None
 
     _landmarker: Any = field(default=None, init=False, repr=False)
     _elapsed_ms: int = field(default=0, init=False, repr=False)
@@ -325,7 +330,8 @@ class MediaPipeHandDetector:
             ),
             width=width,
             height=height,
-            handedness=side,
+            handedness=self.declared_hand or side,
+            detected_handedness=side,
             # MediaPipe Tasks expone **un solo** número de confianza por mano: el
             # de la clasificación de lateralidad. La confianza de detección de la
             # palma se consume dentro del grafo, vía
@@ -336,6 +342,16 @@ class MediaPipeHandDetector:
             handedness_score=best_score,
             detection_score=best_score,
         )
+
+    @property
+    def timestamp_ms(self) -> int:
+        """La marca de tiempo que recibió MediaPipe en el último `detect`.
+
+        Es **nominal**: avanza `frame_interval_ms` por cuadro, no el tiempo real.
+        El diagnóstico de tracking la registra junto al reloj de verdad para ver
+        cuánto difieren (`src/lsm/tracking_diagnostics.py`).
+        """
+        return self._elapsed_ms
 
     def close(self) -> None:
         """Libera el modelo. Idempotente: cerrar dos veces no es un error."""
@@ -351,7 +367,9 @@ class MediaPipeHandDetector:
         self.close()
 
 
-def build_detector(config: Config) -> HandDetector:
+def build_detector(
+    config: Config, declared_hand: Handedness | None = None
+) -> HandDetector:
     """El detector real, con todo lo que `config.yaml` dice sobre él.
 
     Vive aquí y no en un CLI porque los CLI que abren cámara son ya dos —captura
@@ -372,6 +390,7 @@ def build_detector(config: Config) -> HandDetector:
         min_tracking_confidence=config.hands.min_tracking_confidence,
         frame_interval_ms=max(1, round(1000 / config.capture.camera_fps)),
         swap_handedness=config.hands.mediapipe_reports_mirrored_handedness,
+        declared_hand=declared_hand,
     )
 
 
@@ -493,6 +512,9 @@ def _slot_to_json(slot: FrameSlot) -> dict[str, Any]:
         "handedness": str(slot.handedness),
         "handedness_score": slot.handedness_score,
         "detection_score": slot.detection_score,
+        "detected_handedness": (
+            str(slot.detected_handedness) if slot.detected_handedness else None
+        ),
         "landmarks": [[point.x, point.y, point.z] for point in slot.landmarks],
     }
 
@@ -513,4 +535,16 @@ def _slot_from_json(entry: dict[str, Any]) -> FrameSlot:
         handedness=Handedness(entry["handedness"]),
         handedness_score=entry["handedness_score"],
         detection_score=entry["detection_score"],
+        # Los archivos anteriores a la mano declarada no traen la clave: en ellos
+        # `handedness` ES lo que dijo el detector. Si la clave está y vale null,
+        # es que no se supo, y así vuelve.
+        detected_handedness=(
+            Handedness(entry["handedness"])
+            if "detected_handedness" not in entry
+            else (
+                Handedness(entry["detected_handedness"])
+                if entry["detected_handedness"] is not None
+                else None
+            )
+        ),
     )

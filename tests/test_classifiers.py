@@ -108,7 +108,7 @@ def test_el_export_lleva_los_siete_campos_del_contrato() -> None:
     assert set(payload) == {
         "schema_version",
         "feature_spec_version",
-        "handedness_convention",
+        "detector_input",
         "classifier",
         "labels",
         "params",

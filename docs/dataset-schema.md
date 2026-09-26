@@ -140,7 +140,8 @@ grabó**, y sirven para auditar el dataset sin volver a procesarlo:
 | `dispersion` | La σ del `feature-spec.md` §2 en el momento de aceptar. Decide en las estáticas. Se guarda también en las dinámicas, donde no decide: al leer la primera matriz de confusión permite preguntar si las muestras peores eran las más temblorosas, y esa pregunta no se puede hacer si el número no se guardó. |
 | `arc_length` | Longitud de arco de la trayectoria τ (§3.1), en unidades de mano. El espejo del anterior: decide en las dinámicas y se guarda sin decidir en las estáticas. |
 | `handedness_swapped` | Valor **efectivo** de `hands.mediapipe_reports_mirrored_handedness` al grabar. Ver abajo. |
-| `handedness_convention` | Qué mano nombra `handedness`: `SIGNER` (la anatómica de quien firma) o `IMAGE` (la de la imagen espejada). Es la promesa semántica; `handedness_swapped` es cómo se llegó a ella. |
+| `handedness_source` | Esquema v3 (ADR 0017): `DECLARED` si `handedness` es la mano declarada con `--mano`; `DETECTED` en las muestras v2, donde es la etiqueta de MediaPipe, constante en toda la muestra. Desde la v3 `handedness` es la mano **declarada** y cada frame guarda aparte lo que dijo el detector en `detected_handedness`. |
+| `handedness_convention` | Legado de la v2. Qué mano nombra `handedness`: `SIGNER` (la anatómica de quien firma) o `IMAGE` (la de la imagen espejada). Es la promesa semántica; `handedness_swapped` es cómo se llegó a ella. |
 | `video` | Nombre del archivo de video hermano, o `null`. **Nunca se rellena sin consentimiento registrado.** |
 
 `video: null` se escribe explícitamente y no se omite: una clave que falta se

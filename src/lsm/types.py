@@ -129,6 +129,14 @@ class HandednessConvention(StrEnum):
 #: dependen de esto, solo su etiqueta de lateralidad.
 HANDEDNESS_CONVENTION: Final = HandednessConvention.SIGNER
 
+#: Cómo llega el cuadro al detector. Viaja en el modelo exportado en lugar de la
+#: antigua `handedness_convention`: desde que la mano es la **declarada** (ADR
+#: 0017), qué nombre le pone MediaPipe ya no decide nada, y lo que dos
+#: implementaciones tienen que compartir es que el cuadro llega **sin espejar**
+#: (`feature-spec.md` §0.3). Con un cuadro espejado la mano declarada derecha
+#: se vería como una izquierda y todo el vector saldría reflejado.
+DETECTOR_INPUT: Final = "UNMIRRORED"
+
 
 class LightLevel(StrEnum):
     """Cuánta luz hay (`ARQUITECTURA.md` §4.7).
@@ -236,9 +244,17 @@ class RawFrame:
     landmarks: tuple[Landmark, ...]
     width: int
     height: int
+    #: La mano **declarada** de la sesión (`FEATURE_SPEC_VERSION` 2). Es la que
+    #: decide el espejo del paso 2 de `feature-spec.md`. La pone quien construye
+    #: el frame: el adaptador del detector con la mano que declaró quien firma.
     handedness: Handedness
+    #: Score de la lateralidad que dijo el detector (no de `handedness`).
     handedness_score: float
     detection_score: float
+    #: Lo que **dijo MediaPipe**, solo para diagnóstico: no entra en ningún paso
+    #: del contrato. Con la palma de lado cambia de opinión a mitad de un trazo
+    #: (ADR 0017), y por eso dejó de decidir el espejo. `None` si no se sabe.
+    detected_handedness: Handedness | None = None
 
     def __post_init__(self) -> None:
         if len(self.landmarks) != NUM_LANDMARKS:

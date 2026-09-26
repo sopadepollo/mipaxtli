@@ -31,7 +31,6 @@ from lsm.synthetic import (
     canonical_hand,
     collapsed_scale,
     fist_hand,
-    mirrored_x,
     moving_sequence,
     still_sequence,
     to_frame,
@@ -413,28 +412,35 @@ def test_una_dinamica_admite_menos_frames_que_una_estatica() -> None:
     assert minimum_frames(SampleKind.STATIC, config) == config.capture.static_frames
 
 
-def test_cambiar_de_mano_a_mitad_de_muestra_la_rechaza() -> None:
-    """El paso 2 espeja en X según este valor: media muestra saldría reflejada
-    respecto de la otra media y el vector promedio describiría una mano que no
-    existe."""
+def test_una_etiqueta_de_mediapipe_que_cambia_ya_no_rechaza_la_muestra() -> None:
+    """Hasta el ADR 0017 esto era `MIXED_HANDEDNESS`: si MediaPipe cambiaba de
+    etiqueta a mitad de muestra, se rechazaba. Con la mano **declarada** ese caso
+    deja de existir: todos los frames llevan la mano de la sesión, y lo que diga
+    MediaPipe viaja aparte en `detected_handedness` sin decidir nada. Rechazarlo
+    sesgaba el dataset hacia los intentos en que MediaPipe no dudó —justo los de
+    la J y la Q con la palma de frente—."""
+    from dataclasses import replace
+
     config = Config()
     derecha = to_frame(canonical_hand(), width=1280, height=720)
-    izquierda = to_frame(
-        mirrored_x(canonical_hand()),
-        width=1280,
-        height=720,
-        handedness=Handedness.LEFT,
-    )
     mitad = config.capture.static_frames // 2
     frames = tuple(
-        BufferedFrame(slot=derecha if indice < mitad else izquierda, luminance=LUZ)
+        BufferedFrame(
+            slot=replace(
+                derecha,
+                detected_handedness=(
+                    Handedness.RIGHT if indice < mitad else Handedness.LEFT
+                ),
+            ),
+            luminance=LUZ,
+        )
         for indice in range(config.capture.static_frames)
     )
 
     quality = evaluate_window(frames, SampleKind.STATIC, config)
 
-    assert quality.rejection is Rejection.MIXED_HANDEDNESS
-    assert quality.handedness is None
+    assert quality.rejection is None
+    assert quality.handedness is Handedness.RIGHT
 
 
 def test_una_mano_degenerada_se_rechaza_sin_dividir_por_cero() -> None:

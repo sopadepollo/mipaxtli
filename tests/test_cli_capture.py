@@ -626,6 +626,8 @@ def _argumentos_grabar(tmp_path: Path, glosario: Path, *prueba: str) -> list[str
         "s01",
         "--sesion",
         "sesion-a",
+        "--mano",
+        "derecha",
         "--luz-nivel",
         "INDOOR",
         "--luz-direccion",
@@ -744,8 +746,7 @@ def test_una_calibracion_registrada_queda_legible(tmp_path: Path) -> None:
         tmp_path,
         Calibration(
             camera=camara,
-            swap_handedness=True,
-            convention=HANDEDNESS_CONVENTION,
+            entrada_sin_espejar=True,
             fecha=datetime(2026, 9, 8, tzinfo=UTC),
             width=1280,
             height=720,
@@ -755,7 +756,7 @@ def test_una_calibracion_registrada_queda_legible(tmp_path: Path) -> None:
 
     from lsm.io.calibration import current_calibration
 
-    vigente = current_calibration(tmp_path, camara, swap_handedness=True)
+    vigente = current_calibration(tmp_path, camara)
 
     assert vigente is not None
     assert vigente.width == 1280

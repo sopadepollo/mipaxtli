@@ -358,6 +358,21 @@ class HandsConfig(_Section):
     #: no arranca sin ese registro.
     mediapipe_reports_mirrored_handedness: bool = Field(default=False)
 
+    #: Score mínimo de la etiqueta de MediaPipe para que su contradicción con la
+    #: mano declarada cuente hacia el aviso «¿cambiaste de mano?»
+    #: (`src/lsm/hand_check.py`). Solo avisa: nunca cambia la mano declarada.
+    #:
+    #: **Punto de partida, no medido.** En las sesiones de diagnóstico del ADR
+    #: 0017 los cambios espurios de etiqueta a mitad de trazo tenían un score
+    #: mínimo mediano de 0.72, y las etiquetas estables uno de 0.99: 0.9 queda
+    #: entre las dos.
+    mismatch_min_score: float = Field(default=0.9, gt=0.5, le=1.0)
+
+    #: Cuánto tiempo seguido, con la mano **quieta**, tiene que contradecir la
+    #: etiqueta a la mano declarada antes de avisar, en milisegundos. Largo a
+    #: propósito: los parpadeos de un trazo duran cuadros, no segundos.
+    mismatch_ms: float = Field(default=1500.0, gt=0.0, le=60000.0)
+
 
 class SpellingConfig(_Section):
     """Acumulación de letras en palabras (`ARQUITECTURA.md` §4.2)."""
@@ -403,6 +418,29 @@ class TelemetryConfig(_Section):
     #: de 1800 cuadros son los 90 peores— y lo bastante corto para repetirlo tras
     #: cada ajuste.
     benchmark_seconds: float = Field(default=60.0, gt=0.0, le=3600.0)
+
+
+class DiagnosticsConfig(_Section):
+    """Diagnóstico de pérdidas de tracking (`src/lsm/tracking_diagnostics.py`).
+
+    No decide nada en la tubería: solo cómo se mide y se reporta una sesión de
+    diagnóstico (`lsm-demo diagnosticar`, `lsm-demo --diagnostico`).
+    """
+
+    #: Cuánto antes de entrar a DYNAMIC_CANDIDATE se sigue considerando «dentro
+    #: del trazo», en milisegundos. El candidato nace a mitad del movimiento
+    #: —tras `motion_min_ms`—, y las pérdidas del principio del trazo caen antes
+    #: de esa entrada: sin esta ventana se contarían como pérdidas de mano quieta.
+    pre_candidate_ms: float = Field(default=300.0, ge=0.0, le=10000.0)
+
+    #: Repeticiones por letra dinámica en la sesión guiada.
+    repetitions_per_letter: int = Field(default=10, ge=1, le=100)
+
+    #: Ancho, en píxeles, de la miniatura en escala de grises con la que se
+    #: reconoce un cuadro duplicado. Pequeña para que el ruido del sensor no
+    #: cambie la huella de un cuadro que la cámara repitió tal cual, y grande
+    #: para que dos cuadros distintos con la mano quieta no coincidan.
+    duplicate_thumbnail_px: int = Field(default=32, ge=4, le=640)
 
 
 class CaptureConfig(_Section):
@@ -455,6 +493,11 @@ class CaptureConfig(_Section):
     #: Meta de repeticiones por letra y sesión. Solo alimenta el contador en
     #: pantalla: nada se bloquea al alcanzarla.
     target_samples_per_label: int = Field(default=20, ge=1, le=1000)
+
+    #: Cuadros seguidos con la mano levantada del lado correcto de la imagen
+    #: que `lsm-capture calibrar` exige antes de dejar confirmar que la entrada
+    #: llega sin espejar (`lsm.hand_check.input_looks_unmirrored`).
+    calibration_frames: int = Field(default=15, ge=1, le=1000)
 
     @model_validator(mode="after")
     def _coherencia_de_la_captura(self) -> CaptureConfig:
@@ -536,6 +579,7 @@ class Config(_Section):
     spelling: SpellingConfig = Field(default_factory=SpellingConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     signs: SignsConfig = Field(default_factory=SignsConfig)
+    diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
 
     @model_validator(mode="after")
     def _la_captura_alcanza_para_el_canal_dinamico(self) -> Config:

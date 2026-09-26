@@ -299,6 +299,20 @@ hands:
   # `lsm-capture calibrar` lo verifica y lo registra, y `grabar` no arranca sin
   # ese registro. Cambiar este valor invalida las calibraciones anteriores.
   mediapipe_reports_mirrored_handedness: false
+  #
+  # DESDE EL ADR 0017 la etiqueta de MediaPipe ya NO decide el espejo del paso 2:
+  # lo decide la mano DECLARADA al abrir la sesión (`--mano`). El interruptor de
+  # arriba solo afecta a la etiqueta que se guarda para diagnóstico. Lo que
+  # `lsm-capture calibrar` comprueba ahora es que el cuadro llega al detector
+  # sin espejar.
+
+  # Aviso «¿cambiaste de mano?»: MediaPipe contradice a la mano declarada con
+  # score >= mismatch_min_score durante mismatch_ms seguidos con la mano quieta.
+  # Solo avisa; nunca cambia la mano declarada. Puntos de partida, no medidos:
+  # en el diagnóstico del ADR 0017 los cambios espurios de etiqueta a mitad de
+  # trazo tenían score mínimo mediano 0.72 y las etiquetas estables 0.99.
+  mismatch_min_score: 0.9
+  mismatch_ms: 1500.0
 
 # Recolección de dataset (src/lsm/cli/capture.py, ARQUITECTURA.md §4.7).
 capture:
@@ -357,6 +371,11 @@ capture:
   # pantalla: al alcanzarla no se bloquea nada. ARQUITECTURA.md §4.7 pide ~20 por
   # letra, 2 sesiones por persona, 3 personas.
   target_samples_per_label: 20
+
+  # Cuadros seguidos con la mano levantada del lado correcto que exige
+  # `lsm-capture calibrar` antes de dejar confirmar que la entrada no va
+  # espejada. Medio segundo largo: suficiente para que no sea un cuadro suelto.
+  calibration_frames: 15
 
 # Instrumentación de la tasa de cuadros (src/lsm/telemetry.py).
 #
@@ -440,3 +459,23 @@ signs:
   # Espera de waitKey en cada vuelta del bucle de la ventana. No es el dt del
   # reproductor —ese se mide con el reloj—, solo cada cuánto se lee el teclado.
   tick_ms: 33
+
+# Diagnóstico de pérdidas de tracking (src/lsm/tracking_diagnostics.py, Fase 5.1).
+#
+# No cambia nada de la tubería: solo cómo se mide una sesión de
+# `lsm-demo diagnosticar` o `lsm-demo --diagnostico`. Los parámetros del
+# detector que se diagnostican son los de la sección `hands`, y cada reporte
+# los registra en sus metadatos.
+diagnostics:
+  # Cuánto antes de entrar a DYNAMIC_CANDIDATE cuenta como «dentro del trazo».
+  # El candidato nace tras motion_min_ms de movimiento; lo que se pierde al
+  # principio del trazo cae antes y no debe contarse como mano quieta.
+  pre_candidate_ms: 300.0
+
+  # Repeticiones por letra dinámica en la sesión guiada.
+  repetitions_per_letter: 10
+
+  # Ancho de la miniatura en grises con la que se reconoce un cuadro repetido
+  # por la cámara. Pequeña para que el ruido del sensor no la cambie; grande
+  # para que dos cuadros distintos con la mano quieta no coincidan.
+  duplicate_thumbnail_px: 32

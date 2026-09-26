@@ -15,12 +15,14 @@ Hay dos premisas que se comprueban así, y las dos fallan en silencio:
 
 - `feature_spec_version` — si cambia la normalización, los números del modelo
   dejan de significar lo que significaban.
-- `handedness_convention` — si las dos implementaciones no coinciden en qué mano
-  nombra `handedness`, el paso 2 canoniza hacia manos contrarias y el modelo
-  confunde cada seña con su espejo. **Los golden vectors no lo detectan**: reciben
-  la lateralidad ya resuelta como entrada, así que el test de paridad de la Fase 7
-  pasaría en verde con la app web reconociendo al revés. Ver
-  `types.HandednessConvention`.
+- `detector_input` — que el cuadro llega al detector **sin espejar**
+  (`feature-spec.md` §0.3). Desde `FEATURE_SPEC_VERSION` 2 el espejo del paso 2
+  lo decide la mano declarada, no la etiqueta del detector, así que lo que dos
+  implementaciones tienen que compartir ya no es qué nombre le pone MediaPipe a
+  la mano sino cómo le llega la imagen: con un cuadro espejado, una derecha
+  declarada se vería como izquierda y el modelo confundiría cada seña con su
+  espejo. **Los golden vectors no lo detectan**: reciben landmarks ya
+  detectados. Reemplaza a la antigua `handedness_convention` (ADR 0017).
 
 Código puro: sin disco, sin cámara, sin MediaPipe.
 """
@@ -31,7 +33,7 @@ from collections.abc import Mapping
 from typing import Any, Final, Protocol, runtime_checkable
 
 from lsm.features import FEATURE_SPEC_VERSION
-from lsm.types import HANDEDNESS_CONVENTION, Prediction, Sample, Sequence
+from lsm.types import DETECTOR_INPUT, Prediction, Sample, Sequence
 
 #: Versión del formato de archivo del modelo exportado. Cambia cuando cambia la
 #: estructura del JSON; es independiente de `feature_spec_version`, que cambia
@@ -42,7 +44,7 @@ SCHEMA_VERSION: Final = 1
 REQUIRED_EXPORT_FIELDS: Final = (
     "schema_version",
     "feature_spec_version",
-    "handedness_convention",
+    "detector_input",
     "classifier",
     "labels",
     "params",
@@ -107,7 +109,7 @@ def build_export(
     return {
         "schema_version": SCHEMA_VERSION,
         "feature_spec_version": FEATURE_SPEC_VERSION,
-        "handedness_convention": str(HANDEDNESS_CONVENTION),
+        "detector_input": DETECTOR_INPUT,
         "classifier": classifier,
         "labels": labels,
         "params": params,
@@ -144,12 +146,11 @@ def check_export_compatibility(payload: Mapping[str, Any]) -> None:
         )
         raise IncompatibleModelError(msg)
 
-    if payload["handedness_convention"] != str(HANDEDNESS_CONVENTION):
+    if payload["detector_input"] != DETECTOR_INPUT:
         msg = (
-            f"handedness_convention {payload['handedness_convention']!r} "
-            f"incompatible: este runtime usa {str(HANDEDNESS_CONVENTION)!r}. "
-            "El modelo se entrenó con la lateralidad canonizada hacia la mano "
-            "contraria, así que confundiría cada seña con su espejo — y lo haría "
-            "con la misma confianza que si acertara."
+            f"detector_input {payload['detector_input']!r} incompatible: este "
+            f"runtime alimenta al detector con cuadros {DETECTOR_INPUT!r}. Un "
+            "modelo entrenado con la imagen espejada confundiría cada seña con su "
+            "espejo, y con la misma confianza que si acertara."
         )
         raise IncompatibleModelError(msg)

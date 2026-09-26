@@ -122,17 +122,20 @@ curl -sSL -o data/models/hand_landmarker.task \
 uv run lsm-capture calibrar --confirmado-por "tu nombre"
 ```
 
-Levanta la mano **derecha** y comprueba que el preview dice `RIGHT`. Si dice
-`LEFT`, cancela con `q`, invierte `hands.mediapipe_reports_mirrored_handedness`
-en `config.yaml` y repite.
+Levanta la mano **derecha** junto a tu hombro derecho, con la palma hacia la
+cámara, y déjala ahí. Arriba tiene que decir `entrada: SIN ESPEJAR`; entonces
+pulsa `S`. Si dice `ESPEJADA`, la cámara o su driver espejan la imagen por su
+cuenta: desactívalo en la configuración de la webcam y repite.
 
-**Este minuto no se salta**, y `grabar` se niega a abrir la cámara sin él. Si el
-ajuste está al revés no pasa nada visible: el modelo entrena igual de bien y la
-precisión es idéntica. El error solo aparece en la Fase 7, cuando la app web
-confunda cada seña con su espejo. Ninguna prueba automática lo detecta; solo un
-ojo humano. Ver `docs/adr/0007-cierre-de-captura.md`.
+Desde el ADR 0017 no se comprueba qué **nombre** le pone MediaPipe a la mano —ese
+nombre ya no decide el espejo del contrato, lo decide la mano que declaras con
+`--mano`— sino que la imagen llega al detector **sin espejar**. Es un error que
+no se ve: con la entrada espejada tu mano derecha se trataría como izquierda y
+todo el dataset saldría reflejado. Las calibraciones hechas antes del ADR 0017 no
+valen: `grabar` pide repetirla una vez.
 
-La calibración se invalida sola si cambias de cámara, de resolución o ese ajuste.
+**Este minuto no se salta**, y `grabar` se niega a abrir la cámara sin él.
+La calibración se invalida sola si cambias de cámara o de resolución.
 
 ### 4.3 Consentimiento, si vas a guardar video
 
@@ -153,7 +156,7 @@ Ensaya primero, sin ensuciar el dataset:
 
 ```bash
 uv run lsm-capture grabar --sesion-prueba --firmante s01 --sesion ensayo \
-  --luz-nivel INDOOR --luz-direccion FRONTAL --distancia MEDIUM
+  --mano derecha --luz-nivel INDOOR --luz-direccion FRONTAL --distancia MEDIUM
 ```
 
 Escribe en `data/raw/pruebas/`, que no entra al dataset. Es para encuadrar la
@@ -163,8 +166,15 @@ La sesión formal:
 
 ```bash
 uv run lsm-capture grabar --firmante s01 --sesion 2026-09-09-manana \
-  --luz-nivel INDOOR --luz-direccion FRONTAL --distancia MEDIUM
+  --mano derecha --luz-nivel INDOOR --luz-direccion FRONTAL --distancia MEDIUM
 ```
+
+**`--mano` es la mano con la que vas a firmar en toda la sesión** (ADR 0017). Es
+la que canoniza el contrato; lo que diga MediaPipe se guarda solo para
+diagnóstico, porque con la palma de lado cambia de opinión a mitad de una J. Para
+grabar con la otra mano, abre otra sesión. Si firmas con la mano contraria a la
+declarada, el preview pregunta **¿cambiaste de mano?** —solo pregunta, no cambia
+nada—.
 
 Las condiciones son obligatorias a propósito: anotarlas después, de memoria, no
 funciona (`docs/adr/0005-taxonomias-de-metadatos-de-captura.md`). **Varía luz y
@@ -279,7 +289,7 @@ uv run lsm-eval-dinamico --rejilla rapido --sin-reproduccion
 Necesita cámara, MediaPipe y los modelos entrenados (`make train`):
 
 ```bash
-uv run lsm-demo                          # 📷 sesión en vivo
+uv run lsm-demo --mano derecha           # 📷 sesión en vivo
 ```
 
 Carga `data/models/static_knn.json` y, si existe, `data/models/dynamic_dtw.json`
@@ -360,8 +370,8 @@ siguiente.
 ### 6.1 Medir la tasa de cuadros 📷
 
 ```bash
-uv run lsm-demo --medir-fps                    # 60 s y vuelca el resumen
-uv run lsm-demo --medir-fps --medir-segundos 20
+uv run lsm-demo --mano derecha --medir-fps                    # 60 s
+uv run lsm-demo --mano derecha --medir-fps --medir-segundos 20
 # o: make medir-fps ARGS="--medir-segundos 20"
 ```
 
@@ -440,6 +450,46 @@ vivo** arriba a la derecha del HUD, promediados sobre los últimos
 `telemetry.fps_window_frames` cuadros (30, un segundo a 30 fps). Sin verlos, «la
 demo tarda en confirmar» y «la tubería va a 9 fps» se ven exactamente igual en
 pantalla.
+
+### 6.2 Diagnosticar pérdidas de tracking 📷
+
+Para saber **por qué** se pierde la mano a mitad de una letra dinámica (Fase 5.1,
+Bloque 0). Una sesión guiada pide cada una de las ocho dinámicas diez veces:
+
+```bash
+uv run lsm-demo diagnosticar --mano derecha --iluminacion habitual
+uv run lsm-demo diagnosticar --mano derecha --iluminacion lampara
+# o: make diagnostico ARGS="--iluminacion habitual"
+```
+
+En pantalla, abajo, dice qué letra hacer y cuántas van. **ESPACIO** da la
+repetición por hecha, **BACKSPACE** la descarta y la vuelve a pedir, **q**
+termina (lo registrado hasta ese momento se escribe igual). Hacer cada letra
+como en un deletreo normal, con la mano quieta un momento antes y después.
+
+Al salir escribe en `data/diagnostico/<fecha>-<iluminacion>/`:
+
+| Archivo | Qué es |
+|---|---|
+| `diagnostico.md` | el reporte: detección dentro de los trazos contra mano quieta, huecos en frames y ms, correlación de las pérdidas con velocidad y luminancia, fps reales sin cuadros duplicados, y una fila por repetición |
+| `diagnostico.json` | lo mismo más cada cuadro registrado, para rehacer el análisis |
+| `flujo.json` | los landmarks de la sesión, para reproducir sus huecos sin cámara |
+
+`data/` no se versiona: esos archivos llevan landmarks de quien firma.
+
+Cualquier sesión en vivo se puede instrumentar igual, deletreando libremente:
+`uv run lsm-demo --mano derecha --diagnostico habitual`.
+
+Los parámetros del detector que se diagnostican están en la sección `hands` de
+`config.yaml` y quedan anotados en la cabecera de cada reporte. MediaPipe Tasks
+no expone un score de presencia: el reporte registra si hubo mano, el motivo del
+frame inválido y el score de lateralidad, que es el único número que devuelve.
+
+Desde Windows, como la demo en vivo (ver 6.1):
+
+```powershell
+& $HOME\lsm-win\Scripts\python.exe -m lsm.cli.demo diagnosticar --iluminacion habitual
+```
 
 ---
 

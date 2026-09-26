@@ -49,9 +49,10 @@ from lsm.capture import (
     explain,
     minimum_frames,
 )
-from lsm.cli import MENSAJE_SIN_EXTRAS
+from lsm.cli import AYUDA_MANO, MANOS, MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
 from lsm.features import ExtractionRejected, extract_sequence_features
+from lsm.hand_check import HandMismatchWatcher, input_looks_unmirrored
 from lsm.io.calibration import (
     Calibration,
     CalibrationError,
@@ -82,9 +83,9 @@ from lsm.io.glossary import DEFAULT_GLOSSARY, is_validated
 from lsm.io.hands import HandDetector, build_detector
 from lsm.io.preview import HudState, draw_hud, draw_landmarks
 from lsm.types import (
-    HANDEDNESS_CONVENTION,
     Distance,
     FrameSlot,
+    Handedness,
     LightDirection,
     LightLevel,
     RawFrame,
@@ -225,7 +226,8 @@ def _cmd_grabar(args: argparse.Namespace) -> int:
 
     letras = _resolver_letras(args.letras)
     guarda_video = _resolver_video(raiz, signer_id, pedido=args.guardar_video)
-    detector = build_detector(config)
+    mano = MANOS[args.mano]
+    detector = build_detector(config, declared_hand=mano)
 
     sesion = _Sesion(
         letras=letras,
@@ -239,11 +241,7 @@ def _cmd_grabar(args: argparse.Namespace) -> int:
             # La calibración se exige con la cámara ya abierta —hace falta su
             # identificador, y ese depende de la resolución que entregue de
             # verdad— pero antes de cargar el modelo y de grabar un solo frame.
-            calibracion = require_calibration(
-                raiz,
-                _clave_de_camara(camera),
-                swap_handedness=config.hands.mediapipe_reports_mirrored_handedness,
-            )
+            calibracion = require_calibration(raiz, _clave_de_camara(camera))
             modo = "PRUEBA (no entra al dataset)" if es_prueba else "formal"
             video = "SÍ (con consentimiento registrado)" if guarda_video else "no"
             print(
@@ -251,6 +249,7 @@ def _cmd_grabar(args: argparse.Namespace) -> int:
                 f"meta {config.capture.target_samples_per_label} por letra\n"
                 f"Modo: {modo} · destino {destino}\n"
                 f"Video: {video}\n"
+                f"Mano declarada: {args.mano} ({mano.value})\n"
                 f"Calibrada el {calibracion.fecha:%Y-%m-%d} ({calibracion.camera})"
             )
             with detector:
@@ -264,6 +263,11 @@ def _cmd_grabar(args: argparse.Namespace) -> int:
                     session_id=session_id,
                     condiciones=_condiciones(args),
                     guarda_video=guarda_video,
+                    vigia=HandMismatchWatcher(
+                        config=config,
+                        declared=mano,
+                        fps=float(config.capture.camera_fps),
+                    ),
                 )
     except ImportError as error:
         print(MENSAJE_SIN_EXTRAS.format(modulo=error.name))
@@ -294,6 +298,7 @@ def _bucle(
     session_id: str,
     condiciones: Condiciones,
     guarda_video: bool,
+    vigia: HandMismatchWatcher,
 ) -> None:
     """El bucle de captura. Un cuadro por vuelta."""
     import cv2
@@ -332,7 +337,10 @@ def _bucle(
                 sesion.mensaje = "tope de frames alcanzado: ESPACIO para guardar"
 
         quality = _calidad(buffer, sesion, config)
-        lienzo = _dibujar(frame.bgr, slot, quality, sesion, config, guarda_video)
+        aviso_mano = vigia.observe(slot)
+        lienzo = _dibujar(
+            frame.bgr, slot, quality, sesion, config, guarda_video, aviso_mano
+        )
         cv2.imshow(ventana, lienzo)
 
         tecla = cv2.waitKey(1) & 0xFF
@@ -553,6 +561,7 @@ def _dibujar(
     sesion: _Sesion,
     config: Config,
     guarda_video: bool,
+    aviso_mano: bool = False,
 ) -> Any:
     """Arma el cuadro del preview: espejo, landmarks y HUD, en ese orden.
 
@@ -584,6 +593,7 @@ def _dibujar(
             grabando=None if sesion.grabando is None else len(sesion.grabando),
             mensaje=sesion.mensaje,
             guarda_video=guarda_video,
+            aviso_mano=aviso_mano,
         ),
     )
     return lienzo
@@ -594,38 +604,37 @@ def _dibujar(
 # --------------------------------------------------------------------------- #
 
 
-_GUION_CALIBRACION = """CALIBRACIÓN DE LATERALIDAD
+_GUION_CALIBRACION = """CALIBRACIÓN: QUE LA CÁMARA NO ESPEJE LA IMAGEN
 
-Levanta tu mano DERECHA delante de la cámara, con la palma hacia ella.
+Levanta tu mano DERECHA junto a tu hombro derecho, separada del cuerpo, con la
+palma hacia la cámara, y déjala ahí.
 
-Mira lo que dice el preview arriba a la derecha:
+El preview va espejado para que te veas como en un espejo, pero lo que se
+comprueba es la imagen que recibe el detector, que tiene que llegar SIN espejar
+(feature-spec.md §0.3). En ella tu lado derecho queda a la IZQUIERDA.
 
-  dice "mano: RIGHT"  ->  correcto. Pulsa S para confirmar.
-  dice "mano: LEFT"   ->  el interruptor está al revés. Pulsa Q, cambia
-                          hands.mediapipe_reports_mirrored_handedness a {contrario}
-                          en config.yaml, y vuelve a ejecutar este comando.
-  no dice nada        ->  no te está detectando: acércate o mejora la luz.
+  arriba dice "entrada: SIN ESPEJAR"  ->  correcto. Pulsa S para confirmar.
+  arriba dice "entrada: ESPEJADA"     ->  la cámara o su driver espejan la imagen
+                                          por su cuenta. Desactiva el espejo en
+                                          la configuración de la webcam y repite.
+  no dice nada                         ->  no te detecta: acércate o mejora la luz.
 
-Por qué este minuto importa: si la lateralidad está invertida, TODAS las muestras
-se canonizan hacia la mano contraria. El modelo entrenará bien, inferirá bien y la
-precisión será idéntica — el error solo aparece en la Fase 7, cuando MediaPipe JS
-use la convención contraria y la app web confunda cada seña con su espejo. No hay
-ninguna prueba automática que lo detecte, por eso hace falta un ojo humano."""
+Por qué importa: desde el ADR 0017 el espejo del contrato lo decide la mano que
+declaras, no lo que diga MediaPipe. Con la entrada espejada, tu mano derecha se
+vería como izquierda y todo el dataset saldría reflejado, sin ningún síntoma."""
 
 
 def _cmd_calibrar(args: argparse.Namespace) -> int:
-    """Confirma a ojo la lateralidad y deja constancia.
+    """Comprueba que la entrada del detector no va espejada y lo deja escrito.
 
-    Es el único punto del proyecto donde una persona aporta información que
-    ninguna prueba puede producir. Todo lo demás se comprueba solo; esto no,
-    porque el sistema no tiene forma de saber qué mano levantó quien está
-    delante.
+    La comprobación es geométrica —de qué lado de la imagen aparece la mano
+    derecha levantada— y no depende de la etiqueta de MediaPipe. Una persona
+    tiene que levantar la mano; lo que ya no tiene que hacer es leer y juzgar.
     """
     config = load_config(args.config)
     raiz: Path = args.raiz
-    swap = config.hands.mediapipe_reports_mirrored_handedness
 
-    print(_GUION_CALIBRACION.format(contrario=str(not swap).lower()))
+    print(_GUION_CALIBRACION)
     print()
 
     detector = build_detector(config)
@@ -654,19 +663,14 @@ def _cmd_calibrar(args: argparse.Namespace) -> int:
         raiz,
         Calibration(
             camera=clave,
-            swap_handedness=swap,
-            convention=HANDEDNESS_CONVENTION,
+            entrada_sin_espejar=True,
             fecha=now(),
             width=ancho,
             height=alto,
             confirmado_por=args.confirmado_por,
         ),
     )
-    print(
-        f"{ruta}: {clave} calibrada\n"
-        f"  convención: {HANDEDNESS_CONVENTION} · "
-        f"mediapipe_reports_mirrored_handedness = {str(swap).lower()}"
-    )
+    print(f"{ruta}: {clave} calibrada · la entrada del detector llega sin espejar")
     if not args.confirmado_por:
         print("  aviso: nadie firmó la confirmación. Usa --confirmado-por.")
     return 0
@@ -675,57 +679,74 @@ def _cmd_calibrar(args: argparse.Namespace) -> int:
 def _bucle_calibracion(
     *, camera: Camera, detector: HandDetector, config: Config, camara: str
 ) -> tuple[int, int] | None:
-    """Muestra la lateralidad resuelta hasta que alguien confirme o cancele.
+    """Mide de qué lado aparece la mano derecha hasta que alguien confirme.
 
-    Devuelve la resolución confirmada, o `None` si se canceló. **No hay
-    confirmación por omisión**: cerrar la ventana o pulsar `q` no calibra nada,
-    porque el valor de este registro es exactamente que alguien miró.
+    Solo deja confirmar tras `capture.calibration_frames` cuadros seguidos con la
+    mano del lado que corresponde a una entrada sin espejar: un cuadro suelto no
+    prueba nada. Devuelve la resolución confirmada, o `None` si se canceló.
     """
     import cv2
 
     ventana = "calibracion LSM"
     espejo = config.capture.preview_mirror
+    necesarios = config.capture.calibration_frames
+    racha_bien = 0
+    racha_mal = 0
 
     while True:
         frame = camera.read()
         slot = detector.detect(frame.rgb)
+        if isinstance(slot, RawFrame):
+            if input_looks_unmirrored(slot, Handedness.RIGHT):
+                racha_bien, racha_mal = racha_bien + 1, 0
+            else:
+                racha_bien, racha_mal = 0, racha_mal + 1
+        else:
+            racha_bien = racha_mal = 0
+
+        if racha_bien >= necesarios:
+            estado = "SIN ESPEJAR (S confirma)"
+        elif racha_mal >= necesarios:
+            estado = "ESPEJADA: no se puede confirmar"
+        elif isinstance(slot, RawFrame):
+            estado = "midiendo..."
+        else:
+            estado = "--"
 
         lienzo = cv2.flip(frame.bgr, 1) if espejo else frame.bgr.copy()
         if isinstance(slot, RawFrame):
             draw_landmarks(lienzo, slot, mirrored=espejo)
-        _dibujar_calibracion(lienzo, slot, camara)
+        _dibujar_calibracion(lienzo, estado, camara)
         cv2.imshow(ventana, lienzo)
 
         tecla = cv2.waitKey(1) & 0xFF
         if tecla in _SALIR:
             cv2.destroyWindow(ventana)
             return None
-        if tecla in _CONFIRMAR and isinstance(slot, RawFrame):
+        if tecla in _CONFIRMAR and racha_bien >= necesarios:
             cv2.destroyWindow(ventana)
             return (frame.width, frame.height)
 
 
-def _dibujar_calibracion(imagen: Any, slot: FrameSlot, camara: str) -> None:
-    """El HUD mínimo de la calibración: la mano detectada, en grande."""
+def _dibujar_calibracion(imagen: Any, estado: str, camara: str) -> None:
+    """El HUD mínimo de la calibración: el veredicto, en grande."""
     import cv2
 
     alto, ancho = int(imagen.shape[0]), int(imagen.shape[1])
-    lateralidad = slot.handedness.value if isinstance(slot, RawFrame) else "--"
-
     cv2.rectangle(imagen, (0, 0), (ancho, 120), (20, 20, 20), -1)
     cv2.putText(
         imagen,
-        f"mano: {lateralidad}",
+        f"entrada: {estado}",
         (24, 74),
         0,
-        1.8,
+        1.1,
         (245, 245, 245),
-        3,
+        2,
         cv2.LINE_AA,
     )
     cv2.putText(
         imagen,
-        "levanta la mano DERECHA | S confirma | Q cancela",
+        "mano DERECHA junto al hombro derecho | S confirma | Q cancela",
         (24, 106),
         0,
         0.6,
@@ -972,7 +993,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     calibrar = subcomandos.add_parser(
         "calibrar",
-        help="confirma a ojo que la lateralidad detectada es la mano real",
+        help="comprueba que el cuadro llega al detector sin espejar",
     )
     calibrar.add_argument(
         "--confirmado-por",
@@ -985,6 +1006,7 @@ def _build_parser() -> argparse.ArgumentParser:
     grabar = subcomandos.add_parser("grabar", help="sesión de captura con cámara")
     grabar.add_argument("--firmante", required=True, help="signer_id de quien firma")
     grabar.add_argument("--sesion", required=True, help="session_id de la grabación")
+    grabar.add_argument("--mano", required=True, choices=sorted(MANOS), help=AYUDA_MANO)
     grabar.add_argument(
         "--letras",
         default=None,

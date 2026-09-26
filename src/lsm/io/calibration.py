@@ -1,32 +1,27 @@
-"""Registro de calibración de la cámara: qué mano ve, y con qué convención.
+"""Registro de calibración de la cámara: que el cuadro llega al detector sin espejar.
 
-Existe por un solo motivo, y conviene tenerlo delante para entender por qué un
-archivo tan pequeño bloquea una sesión entera.
+**v2** (ADR 0017). Hasta la v1 esto comprobaba qué **nombre** le ponía MediaPipe
+a la mano levantada, porque ese nombre decidía el espejo del paso 2 de
+`feature-spec.md`. Desde `FEATURE_SPEC_VERSION` 2 el espejo lo decide la mano
+**declarada** por quien firma, y el nombre de MediaPipe es solo diagnóstico —con
+la palma de lado cambia de opinión a mitad de una J—. Lo que sigue importando, y
+sigue sin producir síntomas si falla, es otra cosa: **que la imagen que recibe el
+detector no esté espejada** (§0.3). Hay drivers de webcam que espejan por su
+cuenta. Con la entrada espejada, una mano derecha declarada se vería como una
+izquierda, el vector entero saldría reflejado y el modelo entrenaría igual de
+bien sobre datos al revés.
 
-`hands.mediapipe_reports_mirrored_handedness` decide si se invierte la lateralidad
-que reporta el detector. **Elegir mal ese interruptor no rompe nada observable**:
-el paso 2 de `feature-spec.md` canoniza *todas* las muestras hacia la otra mano,
-las dos poblaciones de vectores difieren por un espejo global y nada más. El
-modelo entrena igual de bien, infiere igual de bien, y la matriz de confusión sale
-idéntica.
+La comprobación es geométrica y no depende de MediaPipe: quien calibra levanta
+su mano derecha junto a su hombro derecho. Delante de una cámara, el lado
+derecho de la persona queda a la **izquierda** de la imagen sin espejar. Si la
+muñeca aparece en la mitad izquierda, la entrada está bien; en la derecha, algo
+la espejó. Ver `lsm.capture.input_looks_unmirrored`.
 
-Duele en un único escenario, y es el de la Fase 7: **dos implementaciones con
-convenciones distintas.** MediaPipe JS traerá la suya, y los golden vectors no
-cubren esto —reciben la lateralidad ya resuelta como entrada—, así que el test de
-paridad pasaría en verde mientras la app web confunde cada seña con su espejo.
+Como antes, dos defensas mecánicas porque la vigilancia humana no funciona:
+comprobarlo una vez por cámara (`lsm-capture calibrar`) y exigir el registro
+después (`grabar`, este módulo).
 
-Contra un error que no produce síntomas solo hay dos defensas, y las dos son
-mecánicas porque la vigilancia humana no funciona:
-
-1. **Comprobarlo con un ojo humano una vez por cámara**, que es lo que hace
-   `lsm-capture calibrar`: levantar la mano derecha y mirar si el preview dice
-   `RIGHT`. Es la única forma de saberlo de verdad en una cámara concreta.
-2. **Que el resultado quede escrito y se exija después**, que es este módulo.
-
-La calibración es del **equipo**, no de quien firma: la misma persona con dos
-cámaras necesita dos calibraciones, y dos personas con la misma cámara comparten
-una. Por eso el registro va por cámara y no por `signer_id`, al revés que el
-consentimiento.
+La calibración es del **equipo**, no de quien firma: va por cámara.
 
 Este módulo toca disco pero no importa OpenCV ni MediaPipe: es JSON y rutas.
 """
@@ -39,10 +34,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
-from lsm.types import HANDEDNESS_CONVENTION, HandednessConvention
-
 #: Versión del formato del registro de calibración.
-CALIBRATION_SCHEMA_VERSION: Final = 1
+CALIBRATION_SCHEMA_VERSION: Final = 2
+
+#: Versiones que se leen. Una entrada v1 se lee como **no verificada**: comprobó
+#: otra cosa, y `grabar` pide recalibrar en vez de fallar por el formato.
+READABLE_CALIBRATION_SCHEMAS: Final = frozenset({1, 2})
 
 #: Nombre del registro, en la raíz del dataset.
 CALIBRATION_FILENAME: Final = "calibracion.json"
@@ -75,33 +72,21 @@ def camera_key(*, index: int, width: int, height: int, backend: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Calibration:
-    """Lo que se comprobó, cuándo, y con qué ajuste.
-
-    `swap_handedness` es el valor **efectivo** del interruptor en el momento de
-    calibrar, no lo que dice `config.yaml` ahora. Esa distinción es todo el
-    mecanismo: si alguien toca la configuración, la calibración deja de coincidir
-    y hay que rehacerla.
-    """
+    """Lo que se comprobó, cuándo y quién lo miró."""
 
     camera: str
-    #: Valor de `hands.mediapipe_reports_mirrored_handedness` que se confirmó.
-    swap_handedness: bool
-    #: Qué mano nombra `handedness` con ese ajuste. Hoy siempre `SIGNER`; viaja
-    #: explícito para que un registro viejo siga siendo legible si algún día se
-    #: añade otra convención.
-    convention: HandednessConvention
+    #: Se comprobó que el cuadro llega al detector sin espejar. `False` en las
+    #: entradas v1, que comprobaban la etiqueta de MediaPipe y no esto.
+    entrada_sin_espejar: bool
     fecha: datetime
     width: int
     height: int
-    #: Quién confirmó a ojo que el preview decía lo que debía.
+    #: Quién levantó la mano y confirmó.
     confirmado_por: str = ""
 
-    def matches(self, *, swap_handedness: bool) -> bool:
-        """Si esta calibración sigue describiendo la configuración actual."""
-        return (
-            self.swap_handedness == swap_handedness
-            and self.convention is HANDEDNESS_CONVENTION
-        )
+    @property
+    def vigente(self) -> bool:
+        return self.entrada_sin_espejar
 
 
 def calibration_path(root: Path) -> Path:
@@ -113,21 +98,18 @@ def load_calibrations(root: Path) -> dict[str, Calibration]:
     path = calibration_path(root)
     if not path.is_file():
         return {}
-
     payload: Any = json.loads(path.read_text(encoding="utf-8"))
     version = payload.get("schema_version")
-    if version != CALIBRATION_SCHEMA_VERSION:
+    if version not in READABLE_CALIBRATION_SCHEMAS:
         msg = (
-            f"{path}: schema_version {version} incompatible; este código lee la "
-            f"versión {CALIBRATION_SCHEMA_VERSION}"
+            f"{path}: schema_version {version} incompatible; este código lee las "
+            f"versiones {sorted(READABLE_CALIBRATION_SCHEMAS)}"
         )
         raise CalibrationError(msg)
-
     return {
         camera: Calibration(
             camera=camera,
-            swap_handedness=bool(entry["swap_handedness"]),
-            convention=HandednessConvention(entry["convention"]),
+            entrada_sin_espejar=version >= 2 and bool(entry["entrada_sin_espejar"]),
             fecha=datetime.fromisoformat(entry["fecha"]),
             width=int(entry["width"]),
             height=int(entry["height"]),
@@ -148,8 +130,7 @@ def save_calibration(root: Path, calibration: Calibration) -> Path:
         "schema_version": CALIBRATION_SCHEMA_VERSION,
         "camaras": {
             camera: {
-                "swap_handedness": entry.swap_handedness,
-                "convention": str(entry.convention),
+                "entrada_sin_espejar": entry.entrada_sin_espejar,
                 "fecha": entry.fecha.isoformat(),
                 "width": entry.width,
                 "height": entry.height,
@@ -176,39 +157,26 @@ def has_any_calibration(root: Path) -> bool:
     return bool(load_calibrations(root))
 
 
-def current_calibration(
-    root: Path, camera: str, *, swap_handedness: bool
-) -> Calibration | None:
+def current_calibration(root: Path, camera: str) -> Calibration | None:
     """La calibración vigente de una cámara, o `None` si no la hay.
 
-    «Vigente» no es solo «existe»: tiene que haberse confirmado **con el ajuste que
-    está puesto ahora**. Cambiar
-    `hands.mediapipe_reports_mirrored_handedness` en `config.yaml` invalida las
-    calibraciones anteriores, que es exactamente lo que debe pasar — el registro
-    dice que alguien miró la pantalla y vio `RIGHT` con *aquel* ajuste, y con el
-    contrario habría visto `LEFT`.
-
-    No hay caducidad por tiempo. Una calibración no se estropea sola: se estropea
-    cuando cambia la configuración o cuando se cambia de cámara, y las dos cosas se
-    detectan aquí.
+    Vigente es que se comprobó la entrada sin espejar con esta cámara. No caduca
+    por tiempo: se invalida al cambiar de cámara o de resolución, y las dos
+    cosas cambian la clave.
     """
     calibration = load_calibrations(root).get(camera)
-    if calibration is None:
+    if calibration is None or not calibration.vigente:
         return None
-    return calibration if calibration.matches(swap_handedness=swap_handedness) else None
+    return calibration
 
 
-def require_calibration(
-    root: Path, camera: str, *, swap_handedness: bool
-) -> Calibration:
+def require_calibration(root: Path, camera: str) -> Calibration:
     """La calibración vigente, o un error que dice cómo obtenerla.
 
-    Se llama antes de grabar y **rechaza**, no avisa. Un aviso en una terminal a
-    las nueve de la mañana, antes de cuarenta minutos de grabación con otra
-    persona delante, no lo lee nadie; y el dataset que sale de esa sesión no tiene
-    ningún síntoma que delate el problema.
+    Se llama antes de grabar y **rechaza**, no avisa: el dataset que sale de una
+    sesión con la entrada espejada no tiene ningún síntoma que la delate.
     """
-    calibration = current_calibration(root, camera, swap_handedness=swap_handedness)
+    calibration = current_calibration(root, camera)
     if calibration is not None:
         return calibration
 
@@ -217,16 +185,13 @@ def require_calibration(
         detalle = f"la cámara {camera} no está calibrada"
     else:
         detalle = (
-            f"la calibración de {camera} se hizo con "
-            f"mediapipe_reports_mirrored_handedness = "
-            f"{str(existente.swap_handedness).lower()}, y ahora vale "
-            f"{str(swap_handedness).lower()}"
+            f"la calibración de {camera} es anterior a la mano declarada (ADR "
+            "0017): comprobaba la etiqueta de MediaPipe, no que la entrada llegue "
+            "sin espejar"
         )
-
     msg = (
-        f"{detalle}. Sin calibración no se puede saber si la lateralidad que "
-        "reporta el detector es la mano real, y equivocarse canoniza el dataset "
-        "entero hacia la mano contraria sin ningún síntoma.\n"
+        f"{detalle}. Sin esa comprobación, una cámara que espeja por su cuenta "
+        "reflejaría el dataset entero sin ningún síntoma.\n"
         "  lsm-capture calibrar"
     )
     raise CalibrationError(msg)

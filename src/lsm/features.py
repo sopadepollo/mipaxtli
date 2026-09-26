@@ -55,7 +55,11 @@ from lsm.types import (
 # --------------------------------------------------------------------------- #
 
 #: Versión del contrato implementado por este módulo.
-FEATURE_SPEC_VERSION: Final = 1
+#:
+#: **v2** (ADR 0017): el paso 2 espeja según la mano **declarada** de la sesión,
+#: no según la etiqueta del detector cuadro a cuadro. Las cuentas son las mismas;
+#: cambia de dónde sale la entrada, y un modelo v1 se entrenó con la otra.
+FEATURE_SPEC_VERSION: Final = 2
 
 #: T_ref del §3.2: toda secuencia dinámica se remuestrea a esta longitud.
 RESAMPLE_LENGTH: Final = 24

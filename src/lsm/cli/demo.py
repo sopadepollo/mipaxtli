@@ -30,6 +30,7 @@ se cede antes de salir— no llega a contarse.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import time
 from collections.abc import Iterator
@@ -38,16 +39,19 @@ from pathlib import Path
 from typing import Any
 
 from lsm.classifiers.registry import ClassifierRegistry
-from lsm.cli import MENSAJE_SIN_EXTRAS
+from lsm.cli import AYUDA_MANO, MANOS, MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
+from lsm.hand_check import HandMismatchWatcher
 from lsm.io.camera import Camera, CameraError
-from lsm.io.dataset import iter_sample_paths, read_sample
-from lsm.io.hands import HandDetector, build_detector
+from lsm.io.corpus import git_commit
+from lsm.io.dataset import iter_sample_paths, now, read_sample
+from lsm.io.hands import HandDetector, build_detector, dump_frame_stream
 from lsm.io.preview import DemoHudState
 from lsm.segmentation import (
     EvidenceAccumulated,
     FrameThresholds,
     LetterEmitted,
+    RejectionReason,
     SegmentationEvent,
     State,
     StateChanged,
@@ -83,14 +87,31 @@ from lsm.telemetry import (
     segundos_restantes,
     tasa_insuficiente,
 )
-from lsm.types import FrameSlot, InvalidFrame, InvalidReason, Prediction, WindowOrigin
-from lsm.vocabulary import Label, spec
+from lsm.tracking_diagnostics import (
+    GuidedSession,
+    TrackingRecorder,
+    analyze,
+    render_report,
+    report_to_json,
+)
+from lsm.types import (
+    FrameSlot,
+    Handedness,
+    InvalidFrame,
+    InvalidReason,
+    Prediction,
+    WindowOrigin,
+)
+from lsm.vocabulary import ALPHABET, DYNAMIC_LABELS, Label, spec
 
 DEFAULT_MODEL = Path("data/models/static_knn.json")
 #: El modelo dinámico es OPCIONAL: sin él, la demo sigue deletreando estáticas y
 #: los trazos que la segmentación entregue se rechazan en vez de caer al
 #: clasificador estático. Ver `classifiers/registry.py`.
 DEFAULT_DYNAMIC_MODEL = Path("data/models/dynamic_dtw.json")
+#: Dónde se escriben las sesiones de diagnóstico de tracking. Dentro de `data/`,
+#: que no se versiona: llevan landmarks de quien firma.
+DEFAULT_DIAGNOSTIC_DIR = Path("data/diagnostico")
 
 #: `--desde-dataset` con una ruta sin muestras terminaba imprimiendo una linea en
 #: blanco y saliendo con 0, que es indistinguible de "la tubería no reconoció
@@ -113,6 +134,8 @@ _SALIR = frozenset({ord("q"), 27})
 _BORRAR = frozenset({8, 127})
 #: ENTER. 13 en Windows, 10 en Linux.
 _CERRAR_FRASE = frozenset({13, 10})
+#: ESPACIO: en la sesión guiada de diagnóstico, «repetición hecha».
+_SIGUIENTE = 32
 
 
 @dataclass
@@ -129,6 +152,10 @@ class Sesion:
     ultima: Prediction | None = None
     dispersion: float | None = None
     mensaje: str = ""
+    #: Lo que la sesión guiada de diagnóstico pide ahora. Vacío fuera de ella.
+    instruccion: str = ""
+    #: MediaPipe contradice a la mano declarada de forma sostenida.
+    aviso_mano: bool = False
 
     #: Media móvil de la tasa de cuadros, para el HUD. Se queda vacía en
     #: `--desde-dataset`: ahí no hay bucle en vivo y medirlo no significaría nada.
@@ -177,6 +204,8 @@ class Sesion:
             fps_entrega=self.ventana_fps.fps_entrega,
             fps_procesamiento=self.ventana_fps.fps_procesamiento,
             fps_minimo=self.config.telemetry.min_fps,
+            instruccion=self.instruccion,
+            aviso_mano=self.aviso_mano,
         )
 
 
@@ -191,6 +220,124 @@ class Medida:
     medicion: Medicion
     #: Segundos de bucle que se van a medir.
     duracion: float
+
+
+@dataclass
+class Diagnostico:
+    """Una sesión instrumentada para el diagnóstico de pérdidas de tracking.
+
+    `guiada` es `None` en `--diagnostico`, donde se deletrea libremente y solo
+    se registra; en `diagnosticar` pide cada letra dinámica N veces.
+    """
+
+    etiqueta: str
+    salida: Path
+    recorder: TrackingRecorder
+    guiada: GuidedSession | None = None
+    #: El flujo de landmarks tal como salió del detector. Se guarda para poder
+    #: reproducir los huecos reales de esta sesión sin cámara (Bloque 2).
+    flujo: list[FrameSlot] = field(default_factory=list)
+
+
+def letras_dinamicas() -> tuple[str, ...]:
+    """Las ocho dinámicas en el orden del glosario, LL y RR incluidas.
+
+    Aquí van todas: lo que se diagnostica es si la mano se pierde durante el
+    trazo, no si el clasificador la reconoce, y LL y RR también son trazos.
+    """
+    return tuple(label.value for label in ALPHABET if label in DYNAMIC_LABELS)
+
+
+def anotar_evento(diagnostico: Diagnostico, evento: SegmentationEvent) -> None:
+    """Lo que el reporte necesita de la segmentación, por repetición."""
+    tipo: str | None = None
+    etiqueta: str | None = None
+    match evento:
+        case WindowDynamic():
+            tipo = "WindowDynamic"
+        case WindowRejected(reason=reason) if reason in (
+            RejectionReason.DYNAMIC_INTERRUPTED,
+            RejectionReason.DYNAMIC_TOO_LONG,
+        ):
+            tipo = str(reason)
+        case LetterEmitted(prediction=prediction):
+            tipo = "LetterEmitted"
+            etiqueta = prediction.label
+        case _:
+            return
+    registros = diagnostico.recorder.records
+    registro = (
+        registros[evento.frame_index] if evento.frame_index < len(registros) else None
+    )
+    diagnostico.recorder.note(
+        tipo,
+        evento.frame_index,
+        label=etiqueta,
+        prompt=registro.prompt if registro else None,
+        repetition=registro.repetition if registro else None,
+    )
+
+
+def escribir_diagnostico(
+    diagnostico: Diagnostico, config: Config, extra: dict[str, object]
+) -> Path:
+    """Vuelca el reporte, los registros crudos y el flujo de landmarks."""
+    carpeta = diagnostico.salida / (
+        f"{now().strftime('%Y-%m-%d-%H%M%S')}-{diagnostico.etiqueta}"
+    )
+    carpeta.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {
+        "iluminacion": diagnostico.etiqueta,
+        "mano declarada": extra.pop("mano declarada", "—"),
+        "fecha": now().isoformat(),
+        "commit": git_commit(Path.cwd()),
+        "mediapipe": _version("mediapipe"),
+        # Todos los parámetros del detector, no solo los tres umbrales: el
+        # reporte tiene que poder compararse con uno hecho tras cambiar
+        # cualquiera de ellos (Bloque 1, barrido de min_tracking_confidence).
+        **{
+            f"hands.{campo}": valor
+            for campo, valor in config.hands.model_dump(mode="json").items()
+        },
+        "segmentation.min_detection_score": config.segmentation.min_detection_score,
+        "segmentation.motion_threshold": config.segmentation.motion_threshold,
+        "segmentation.motion_min_ms": config.segmentation.motion_min_ms,
+        "segmentation.motion_confirm_low_ms": config.segmentation.motion_confirm_low_ms,
+        "capture.camera_fps (pedidos)": config.capture.camera_fps,
+        "pre_candidate_ms": config.diagnostics.pre_candidate_ms,
+        **extra,
+    }
+    if diagnostico.guiada is not None:
+        metadata["letras"] = " ".join(diagnostico.guiada.letters)
+        metadata["repeticiones por letra"] = diagnostico.guiada.repetitions
+        metadata["repeticiones descartadas"] = (
+            ", ".join(f"{letra}#{n}" for letra, n in diagnostico.guiada.discarded)
+            or "ninguna"
+        )
+
+    recorder = diagnostico.recorder
+    reporte = analyze(recorder.records, recorder.events, config)
+    (carpeta / "diagnostico.md").write_text(
+        render_report(reporte, metadata), encoding="utf-8"
+    )
+    (carpeta / "diagnostico.json").write_text(
+        json.dumps(
+            report_to_json(reporte, recorder.records, recorder.events, metadata),
+            indent=1,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    dump_frame_stream(tuple(diagnostico.flujo), carpeta / "flujo.json")
+    return carpeta
+
+
+def _version(paquete: str) -> str:
+    try:
+        return importlib.metadata.version(paquete)
+    except importlib.metadata.PackageNotFoundError:
+        return "no instalado"
 
 
 def aplicar_evento(sesion: Sesion, evento: SegmentationEvent) -> None:
@@ -231,7 +378,7 @@ def cargar_registro(estatico: Path, dinamico: Path | None) -> ClassifierRegistry
     """Carga los modelos exportados en su ranura del registry.
 
     `from_export` rechaza un `feature_spec_version` o un
-    `handedness_convention` que no coincidan, que es la defensa contra predecir
+    `detector_input` que no coincidan, que es la defensa contra predecir
     en silencio con una normalización distinta a la del entrenamiento.
 
     El estático es obligatorio; el dinámico no. Sin él la demo avisa y sigue:
@@ -342,6 +489,48 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="medir_segundos",
         help="cuánto dura --medir-fps, si no telemetry.benchmark_seconds",
     )
+    parser.add_argument(
+        "--diagnostico",
+        default=None,
+        metavar="ETIQUETA",
+        help=(
+            "registra cada cuadro de la sesión en vivo y al salir escribe el "
+            "diagnóstico de pérdidas de tracking. ETIQUETA describe la "
+            "iluminación (p. ej. habitual, lampara). Necesita cámara."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostico-salida",
+        type=Path,
+        default=DEFAULT_DIAGNOSTIC_DIR,
+        dest="diagnostico_salida",
+        help=f"dónde escribir los diagnósticos (por defecto: {DEFAULT_DIAGNOSTIC_DIR})",
+    )
+    parser.add_argument("--mano", choices=sorted(MANOS), default=None, help=AYUDA_MANO)
+    subcomandos = parser.add_subparsers(dest="comando")
+    guiado = subcomandos.add_parser(
+        "diagnosticar",
+        help=(
+            "sesión guiada de diagnóstico: pide cada letra dinámica N veces y "
+            "escribe el reporte de pérdidas de tracking"
+        ),
+    )
+    guiado.add_argument(
+        "--iluminacion",
+        required=True,
+        help="cómo está iluminada la escena, p. ej. habitual o lampara",
+    )
+    guiado.add_argument(
+        "--repeticiones",
+        type=int,
+        default=None,
+        help="repeticiones por letra (por defecto: diagnostics.repetitions_per_letter)",
+    )
+    # También aquí, para que `diagnosticar --mano derecha` funcione además de
+    # `--mano derecha diagnosticar`. SUPPRESS: si no se da, no pisa el de arriba.
+    guiado.add_argument(
+        "--mano", choices=sorted(MANOS), default=argparse.SUPPRESS, help=AYUDA_MANO
+    )
     return parser
 
 
@@ -352,6 +541,10 @@ def main(argv: list[str] | None = None) -> int:
     medida = _medida_pedida(args, config)
     if isinstance(medida, str):
         print(medida)
+        return 2
+    diagnostico = _diagnostico_pedido(args, config)
+    if isinstance(diagnostico, str):
+        print(diagnostico)
         return 2
 
     # Antes de cargar el modelo: si no hay muestras que reproducir, cargarlo no
@@ -372,7 +565,17 @@ def main(argv: list[str] | None = None) -> int:
         print(render_text(sesion.state))
         return 0
 
-    return _sesion_en_vivo(config, registro, sesion, medida)
+    if args.mano is None:
+        # Sin mano declarada no hay espejo del paso 2 que aplicar (ADR 0017), y
+        # adivinarla con la etiqueta de MediaPipe es justo lo que dejó de hacerse.
+        print(
+            "la sesión en vivo necesita --mano derecha o --mano izquierda: es la "
+            "mano con la que vas a firmar (ADR 0017)"
+        )
+        return 2
+    return _sesion_en_vivo(
+        config, registro, sesion, medida, diagnostico, mano=MANOS[args.mano]
+    )
 
 
 def _medida_pedida(args: argparse.Namespace, config: Config) -> Medida | str | None:
@@ -396,6 +599,45 @@ def _medida_pedida(args: argparse.Namespace, config: Config) -> Medida | str | N
     if duracion <= 0.0:
         return f"--medir-segundos tiene que ser positivo, no {duracion}"
     return Medida(medicion=Medicion(), duracion=duracion)
+
+
+def _diagnostico_pedido(
+    args: argparse.Namespace, config: Config
+) -> Diagnostico | str | None:
+    """Qué diagnóstico pidieron los argumentos, o el error que hay que imprimir.
+
+    El diagnóstico mide pérdidas de la cámara en vivo: sobre un dataset no hay
+    cámara, y combinado con `--medir-fps` la sesión se cortaría a mitad de la
+    guía. Se rechazan las dos combinaciones.
+    """
+    guiado = getattr(args, "comando", None) == "diagnosticar"
+    etiqueta = args.iluminacion if guiado else args.diagnostico
+    if etiqueta is None:
+        return None
+    if guiado and args.diagnostico is not None:
+        return "diagnosticar ya registra la sesión: sobra --diagnostico"
+    if args.desde_dataset is not None:
+        return (
+            "el diagnóstico mide pérdidas de tracking de la cámara en vivo y no "
+            "se puede combinar con --desde-dataset"
+        )
+    if args.medir_fps:
+        return "el diagnóstico no se puede combinar con --medir-fps"
+    limpia = "".join(c if c.isalnum() or c in "-_" else "-" for c in etiqueta)
+    if not limpia.strip("-_"):
+        return f"etiqueta de iluminación inválida: {etiqueta!r}"
+    guiada = None
+    if guiado:
+        repeticiones = args.repeticiones or config.diagnostics.repetitions_per_letter
+        if repeticiones < 1:
+            return f"--repeticiones tiene que ser positivo, no {repeticiones}"
+        guiada = GuidedSession(letters=letras_dinamicas(), repetitions=repeticiones)
+    return Diagnostico(
+        etiqueta=limpia,
+        salida=args.diagnostico_salida,
+        recorder=TrackingRecorder(config=config),
+        guiada=guiada,
+    )
 
 
 def _resumen_de_tasa(config: Config, umbrales: FrameThresholds) -> str:
@@ -451,6 +693,9 @@ def _sesion_en_vivo(
     registro: ClassifierRegistry,
     sesion: Sesion,
     medida: Medida | None = None,
+    diagnostico: Diagnostico | None = None,
+    *,
+    mano: Handedness = Handedness.RIGHT,
 ) -> int:
     """Abre la cámara y deletrea hasta que se pulse `q`.
 
@@ -492,9 +737,34 @@ def _sesion_en_vivo(
 
                 crono.iniciar()
                 frame = camera.read()
+                recibido_ms = time.perf_counter() * 1000.0
                 crono.marcar(Stage.CAMARA)
                 slot = detector.detect(frame.rgb)
                 crono.marcar(Stage.DETECCION)
+                sesion.aviso_mano = vigia.observe(slot)
+
+                if diagnostico is not None:
+                    # Se registra ANTES de cederlo: `estado_maquina` es todavía
+                    # el que dejó el cuadro anterior, o sea el estado en que
+                    # este cuadro encuentra a la máquina.
+                    actual = (
+                        diagnostico.guiada.current() if diagnostico.guiada else None
+                    )
+                    diagnostico.recorder.observe(
+                        slot,
+                        wall_ms=recibido_ms,
+                        detector_ms=float(
+                            getattr(detector, "timestamp_ms", len(diagnostico.flujo))
+                        ),
+                        luminance=frame.mean_luminance,
+                        thumbnail=frame.thumbnail,
+                        state=sesion.estado_maquina.value,
+                        prompt=actual[0] if actual else None,
+                        repetition=actual[1] if actual else None,
+                    )
+                    diagnostico.flujo.append(slot)
+                    if diagnostico.guiada is not None:
+                        sesion.instruccion = diagnostico.guiada.instruction()
 
                 imagen = frame.bgr
                 if config.capture.preview_mirror:
@@ -510,7 +780,14 @@ def _sesion_en_vivo(
                 tecla = cv2.waitKey(1) & 0xFF
                 if tecla in _SALIR:
                     return
-                if tecla in _BORRAR:
+                guiada = diagnostico.guiada if diagnostico is not None else None
+                if guiada is not None and tecla == _SIGUIENTE:
+                    guiada.advance()
+                elif guiada is not None and tecla in _BORRAR:
+                    # En la sesión guiada BACKSPACE no borra una letra: descarta
+                    # la repetición anterior, que se hizo mal, y la vuelve a pedir.
+                    guiada.discard_last()
+                elif tecla in _BORRAR:
                     sesion.aplicar(Backspace())
                 elif tecla in _CERRAR_FRASE:
                     sesion.aplicar(CommitText())
@@ -567,11 +844,21 @@ def _sesion_en_vivo(
             return medicion.fps_entrega or float(config.capture.camera_fps)
 
         with (
-            Camera.from_config(config.capture) as camera,
-            build_detector(config) as detector,
+            Camera.from_config(
+                config.capture,
+                thumbnail_px=(
+                    config.diagnostics.duplicate_thumbnail_px
+                    if diagnostico is not None
+                    else None
+                ),
+            ) as camera,
+            build_detector(config, declared_hand=mano) as detector,
         ):
             try:
                 sesion.fps = calentar(camera, detector)
+                vigia = HandMismatchWatcher(
+                    config=config, declared=mano, fps=sesion.fps
+                )
                 sesion.mensaje = ""
                 umbrales = FrameThresholds.from_config(config, sesion.fps)
                 print(_resumen_de_tasa(config, umbrales))
@@ -583,8 +870,23 @@ def _sesion_en_vivo(
                     fps=sesion.fps,
                 ):
                     aplicar_evento(sesion, evento)
+                    if diagnostico is not None:
+                        anotar_evento(diagnostico, evento)
             finally:
                 cv2.destroyAllWindows()
+                if diagnostico is not None and diagnostico.recorder.records:
+                    carpeta = escribir_diagnostico(
+                        diagnostico,
+                        config,
+                        {
+                            "camara (backend)": camera.backend_name(),
+                            "fps medidos al arrancar": (
+                                f"{sesion.fps:.1f}" if sesion.fps else "—"
+                            ),
+                            "mano declarada": mano.value,
+                        },
+                    )
+                    print(f"diagnóstico escrito en {carpeta}")
     except ImportError as error:
         # Las dependencias de cámara se instalan aparte a propósito: el resto del
         # proyecto corre sin ellas. El traceback de un módulo ausente no dice eso.

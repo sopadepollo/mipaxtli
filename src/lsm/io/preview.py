@@ -62,6 +62,9 @@ class HudState:
     #: Último mensaje que mostrar, ya sea de éxito o de rechazo.
     mensaje: str
     guarda_video: bool
+    #: MediaPipe lleva un rato contradiciendo a la mano declarada con la mano
+    #: quieta (`lsm.hand_check`). Solo se pregunta; la mano no cambia sola.
+    aviso_mano: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +101,12 @@ class DemoHudState:
     #: dato en vez de leerlo el dibujo: este módulo pinta, y quién decide qué
     #: enseñar es el CLI.
     fps_minimo: float | None = None
+    #: Lo que pide la sesión guiada de diagnóstico (`lsm-demo diagnosticar`).
+    #: Vacío en una sesión normal. Cuando lo hay, ocupa la línea de avisos: es
+    #: lo único que quien firma tiene que leer durante el diagnóstico.
+    instruccion: str = ""
+    #: Ver `HudState.aviso_mano`.
+    aviso_mano: bool = False
 
 
 def draw_landmarks(image: Any, frame: RawFrame, *, mirrored: bool) -> None:
@@ -193,6 +202,8 @@ def draw_hud(image: Any, state: HudState) -> None:
 
     _draw_calidad(image, state, origen=(width - 260, 84))
     _draw_estado(image, state, alto=height, ancho=width)
+    if state.aviso_mano:
+        draw_hand_warning(image)
 
 
 def _draw_calidad(image: Any, state: HudState, origen: tuple[int, int]) -> None:
@@ -373,14 +384,20 @@ def draw_demo_hud(image: Any, state: DemoHudState) -> None:
     )
 
     _panel(image, 0, height - 64, width, 64)
+    if state.instruccion:
+        aviso, color, grosor = state.instruccion, _AMBAR, 2
+    elif lenta:
+        aviso, color, grosor = _AVISO_TASA_BAJA, _ROJO, 1
+    else:
+        aviso, color, grosor = _AVISO_DINAMICAS, _GRIS, 1
     cv2.putText(
         image,
-        _AVISO_TASA_BAJA if lenta else _AVISO_DINAMICAS,
+        aviso,
         (18, height - 40),
         _FUENTE,
         0.45,
-        _ROJO if lenta else _GRIS,
-        1,
+        color,
+        grosor,
         cv2.LINE_AA,
     )
     cv2.putText(
@@ -393,20 +410,37 @@ def draw_demo_hud(image: Any, state: DemoHudState) -> None:
         1,
         cv2.LINE_AA,
     )
+    if state.aviso_mano:
+        draw_hand_warning(image)
+
+
+#: Lo que se pregunta cuando MediaPipe contradice de forma sostenida a la mano
+#: declarada. Es una pregunta y no una corrección: la mano la declara la persona.
+AVISO_MANO = "CAMBIASTE DE MANO? la sesion se declaro con la otra: reinicia con --mano"
+
+
+def draw_hand_warning(image: Any) -> None:
+    """Banda roja, a media altura: tiene que verse aunque se esté mirando la mano."""
+    import cv2
+
+    height, width = int(image.shape[0]), int(image.shape[1])
+    y = height // 2 - 24
+    cv2.rectangle(image, (0, y), (width, y + 48), (30, 30, 180), -1)
+    cv2.putText(
+        image, AVISO_MANO, (18, y + 32), _FUENTE, 0.6, (255, 255, 255), 2, cv2.LINE_AA
+    )
 
 
 def _texto_lateralidad(side: Handedness | None) -> str:
-    """Se muestra siempre, y por un motivo concreto.
+    """La mano **declarada** de la sesión, siempre a la vista.
 
-    Es la comprobación de un segundo que zanja
-    `hands.mediapipe_reports_mirrored_handedness`: quien graba levanta la mano
-    derecha al empezar y mira si aquí dice RIGHT. Equivocarse en esa opción no
-    rompe nada visible —canoniza todo el dataset hacia la mano contraria— así que
-    la única defensa es tenerlo delante.
+    Desde el ADR 0017 es la que canoniza el paso 2, así que es la que tiene que
+    tener delante quien graba: si firma con la otra, lo verá aquí y en el aviso
+    de `draw_hand_warning`.
     """
     if side is None:
-        return "mano: --"
-    return f"mano: {side.value}"
+        return "mano declarada: --"
+    return f"mano declarada: {side.value}"
 
 
 def _panel(image: Any, x: int, y: int, ancho: int, alto: int) -> None:

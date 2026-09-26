@@ -99,7 +99,7 @@ def test_el_vector_tiene_42_componentes_y_lleva_la_version_del_spec() -> None:
     assert isinstance(outcome, SequenceFeatures)
     assert len(outcome.static.shape) == NUM_FEATURES
     assert outcome.static.shape.spec_version == FEATURE_SPEC_VERSION
-    assert FEATURE_SPEC_VERSION == 1
+    assert FEATURE_SPEC_VERSION == 2
 
 
 def test_tras_el_pipeline_la_muneca_queda_en_el_origen_y_p9_en_0_1() -> None:

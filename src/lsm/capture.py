@@ -64,8 +64,6 @@ class Rejection(StrEnum):
     TOO_FEW_FRAMES = "TOO_FEW_FRAMES"
     #: El detector perdió la mano en algún punto de la ventana.
     HAS_GAPS = "HAS_GAPS"
-    #: El detector cambió de lateralidad a mitad de la muestra.
-    MIXED_HANDEDNESS = "MIXED_HANDEDNESS"
     #: σ por encima de `config.quality.max_dispersion`. Solo aplica a estáticas.
     UNSTABLE = "UNSTABLE"
     #: Algún frame tiene escala degenerada (paso 4 de `feature-spec.md`).
@@ -89,7 +87,6 @@ class Rejection(StrEnum):
 _INSTRUCCIONES: Final[dict[Rejection, str]] = {
     Rejection.TOO_FEW_FRAMES: "faltan frames: manten la sena un momento mas",
     Rejection.HAS_GAPS: "se perdio la mano: acercala o mejora la luz",
-    Rejection.MIXED_HANDEDNESS: "lateralidad inconsistente: una sola mano en cuadro",
     Rejection.UNSTABLE: "demasiado movimiento: sosten la mano mas quieta",
     Rejection.DEGENERATE_SCALE: "mano degenerada: alejala un poco de la camara",
     Rejection.TOO_MANY_FRAMES: "grabacion demasiado larga: repite el trazo mas corto",
@@ -293,7 +290,9 @@ def evaluate_window(
         return rechazo(Rejection.HAS_GAPS)
 
     sequence = runs[0]
-    handedness = _consistent_handedness(sequence)
+    # La mano es la declarada de la sesión, igual en todos los frames por
+    # construcción (ADR 0017): ya no hay «lateralidad mixta» que rechazar.
+    handedness = sequence.frames[0].handedness
 
     extraction = extract_sequence_features(sequence, config)
     if isinstance(extraction, ExtractionRejected):
@@ -312,9 +311,7 @@ def evaluate_window(
     arc = trajectory_arc_length(extraction.trajectory)
 
     rejection: Rejection | None = None
-    if handedness is None:
-        rejection = Rejection.MIXED_HANDEDNESS
-    elif kind is SampleKind.STATIC:
+    if kind is SampleKind.STATIC:
         if dispersion > config.quality.max_dispersion:
             rejection = Rejection.UNSTABLE
     elif arc < config.capture.min_trajectory_arc:
@@ -343,21 +340,6 @@ def _mean_luminance(frames: Iterable[BufferedFrame]) -> float:
         total += buffered.luminance
         count += 1
     return total / count if count else 0.0
-
-
-def _consistent_handedness(sequence: Sequence) -> Handedness | None:
-    """La lateralidad de la ventana, o `None` si el detector cambió de idea.
-
-    Un cambio a mitad de muestra no es un matiz: el paso 2 de `feature-spec.md`
-    espeja en X según este valor, así que media muestra saldría reflejada respecto
-    de la otra media y el vector promedio del §2 describiría una mano que no
-    existe. Es raro, pero pasa en cuanto hay dos personas en el encuadre.
-    """
-    first = sequence.frames[0].handedness
-    for frame in sequence.frames:
-        if frame.handedness is not first:
-            return None
-    return first
 
 
 def _mean_scale_px(sequence: Sequence, scales: tuple[float, ...]) -> float:

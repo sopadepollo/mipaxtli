@@ -4,7 +4,7 @@
 
 UV ?= uv
 
-.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval eval-dinamico demo medir-fps signs signs-render signs-verificar
+.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval eval-dinamico demo medir-fps diagnostico signs signs-render signs-verificar
 
 help:
 	@echo "setup        instala dependencias con uv"
@@ -178,6 +178,12 @@ demo:
 # se mide es la tuberia completa, clasificador incluido.
 medir-fps:
 	$(UV) run lsm-demo --medir-fps $(ARGS)
+
+# Sesion guiada de diagnostico de perdidas de tracking (Fase 5.1): pide cada
+# letra dinamica N veces y escribe el reporte en data/diagnostico/. Camara.
+#   make diagnostico ARGS="--iluminacion habitual"
+diagnostico:
+	$(UV) run lsm-demo diagnosticar $(ARGS)
 
 # --------------------------------------------------------------------------- #
 # Texto -> senas (Fase 4). Sin camara.

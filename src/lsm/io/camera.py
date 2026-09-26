@@ -45,6 +45,13 @@ class CameraFrame:
     height: int
     #: Luminancia media del cuadro, en `[0, 1]`.
     mean_luminance: float
+    #: Miniatura en escala de grises, un byte por píxel, fila a fila. Vacía si
+    #: la cámara se abrió sin `thumbnail_px`. Es la huella con la que el
+    #: diagnóstico de tracking reconoce un cuadro que la cámara **repitió**: con
+    #: poca luz muchas webcams bajan de 30 a 15 fps y entregan cada cuadro dos
+    #: veces (`src/lsm/tracking_diagnostics.py`). Se calcula aquí por lo mismo
+    #: que la luminancia: después la imagen ya no existe.
+    thumbnail: bytes = b""
 
 
 class CameraError(RuntimeError):
@@ -66,16 +73,22 @@ class Camera:
     width: int
     height: int
     fps: int
+    #: Ancho de la miniatura de `CameraFrame.thumbnail`. `None` no la calcula:
+    #: la captura no la necesita y no tiene por qué pagarla.
+    thumbnail_px: int | None = None
 
     _capture: Any = field(default=None, init=False, repr=False)
 
     @classmethod
-    def from_config(cls, config: CaptureConfig) -> Camera:
+    def from_config(
+        cls, config: CaptureConfig, *, thumbnail_px: int | None = None
+    ) -> Camera:
         return cls(
             index=config.camera_index,
             width=config.frame_width,
             height=config.frame_height,
             fps=config.camera_fps,
+            thumbnail_px=thumbnail_px,
         )
 
     def open(self) -> Camera:
@@ -122,6 +135,15 @@ class Camera:
         height, width = int(frame.shape[0]), int(frame.shape[1])
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         rgb = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        thumbnail = b""
+        if self.thumbnail_px is not None:
+            alto = max(1, round(self.thumbnail_px * height / width))
+            # INTER_AREA promedia los píxeles de cada celda: el ruido del sensor
+            # se diluye y una repetición exacta de la cámara da la misma huella.
+            pequena = cv2.resize(
+                gray, (self.thumbnail_px, alto), interpolation=cv2.INTER_AREA
+            )
+            thumbnail = np.ascontiguousarray(pequena, dtype=np.uint8).tobytes()
         return CameraFrame(
             bgr=frame,
             rgb=rgb,
@@ -130,6 +152,7 @@ class Camera:
             # /255 y no /256: un cuadro completamente blanco debe dar 1.0 exacto,
             # que es lo que `Sample` valida como extremo del intervalo.
             mean_luminance=float(gray.mean()) / 255.0,
+            thumbnail=thumbnail,
         )
 
     def backend_name(self) -> str:

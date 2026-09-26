@@ -1,11 +1,10 @@
-"""El registro que impide grabar a ciegas.
+"""El registro que impide grabar con la entrada espejada.
 
-Todo lo de aquí protege un error que **no produce ningún síntoma**: si
-`hands.mediapipe_reports_mirrored_handedness` está al revés, el dataset entero
-queda canonizado hacia la mano contraria, el modelo entrena igual de bien y la
-precisión es idéntica. Solo duele en la Fase 7, cuando MediaPipe JS use la
-convención contraria y la app web confunda cada seña con su espejo — y los golden
-vectors no lo detectan, porque reciben la lateralidad ya resuelta.
+Todo lo de aquí protege un error que **no produce ningún síntoma**: si el cuadro
+llega espejado al detector, una mano derecha declarada se ve como una izquierda,
+el paso 2 canoniza el dataset entero hacia el reflejo, el modelo entrena igual de
+bien y la precisión es idéntica. Desde el ADR 0017 eso —y no el nombre que
+MediaPipe le pone a la mano— es lo que la calibración comprueba.
 
 Contra un error invisible no sirve la vigilancia: sirve un cerrojo. Estos tests
 son los del cerrojo.
@@ -19,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from lsm.hand_check import input_looks_unmirrored
 from lsm.io.calibration import (
     CALIBRATION_SCHEMA_VERSION,
     Calibration,
@@ -30,7 +30,8 @@ from lsm.io.calibration import (
     require_calibration,
     save_calibration,
 )
-from lsm.types import HANDEDNESS_CONVENTION, HandednessConvention
+from lsm.synthetic import canonical_hand, to_frame, translated
+from lsm.types import Handedness
 
 FECHA = datetime(2026, 9, 8, 9, 15, tzinfo=UTC)
 CAMARA = camera_key(index=0, width=1280, height=720, backend="V4L2")
@@ -39,8 +40,7 @@ CAMARA = camera_key(index=0, width=1280, height=720, backend="V4L2")
 def calibracion(**cambios: object) -> Calibration:
     base: dict[str, object] = {
         "camera": CAMARA,
-        "swap_handedness": True,
-        "convention": HANDEDNESS_CONVENTION,
+        "entrada_sin_espejar": True,
         "fecha": FECHA,
         "width": 1280,
         "height": 720,
@@ -71,26 +71,43 @@ def test_la_clave_es_estable_entre_llamadas() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# La comprobación geométrica
+# --------------------------------------------------------------------------- #
+
+
+def test_la_mano_derecha_de_la_persona_queda_a_la_izquierda_sin_espejar() -> None:
+    """Frente a la cámara, el lado derecho de quien firma queda a la izquierda de
+    la imagen tal como sale del sensor. Si aparece a la derecha, algo la espejó.
+    No depende de la etiqueta de MediaPipe."""
+    izquierda_de_la_imagen = to_frame(
+        translated(canonical_hand(), 300.0, 400.0), width=1280, height=720
+    )
+    derecha_de_la_imagen = to_frame(
+        translated(canonical_hand(), 980.0, 400.0), width=1280, height=720
+    )
+
+    assert input_looks_unmirrored(izquierda_de_la_imagen, Handedness.RIGHT)
+    assert not input_looks_unmirrored(derecha_de_la_imagen, Handedness.RIGHT)
+    assert input_looks_unmirrored(derecha_de_la_imagen, Handedness.LEFT)
+
+
+# --------------------------------------------------------------------------- #
 # Registro
 # --------------------------------------------------------------------------- #
 
 
 def test_sin_archivo_no_hay_ninguna_camara_calibrada(tmp_path: Path) -> None:
     assert load_calibrations(tmp_path) == {}
-    assert current_calibration(tmp_path, CAMARA, swap_handedness=True) is None
+    assert current_calibration(tmp_path, CAMARA) is None
 
 
 def test_una_calibracion_sobrevive_el_viaje_a_disco(tmp_path: Path) -> None:
     save_calibration(tmp_path, calibracion())
 
-    recuperada = load_calibrations(tmp_path)[CAMARA]
-
-    assert recuperada == calibracion()
+    assert load_calibrations(tmp_path)[CAMARA] == calibracion()
 
 
 def test_calibrar_una_camara_no_borra_las_demas(tmp_path: Path) -> None:
-    """La misma persona con dos cámaras necesita dos calibraciones, y cambiar de
-    una a otra no debería obligar a rehacer la anterior."""
     otra = camera_key(index=1, width=640, height=480, backend="V4L2")
     save_calibration(tmp_path, calibracion())
     save_calibration(tmp_path, calibracion(camera=otra, width=640, height=480))
@@ -99,13 +116,13 @@ def test_calibrar_una_camara_no_borra_las_demas(tmp_path: Path) -> None:
 
 
 def test_recalibrar_reemplaza_el_registro_anterior(tmp_path: Path) -> None:
-    save_calibration(tmp_path, calibracion(swap_handedness=True))
-    save_calibration(tmp_path, calibracion(swap_handedness=False))
+    save_calibration(tmp_path, calibracion(confirmado_por="primera"))
+    save_calibration(tmp_path, calibracion(confirmado_por="segunda"))
 
-    assert load_calibrations(tmp_path)[CAMARA].swap_handedness is False
+    assert load_calibrations(tmp_path)[CAMARA].confirmado_por == "segunda"
 
 
-def test_un_registro_de_otra_version_se_rechaza(tmp_path: Path) -> None:
+def test_un_registro_de_una_version_futura_se_rechaza(tmp_path: Path) -> None:
     save_calibration(tmp_path, calibracion())
     ruta = calibration_path(tmp_path)
     payload = json.loads(ruta.read_text(encoding="utf-8"))
@@ -116,91 +133,65 @@ def test_un_registro_de_otra_version_se_rechaza(tmp_path: Path) -> None:
         load_calibrations(tmp_path)
 
 
+def test_una_calibracion_v1_se_lee_pero_no_esta_vigente(tmp_path: Path) -> None:
+    """El registro de antes del ADR 0017 comprobaba la etiqueta de MediaPipe, no
+    la entrada sin espejar. Se lee —el archivo de la Fase 1 existe— pero no
+    habilita a grabar, y el error dice por qué."""
+    ruta = calibration_path(tmp_path)
+    ruta.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "camaras": {
+                    CAMARA: {
+                        "swap_handedness": False,
+                        "convention": "SIGNER",
+                        "fecha": FECHA.isoformat(),
+                        "width": 1280,
+                        "height": 720,
+                        "confirmado_por": "alguien",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_calibrations(tmp_path)[CAMARA].entrada_sin_espejar is False
+    assert current_calibration(tmp_path, CAMARA) is None
+    with pytest.raises(CalibrationError, match="anterior a la mano declarada"):
+        require_calibration(tmp_path, CAMARA)
+
+
 # --------------------------------------------------------------------------- #
-# Vigencia
+# Vigencia y cerrojo
 # --------------------------------------------------------------------------- #
-
-
-def test_una_calibracion_del_ajuste_actual_es_vigente(tmp_path: Path) -> None:
-    save_calibration(tmp_path, calibracion(swap_handedness=True))
-
-    assert current_calibration(tmp_path, CAMARA, swap_handedness=True) is not None
-
-
-def test_cambiar_el_interruptor_invalida_la_calibracion(tmp_path: Path) -> None:
-    """El mecanismo entero, en un test.
-
-    El registro dice que alguien miró la pantalla y vio `RIGHT` **con aquel
-    ajuste**. Con el contrario habría visto `LEFT`, así que la comprobación ya no
-    dice nada y hay que rehacerla. Sin esto, tocar `config.yaml` a mitad del
-    proyecto dejaría medio dataset con una convención y medio con la otra, todo
-    con la misma pinta.
-    """
-    save_calibration(tmp_path, calibracion(swap_handedness=True))
-
-    assert current_calibration(tmp_path, CAMARA, swap_handedness=False) is None
 
 
 def test_una_camara_distinta_no_hereda_la_calibracion(tmp_path: Path) -> None:
     save_calibration(tmp_path, calibracion())
     otra = camera_key(index=2, width=1280, height=720, backend="V4L2")
 
-    assert current_calibration(tmp_path, otra, swap_handedness=True) is None
-
-
-def test_una_convencion_distinta_invalida_la_calibracion(tmp_path: Path) -> None:
-    """Si algún día el proyecto cambiara de convención, las calibraciones viejas
-    describirían otra cosa. Es el mismo patrón que `feature_spec_version`.
-
-    Se escribe `IMAGE` a pelo, y no "la contraria a la del proyecto", porque hoy
-    solo hay dos valores y calcularlo obligaría a un condicional que mypy sabe
-    resolver: el test dejaría de comprobar nada en cuanto alguien añadiera un
-    tercero.
-    """
-    save_calibration(tmp_path, calibracion(convention=HandednessConvention.IMAGE))
-
-    assert current_calibration(tmp_path, CAMARA, swap_handedness=True) is None
+    assert current_calibration(tmp_path, otra) is None
 
 
 def test_la_vigencia_no_caduca_por_tiempo(tmp_path: Path) -> None:
-    """Una calibración no se estropea sola. Se estropea al cambiar la
-    configuración o la cámara, y las dos cosas ya se detectan. Caducarla por
-    fecha añadiría un umbral arbitrario y una molestia periódica sin tapar ningún
-    fallo real."""
     save_calibration(tmp_path, calibracion(fecha=datetime(2020, 1, 1, tzinfo=UTC)))
 
-    assert current_calibration(tmp_path, CAMARA, swap_handedness=True) is not None
-
-
-# --------------------------------------------------------------------------- #
-# El cerrojo
-# --------------------------------------------------------------------------- #
+    assert current_calibration(tmp_path, CAMARA) is not None
 
 
 def test_sin_calibracion_require_lanza_y_dice_como_obtenerla(tmp_path: Path) -> None:
     with pytest.raises(CalibrationError, match="lsm-capture calibrar") as error:
-        require_calibration(tmp_path, CAMARA, swap_handedness=True)
+        require_calibration(tmp_path, CAMARA)
 
     assert "no está calibrada" in str(error.value)
-
-
-def test_con_el_interruptor_cambiado_el_error_dice_exactamente_eso(
-    tmp_path: Path,
-) -> None:
-    """Los dos fallos piden acciones distintas —calibrar por primera vez o revisar
-    qué se tocó en `config.yaml`— así que el mensaje los distingue."""
-    save_calibration(tmp_path, calibracion(swap_handedness=True))
-
-    with pytest.raises(CalibrationError) as error:
-        require_calibration(tmp_path, CAMARA, swap_handedness=False)
-
-    assert "mediapipe_reports_mirrored_handedness" in str(error.value)
 
 
 def test_con_calibracion_vigente_require_la_devuelve(tmp_path: Path) -> None:
     save_calibration(tmp_path, calibracion())
 
-    devuelta = require_calibration(tmp_path, CAMARA, swap_handedness=True)
+    devuelta = require_calibration(tmp_path, CAMARA)
 
     assert devuelta.camera == CAMARA
     assert devuelta.confirmado_por == "quien grabó"

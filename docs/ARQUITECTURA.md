@@ -164,8 +164,11 @@ es zurdo.
    muñeca → nudillo del dedo medio (landmark 0 → 9).
 3. Rotar: alinear ese mismo vector con un eje fijo, para tolerar inclinación de
    muñeca.
-4. Canonizar lateralidad: si MediaPipe reporta mano izquierda, espejar en X. Así
-   el dataset no necesita duplicarse por mano.
+4. Canonizar lateralidad: si la mano **declarada** de la sesión es la izquierda,
+   espejar en X. Así el dataset no necesita duplicarse por mano. Hasta la v1 del
+   contrato decidía la etiqueta de MediaPipe cuadro a cuadro; con la palma de lado
+   cambia de opinión a mitad de un trazo, y desde la v2 la mano la declara quien
+   firma (ADR 0017).
 5. Aplanar a vector de 63 valores (o 42 si se descarta la profundidad Z, que en
    MediaPipe es poco confiable — evaluarlo y registrarlo en un ADR).
 
@@ -360,8 +363,8 @@ Un solo archivo JSON versionado:
 ```json
 {
   "schema_version": 1,
-  "feature_spec_version": 1,
-  "handedness_convention": "SIGNER",
+  "feature_spec_version": 2,
+  "detector_input": "UNMIRRORED",
   "classifier": "static_knn",
   "labels": ["A", "B", "..."],
   "params": { "...": "..." },
@@ -372,8 +375,15 @@ Un solo archivo JSON versionado:
 `feature_spec_version` es obligatorio: si cambia la normalización, los modelos
 viejos deben rechazarse en carga en vez de dar predicciones silenciosamente malas.
 
-`handedness_convention` es obligatorio por el mismo motivo y protege un fallo más
-escurridizo. Dice qué mano nombra el campo `handedness`: la anatómica de quien
+`detector_input` es obligatorio por el mismo motivo y protege un fallo más
+escurridizo: que el cuadro llegue al detector **sin espejar** (`feature-spec.md`
+§0.3). Reemplazó a `handedness_convention` en la v2 del contrato (ADR 0017),
+cuando el espejo del paso 2 dejó de decidirlo la etiqueta de MediaPipe y pasó a
+decidirlo la mano declarada por quien firma. Lo que sigue describe el campo
+anterior y se conserva como historia; el razonamiento —un error sin síntomas que
+solo el rechazo al cargar puede atrapar— es el mismo.
+
+`handedness_convention` (hasta la v1) protegía un fallo escurridizo. Dice qué mano nombra el campo `handedness`: la anatómica de quien
 firma (`SIGNER`, la del proyecto) o la que se ve en la imagen espejada (`IMAGE`,
 que es como MediaPipe decide la lateralidad).
 
