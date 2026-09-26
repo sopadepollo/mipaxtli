@@ -88,11 +88,14 @@ from lsm.telemetry import (
     tasa_insuficiente,
 )
 from lsm.tracking_diagnostics import (
+    CameraProbe,
     GuidedSession,
     TrackingRecorder,
     analyze,
+    render_probes,
     render_report,
     report_to_json,
+    summarize_probe,
 )
 from lsm.types import (
     FrameSlot,
@@ -526,6 +529,28 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="repeticiones por letra (por defecto: diagnostics.repetitions_per_letter)",
     )
+    sondeo = subcomandos.add_parser(
+        "medir-camara",
+        help=(
+            "prueba cada combinación de backend, formato (MJPG o el del driver) y "
+            "resolución, y reporta los fps reales sin cuadros repetidos"
+        ),
+    )
+    sondeo.add_argument(
+        "--segundos",
+        type=float,
+        default=None,
+        help="segundos por configuración (por defecto: telemetry.camera_probe_seconds)",
+    )
+    sondeo.add_argument(
+        "--con-deteccion",
+        action="store_true",
+        dest="con_deteccion",
+        help=(
+            "pasa cada cuadro por MediaPipe, como en la demo. Sin esto se mide solo "
+            "la cámara; con esto, si la tubería es la que limita"
+        ),
+    )
     # También aquí, para que `diagnosticar --mano derecha` funcione además de
     # `--mano derecha diagnosticar`. SUPPRESS: si no se da, no pisa el de arriba.
     guiado.add_argument(
@@ -542,6 +567,8 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(medida, str):
         print(medida)
         return 2
+    if getattr(args, "comando", None) == "medir-camara":
+        return _medir_camara(config, args)
     diagnostico = _diagnostico_pedido(args, config)
     if isinstance(diagnostico, str):
         print(diagnostico)
@@ -599,6 +626,130 @@ def _medida_pedida(args: argparse.Namespace, config: Config) -> Medida | str | N
     if duracion <= 0.0:
         return f"--medir-segundos tiene que ser positivo, no {duracion}"
     return Medida(medicion=Medicion(), duracion=duracion)
+
+
+#: Lo que prueba `medir-camara` (Fase 5.1, Bloque 1). Son las hipótesis del ADR
+#: 0017 sobre los 16.4 fps reales —formato y transporte, no exposición—, no
+#: umbrales: backend × formato × resolución. DSHOW y MSMF solo existen en
+#: Windows; en otro sistema esas filas salen con su error.
+_SONDEO_BACKENDS = ("auto", "MSMF", "DSHOW")
+_SONDEO_FORMATOS: tuple[str | None, ...] = (None, "MJPG")
+_SONDEO_RESOLUCIONES = ((1280, 720), (640, 480))
+
+
+def _medir_camara(config: Config, args: argparse.Namespace) -> int:
+    """Mide cada configuración de cámara y escribe el reporte.
+
+    Sin descartar duplicados —es lo que se quiere contar— y tras descartar los
+    `telemetry.warmup_discard_frames` primeros cuadros, que llegan lentos.
+    """
+    segundos = args.segundos or config.telemetry.camera_probe_seconds
+    sondeos: list[CameraProbe] = []
+    try:
+        import cv2  # noqa: F401 — falla aquí, con el mensaje de extras
+
+        detector = build_detector(config) if args.con_deteccion else None
+        if detector is not None:
+            detector.open()
+        try:
+            for backend in _SONDEO_BACKENDS:
+                for formato in _SONDEO_FORMATOS:
+                    for ancho, alto in _SONDEO_RESOLUCIONES:
+                        pedido = f"{backend} {formato or 'driver'} {ancho}x{alto}"
+                        print(f"midiendo {pedido} ...", flush=True)
+                        sondeos.append(
+                            _sondear(
+                                config,
+                                pedido,
+                                backend=backend,
+                                formato=formato,
+                                ancho=ancho,
+                                alto=alto,
+                                segundos=segundos,
+                                detector=detector,
+                            )
+                        )
+        finally:
+            if detector is not None:
+                detector.close()
+    except ImportError as error:
+        print(MENSAJE_SIN_EXTRAS.format(modulo=error.name))
+        return 1
+
+    metadata: dict[str, object] = {
+        "fecha": now().isoformat(),
+        "commit": git_commit(Path.cwd()),
+        "segundos por configuración": segundos,
+        "cuadros de calentamiento descartados": config.telemetry.warmup_discard_frames,
+        "con MediaPipe en el bucle": "sí" if args.con_deteccion else "no",
+        "cámara": config.capture.camera_index,
+        "fps pedidos": config.capture.camera_fps,
+    }
+    texto = render_probes(sondeos, metadata)
+    salida = args.diagnostico_salida
+    salida.mkdir(parents=True, exist_ok=True)
+    ruta = salida / f"camara-{now().strftime('%Y-%m-%d-%H%M%S')}.md"
+    ruta.write_text(texto, encoding="utf-8")
+    print(texto)
+    print(f"reporte escrito en {ruta}")
+    return 0
+
+
+def _sondear(
+    config: Config,
+    pedido: str,
+    *,
+    backend: str,
+    formato: str | None,
+    ancho: int,
+    alto: int,
+    segundos: float,
+    detector: HandDetector | None,
+) -> CameraProbe:
+    camara = Camera(
+        index=config.capture.camera_index,
+        width=ancho,
+        height=alto,
+        fps=config.capture.camera_fps,
+        thumbnail_px=config.capture.duplicate_thumbnail_px,
+        fourcc=formato,
+        backend=backend,
+        drop_duplicates=False,
+    )
+    try:
+        with camara:
+            aceptado = camara.negotiated()
+            for _ in range(config.telemetry.warmup_discard_frames):
+                camara.read()
+            tiempos: list[float] = []
+            miniaturas: list[bytes] = []
+            inicio = time.perf_counter()
+            while time.perf_counter() - inicio < segundos:
+                frame = camara.read()
+                if detector is not None:
+                    detector.detect(frame.rgb)
+                tiempos.append(time.perf_counter() * 1000.0)
+                miniaturas.append(frame.thumbnail)
+    except CameraError as error:
+        return CameraProbe(
+            requested=pedido,
+            negotiated="",
+            frames=0,
+            seconds=0.0,
+            duplicates=0,
+            interval_p50_ms=None,
+            interval_p95_ms=None,
+            error=str(error).split(".")[0],
+        )
+    return summarize_probe(
+        pedido,
+        (
+            f"{aceptado.backend} {aceptado.fourcc or '?'} "
+            f"{aceptado.width}x{aceptado.height} @ {aceptado.fps:.0f}"
+        ),
+        tiempos,
+        miniaturas,
+    )
 
 
 def _diagnostico_pedido(
@@ -758,6 +909,7 @@ def _sesion_en_vivo(
                         ),
                         luminance=frame.mean_luminance,
                         thumbnail=frame.thumbnail,
+                        skipped_duplicates=frame.skipped_duplicates,
                         state=sesion.estado_maquina.value,
                         prompt=actual[0] if actual else None,
                         repetition=actual[1] if actual else None,
@@ -813,6 +965,15 @@ def _sesion_en_vivo(
             así que la tasa sale ligeramente optimista y por tanto los umbrales,
             ligeramente largos. Es el lado seguro del error.
             """
+            # Los primeros cuadros de una webcam llegan lentos mientras ajusta
+            # exposición y enfoque: en el ADR 0017 la tasa congelada al arrancar
+            # fue 18.4 fps y la sesión corrió a 29.5, así que todos los umbrales
+            # en milisegundos duraron ~1.6 veces menos. Se descartan antes de
+            # medir. Con `capture.drop_duplicate_frames` lo que se mide es la
+            # tasa de cuadros **nuevos**, que es la que ve la máquina de estados.
+            for _ in range(config.telemetry.warmup_discard_frames):
+                camera.read()
+                cv2.waitKey(1)
             medicion = Medicion()
             crono = Cronometro(reloj=time.perf_counter)
             cuadros = config.telemetry.fps_window_frames
@@ -847,7 +1008,7 @@ def _sesion_en_vivo(
             Camera.from_config(
                 config.capture,
                 thumbnail_px=(
-                    config.diagnostics.duplicate_thumbnail_px
+                    config.capture.duplicate_thumbnail_px
                     if diagnostico is not None
                     else None
                 ),

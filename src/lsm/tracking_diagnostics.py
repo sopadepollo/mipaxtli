@@ -101,6 +101,9 @@ class FrameRecord:
     #: Letra pedida en la sesión guiada y número de repetición (desde 1).
     prompt: str | None = None
     repetition: int | None = None
+    #: Cuadros repetidos que la cámara descartó justo antes de éste
+    #: (`capture.drop_duplicate_frames`, Bloque 1).
+    skipped_duplicates: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +144,7 @@ class TrackingRecorder:
         state: str,
         prompt: str | None = None,
         repetition: int | None = None,
+        skipped_duplicates: int = 0,
     ) -> FrameRecord:
         """Registra un cuadro y devuelve su registro.
 
@@ -186,6 +190,7 @@ class TrackingRecorder:
             state=state,
             prompt=prompt,
             repetition=repetition,
+            skipped_duplicates=skipped_duplicates,
         )
         self.records.append(record)
         self._previous_frame = frame
@@ -440,6 +445,10 @@ class TrackingReport:
     detector_interval_ms: float | None
     wall_interval_ms: float | None
     repetitions: tuple[RepetitionSummary, ...]
+    #: Repetidos que la cámara descartó antes de MediaPipe (Bloque 1). Con
+    #: descarte activo, `duplicates` debería quedar cerca de cero y este número
+    #: es el que dice cuántos había.
+    skipped_duplicates: int = 0
 
     @property
     def fps(self) -> float | None:
@@ -523,6 +532,7 @@ def analyze(
             else None
         ),
         repetitions=summarize_repetitions(records, contexts, events),
+        skipped_duplicates=sum(r.skipped_duplicates for r in records),
     )
 
 
@@ -731,6 +741,10 @@ def render_report(report: TrackingReport, metadata: dict[str, Any]) -> str:
             f"({report.duplicates} duplicados)"
         ),
         (
+            "- repetidos descartados por la cámara antes de MediaPipe: "
+            f"{report.skipped_duplicates}"
+        ),
+        (
             f"- intervalo real medio {_fmt(report.wall_interval_ms, '{:.1f}')} ms; "
             "intervalo que recibe MediaPipe "
             f"{_fmt(report.detector_interval_ms, '{:.1f}')} ms"
@@ -793,6 +807,7 @@ def report_to_json(
             "fps": report.fps,
             "fps_unique": report.fps_unique,
             "duplicates": report.duplicates,
+            "skipped_duplicates": report.skipped_duplicates,
             "detection_rate": {c.value: t.rate for c, t in report.rates.items()},
             "velocity_correlation": report.velocity_correlation,
             "luminance_correlation": report.luminance_correlation,
@@ -826,6 +841,7 @@ def report_to_json(
                 "state": r.state,
                 "prompt": r.prompt,
                 "repetition": r.repetition,
+                "skipped_duplicates": r.skipped_duplicates,
             }
             for r in records
         ],
@@ -840,3 +856,105 @@ def report_to_json(
             for e in events
         ],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Sondeo de la cámara (Fase 5.1, Bloque 1)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class CameraProbe:
+    """Una configuración de cámara medida: cuántos cuadros y cuántos nuevos."""
+
+    #: Lo que se pidió: backend, formato y resolución.
+    requested: str
+    #: Lo que el driver dijo haber aceptado, o el error si no abrió.
+    negotiated: str
+    frames: int
+    seconds: float
+    duplicates: int
+    #: Milisegundos que tardó cada cuadro en el bucle, p50 y p95.
+    interval_p50_ms: float | None
+    interval_p95_ms: float | None
+    error: str | None = None
+
+    @property
+    def fps(self) -> float | None:
+        return (
+            (self.frames - 1) / self.seconds
+            if self.seconds > 0 and self.frames > 1
+            else None
+        )
+
+    @property
+    def fps_unique(self) -> float | None:
+        if self.seconds <= 0 or self.frames < 2:
+            return None
+        return (self.frames - 1 - self.duplicates) / self.seconds
+
+
+def summarize_probe(
+    requested: str,
+    negotiated: str,
+    wall_ms: Sequence[float],
+    thumbnails: Sequence[bytes],
+) -> CameraProbe:
+    """Tasa entregada y tasa de cuadros nuevos de una configuración.
+
+    Un duplicado es una miniatura idéntica a la anterior, el mismo criterio que
+    `io/camera.py` usa para descartarlos.
+    """
+    intervalos = [b - a for a, b in pairwise(wall_ms)]
+    return CameraProbe(
+        requested=requested,
+        negotiated=negotiated,
+        frames=len(wall_ms),
+        seconds=(wall_ms[-1] - wall_ms[0]) / 1000.0 if len(wall_ms) > 1 else 0.0,
+        duplicates=sum(1 for a, b in pairwise(thumbnails) if a and a == b),
+        interval_p50_ms=percentile(intervalos, 0.5),
+        interval_p95_ms=percentile(intervalos, 0.95),
+    )
+
+
+def render_probes(probes: Sequence[CameraProbe], metadata: dict[str, Any]) -> str:
+    """La tabla del sondeo, de mejor a peor por cuadros nuevos por segundo."""
+    ordenados = sorted(
+        probes, key=lambda p: -(p.fps_unique or 0.0) if p.error is None else 1.0
+    )
+    partes = ["# Sondeo de la cámara", ""]
+    partes += [f"- **{k}**: {v}" for k, v in metadata.items()]
+    partes += [
+        "",
+        _tabla(
+            [
+                "pedido",
+                "aceptado por el driver",
+                "fps entregados",
+                "fps nuevos",
+                "% repetidos",
+                "intervalo p50 / p95 (ms)",
+            ],
+            (
+                [p.requested, p.error or p.negotiated, "—", "—", "—", "—"]
+                if p.error is not None
+                else [
+                    p.requested,
+                    p.negotiated,
+                    _fmt(p.fps, "{:.1f}"),
+                    f"**{_fmt(p.fps_unique, '{:.1f}')}**",
+                    _fmt(100.0 * p.duplicates / max(p.frames - 1, 1), "{:.1f}"),
+                    f"{_fmt(p.interval_p50_ms, '{:.1f}')} / "
+                    f"{_fmt(p.interval_p95_ms, '{:.1f}')}",
+                ]
+                for p in ordenados
+            ),
+        ),
+        "",
+        (
+            "«fps nuevos» es lo que importa: cuadros que no repiten al anterior. "
+            "La configuración de arriba es la candidata para `capture.backend`, "
+            "`capture.fourcc`, `capture.frame_width` y `capture.frame_height`."
+        ),
+    ]
+    return "\n".join(partes) + "\n"

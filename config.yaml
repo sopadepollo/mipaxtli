@@ -327,6 +327,26 @@ capture:
   # timestamps que consume el modo VIDEO de MediaPipe.
   camera_fps: 30
 
+  # Formato de video pedido (código de cuatro letras: MJPG, YUY2…), o null para
+  # el del driver. Fase 5.1, Bloque 1: con el del driver la webcam de referencia
+  # entrega 16.4 fps reales, con luz y sin ella (ADR 0017). Se fija tras medir
+  # con `lsm-demo medir-camara`; hasta entonces, el de siempre.
+  fourcc: null
+
+  # API de captura de OpenCV: auto, MSMF, DSHOW (Windows) o V4L2. En Windows
+  # DSHOW suele ser la única que entrega MJPG a 30 fps.
+  backend: auto
+
+  # Descartar antes de MediaPipe los cuadros que repiten exactamente al
+  # anterior (el 44.5% en la webcam de referencia, ADR 0017), hasta
+  # max_consecutive_duplicates seguidos.
+  drop_duplicate_frames: true
+  max_consecutive_duplicates: 10
+
+  # Ancho de la miniatura en grises con la que se reconoce un cuadro repetido.
+  # Los repetidos dan diferencia exactamente 0; los reales, mediana 0.0015.
+  duplicate_thumbnail_px: 32
+
   # Espejar el preview, que es lo que espera quien se ve en pantalla. SOLO afecta
   # a lo que se dibuja: el frame que recibe el detector nunca va espejado
   # (feature-spec.md §0.3). Ponerlo en false no cambia ni un bit de lo grabado.
@@ -409,6 +429,14 @@ telemetry:
   # 1800 cuadros son los 90 peores— y corto para repetirlo tras cada ajuste.
   benchmark_seconds: 60.0
 
+  # Cuadros que se descartan al abrir la cámara antes de medir la tasa que
+  # convierte los umbrales en ms a cuadros. En el ADR 0017 la tasa congelada al
+  # arrancar fue 18.4 fps y la sesión corrió a 29.5.
+  warmup_discard_frames: 30
+
+  # Segundos que `lsm-demo medir-camara` mide cada configuración de cámara.
+  camera_probe_seconds: 8.0
+
 # Acumulación de letras en palabras (ARQUITECTURA.md §4.2, docs/adr/0012-...).
 spelling:
   # Ausencia de mano que cierra la palabra en curso y empieza otra. Un segundo,
@@ -474,8 +502,3 @@ diagnostics:
 
   # Repeticiones por letra dinámica en la sesión guiada.
   repetitions_per_letter: 10
-
-  # Ancho de la miniatura en grises con la que se reconoce un cuadro repetido
-  # por la cámara. Pequeña para que el ruido del sensor no la cambie; grande
-  # para que dos cuadros distintos con la mano quieta no coincidan.
-  duplicate_thumbnail_px: 32

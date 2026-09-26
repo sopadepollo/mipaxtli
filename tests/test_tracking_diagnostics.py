@@ -471,8 +471,11 @@ def test_una_sesion_guiada_en_vivo_escribe_su_diagnostico(
         *con_hueco,
         *([trazo[-1]] * 20),
     ]
-    teclas = [255] * (calentamiento + len(slots) - calentamiento - 1)
-    teclas[calentamiento + 20] = 32  # ESPACIO: repetición hecha
+    # El calentamiento lee además `warmup_discard_frames` cuadros de la cámara
+    # sin pasarlos al detector, y cada uno consume una tecla.
+    descartados = CONFIG.telemetry.warmup_discard_frames
+    teclas = [255] * (descartados + len(slots) - 1)
+    teclas[descartados + calentamiento + 20] = 32  # ESPACIO: repetición hecha
     teclas.append(ord("q"))
 
     cv2_falso = types.SimpleNamespace(

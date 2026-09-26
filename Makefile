@@ -4,7 +4,7 @@
 
 UV ?= uv
 
-.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval eval-dinamico demo medir-fps diagnostico signs signs-render signs-verificar
+.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval eval-dinamico demo medir-fps diagnostico medir-camara signs signs-render signs-verificar
 
 help:
 	@echo "setup        instala dependencias con uv"
@@ -184,6 +184,11 @@ medir-fps:
 #   make diagnostico ARGS="--iluminacion habitual"
 diagnostico:
 	$(UV) run lsm-demo diagnosticar $(ARGS)
+
+# Prueba backend x formato x resolucion de la camara y reporta los fps de
+# cuadros nuevos (sin repetidos). Fase 5.1, Bloque 1. Camara.
+medir-camara:
+	$(UV) run lsm-demo medir-camara $(ARGS)
 
 # --------------------------------------------------------------------------- #
 # Texto -> senas (Fase 4). Sin camara.

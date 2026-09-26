@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -419,6 +419,15 @@ class TelemetryConfig(_Section):
     #: cada ajuste.
     benchmark_seconds: float = Field(default=60.0, gt=0.0, le=3600.0)
 
+    #: Cuadros que se descartan al abrir la cámara antes de medir la tasa con la
+    #: que se convierten los umbrales. En el ADR 0017 la tasa congelada al
+    #: arrancar fue 18.4 fps y la sesión corrió a 29.5: los primeros cuadros de
+    #: una webcam llegan lentos mientras ajusta exposición y enfoque.
+    warmup_discard_frames: int = Field(default=30, ge=0, le=3600)
+
+    #: Segundos que `lsm-demo medir-camara` mide cada configuración de cámara.
+    camera_probe_seconds: float = Field(default=8.0, gt=0.0, le=600.0)
+
 
 class DiagnosticsConfig(_Section):
     """Diagnóstico de pérdidas de tracking (`src/lsm/tracking_diagnostics.py`).
@@ -436,12 +445,6 @@ class DiagnosticsConfig(_Section):
     #: Repeticiones por letra dinámica en la sesión guiada.
     repetitions_per_letter: int = Field(default=10, ge=1, le=100)
 
-    #: Ancho, en píxeles, de la miniatura en escala de grises con la que se
-    #: reconoce un cuadro duplicado. Pequeña para que el ruido del sensor no
-    #: cambie la huella de un cuadro que la cámara repitió tal cual, y grande
-    #: para que dos cuadros distintos con la mano quieta no coincidan.
-    duplicate_thumbnail_px: int = Field(default=32, ge=4, le=640)
-
 
 class CaptureConfig(_Section):
     """Recolección de dataset (`src/lsm/cli/capture.py`, `ARQUITECTURA.md` §4.7)."""
@@ -458,6 +461,34 @@ class CaptureConfig(_Section):
     #: Cuadros por segundo pedidos a la cámara. Además fija el paso de los
     #: timestamps que consume el modo VIDEO de MediaPipe.
     camera_fps: int = Field(default=30, ge=1, le=240)
+
+    #: Formato de video pedido a la cámara, como código de cuatro letras
+    #: (`MJPG`, `YUY2`…). `None` deja el que el driver elija. Fase 5.1, Bloque 1:
+    #: la webcam de referencia entrega 16.4 fps reales con el formato por
+    #: defecto, igual con luz que sin ella (ADR 0017), lo que apunta al formato o
+    #: al transporte y no a la exposición. Se fija tras medir con
+    #: `lsm-demo medir-camara`.
+    fourcc: str | None = Field(default=None, min_length=4, max_length=4)
+
+    #: API de captura de OpenCV: `auto`, `MSMF`, `DSHOW` (Windows) o `V4L2`.
+    backend: Literal["auto", "MSMF", "DSHOW", "V4L2"] = "auto"
+
+    #: Descartar en `io/camera.py`, antes de MediaPipe, los cuadros que repiten
+    #: exactamente al anterior. Un repetido no aporta nada y hace que la
+    #: velocidad alterne alto/cero en pleno trazo (ADR 0015, ADR 0017).
+    drop_duplicate_frames: bool = Field(default=True)
+
+    #: Tope de repetidos seguidos que se descartan antes de entregar uno igual:
+    #: sin tope, una imagen congelada colgaría el bucle en vez de verse congelada.
+    max_consecutive_duplicates: int = Field(default=10, ge=1, le=1000)
+
+    #: Ancho, en píxeles, de la miniatura en grises con la que se reconoce un
+    #: cuadro repetido. Pequeña para que el ruido del sensor no cambie la huella
+    #: de un cuadro que la cámara repitió tal cual; grande para que dos cuadros
+    #: distintos con la mano quieta no coincidan. En las sesiones del ADR 0017 la
+    #: diferencia media entre cuadros reales tuvo mediana 0.0015 y los repetidos
+    #: exactamente 0.
+    duplicate_thumbnail_px: int = Field(default=32, ge=4, le=640)
 
     #: Espejar el preview. **Solo afecta a lo que se dibuja en pantalla**: el
     #: frame que recibe el detector nunca va espejado (`feature-spec.md` §0.3).

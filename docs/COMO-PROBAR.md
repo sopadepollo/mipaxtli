@@ -491,6 +491,35 @@ Desde Windows, como la demo en vivo (ver 6.1):
 & $HOME\lsm-win\Scripts\python.exe -m lsm.cli.demo diagnosticar --iluminacion habitual
 ```
 
+### 6.3 Medir la cámara: formato y resolución 📷
+
+Para encontrar la configuración que entrega más cuadros **nuevos** por segundo
+(Fase 5.1, Bloque 1). La webcam de referencia entregaba 29.5 fps de los que solo
+16.4 eran nuevos: el resto repetía el cuadro anterior (ADR 0017).
+
+```bash
+uv run lsm-demo medir-camara                    # solo la cámara, 8 s por configuración
+uv run lsm-demo medir-camara --con-deteccion    # con MediaPipe en el bucle, como la demo
+```
+
+Prueba cada combinación de backend (`auto`, `MSMF`, `DSHOW`), formato (el del
+driver o `MJPG`) y resolución (1280x720 y 640x480), descartando antes los
+primeros cuadros, que llegan lentos. No hace falta hacer nada delante de la
+cámara. Escribe `data/diagnostico/camara-<fecha>.md` con una tabla ordenada de
+mejor a peor por **fps nuevos**; la de arriba es la candidata para `capture.backend`,
+`capture.fourcc`, `capture.frame_width` y `capture.frame_height` en `config.yaml`.
+
+Las filas de `MSMF` y `DSHOW` solo funcionan en Windows. Desde Windows, como la demo:
+
+```powershell
+& $HOME\lsm-win\Scripts\python.exe -m lsm.cli.demo medir-camara
+```
+
+**Descarte de repetidos.** Con `capture.drop_duplicate_frames` (activado por
+defecto) la cámara ya no entrega a MediaPipe los cuadros que repiten al anterior;
+la tasa que ven la demo y la captura es la de cuadros nuevos. El sondeo los mide
+sin descartar, porque lo que quiere es contarlos.
+
 ---
 
 ## 7. Texto a señas 🖼️

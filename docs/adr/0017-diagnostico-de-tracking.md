@@ -187,6 +187,26 @@ Bloque 4.
 
 ## Decisión 2 — la tasa se mide sin duplicados y después del arranque
 
+**Implementado (Bloque 1), pendiente de medir:**
+
+- `io/camera.py` descarta los cuadros repetidos antes de MediaPipe
+  (`capture.drop_duplicate_frames`, activado), reconociéndolos por su miniatura
+  en grises; `CameraFrame.skipped_duplicates` dice cuántos saltó.
+- El calentamiento de la demo descarta `telemetry.warmup_discard_frames` cuadros
+  antes de medir la tasa, y la mide sobre cuadros nuevos.
+- `capture.fourcc` y `capture.backend` son configurables; el formato se pide
+  **antes** que la resolución.
+- `lsm-demo medir-camara` mide backend × formato × resolución sin descartar y
+  reporta fps entregados y fps nuevos. Con esos números se fija la configuración
+  y se repite el diagnóstico de huecos; los parámetros del Bloque 2 se calibran
+  con los números nuevos, no con los de 16 fps.
+- La cámara de referencia llega por **MSMF nativo en Windows** (cabecera de los
+  dos reportes), no por WSL/usbipd, así que esa comparación no aplica.
+
+Queda para después de medir: si con los cuadros ya deduplicados vuelve a
+funcionar el criterio de frames **consecutivos** en movimiento (ADR 0015, punto
+3), y si conviene bajar `hands.min_tracking_confidence`.
+
 Con el Bloque 1 (descartar duplicados antes de MediaPipe) la tasa relevante pasa
 a ser la de cuadros únicos (~16.4 fps), y el calentamiento tiene que medirla
 después de que la cámara se estabilice, no en los primeros 30 cuadros. Sin esto,

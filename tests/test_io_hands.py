@@ -8,7 +8,6 @@ importar MediaPipe en ningún módulo.
 
 from __future__ import annotations
 
-import importlib
 import json
 import sys
 from dataclasses import dataclass
@@ -151,7 +150,7 @@ def test_ningun_modulo_del_paquete_importa_mediapipe() -> None:
     cerca está del hardware, así que es donde una importación descuidada rompería
     esto sin que nadie lo notara hasta que fallara CI.
     """
-    for module in (
+    modulos = (
         "lsm.capture",
         "lsm.classifiers.base",
         "lsm.classifiers.dummy",
@@ -173,12 +172,30 @@ def test_ningun_modulo_del_paquete_importa_mediapipe() -> None:
         "lsm.synthetic",
         "lsm.types",
         "lsm.vocabulary",
-    ):
-        importlib.import_module(module)
+        "lsm.hand_check",
+        "lsm.tracking_diagnostics",
+        "lsm.classifiers.dynamic_dtw",
+        "lsm.classifiers.registry",
+        "lsm.cli.evaluate_dynamic",
+    )
 
-    assert "mediapipe" not in sys.modules
-    assert "cv2" not in sys.modules
-    assert "numpy" not in sys.modules
+    # En un proceso limpio: otros tests de la suite importan `cv2` y `numpy` de
+    # verdad (los de la cámara, cuando están instaladas), y comprobarlo sobre el
+    # `sys.modules` compartido haría depender el resultado del orden.
+    import subprocess
+
+    guion = (
+        "import importlib, sys\n"
+        f"for m in {modulos!r}:\n"
+        "    importlib.import_module(m)\n"
+        "fuera = [m for m in ('mediapipe', 'cv2', 'numpy') if m in sys.modules]\n"
+        "print(','.join(fuera))\n"
+    )
+    resultado = subprocess.run(
+        [sys.executable, "-c", guion], capture_output=True, text=True, check=True
+    )
+
+    assert resultado.stdout.strip() == ""
 
 
 def test_el_detector_real_satisface_el_protocolo() -> None:
