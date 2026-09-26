@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lsm.classifiers.static_knn import StaticKnnClassifier
+from lsm.classifiers.registry import ClassifierRegistry
 from lsm.cli import MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
 from lsm.io.camera import Camera, CameraError
@@ -51,6 +51,7 @@ from lsm.segmentation import (
     SegmentationEvent,
     State,
     StateChanged,
+    WindowDynamic,
     WindowRejected,
     WindowStable,
     frames_from_ms,
@@ -82,10 +83,14 @@ from lsm.telemetry import (
     segundos_restantes,
     tasa_insuficiente,
 )
-from lsm.types import FrameSlot, InvalidFrame, InvalidReason, Prediction
+from lsm.types import FrameSlot, InvalidFrame, InvalidReason, Prediction, WindowOrigin
 from lsm.vocabulary import Label, spec
 
 DEFAULT_MODEL = Path("data/models/static_knn.json")
+#: El modelo dinámico es OPCIONAL: sin él, la demo sigue deletreando estáticas y
+#: los trazos que la segmentación entregue se rechazan en vez de caer al
+#: clasificador estático. Ver `classifiers/registry.py`.
+DEFAULT_DYNAMIC_MODEL = Path("data/models/dynamic_dtw.json")
 
 #: `--desde-dataset` con una ruta sin muestras terminaba imprimiendo una linea en
 #: blanco y saliendo con 0, que es indistinguible de "la tubería no reconoció
@@ -196,9 +201,16 @@ def aplicar_evento(sesion: Sesion, evento: SegmentationEvent) -> None:
     predicción se deja como estaba.
     """
     match evento:
-        case LetterEmitted(prediction=prediction):
+        case LetterEmitted(prediction=prediction, origin=origin):
             sesion.ultima = prediction
             sesion.aplicar(LetterSignal(label=Label(prediction.label)))
+            if origin is WindowOrigin.DYNAMIC:
+                # Qué clasificador habló: una letra que sale por el camino
+                # equivocado es el primer síntoma de un umbral de movimiento mal
+                # calibrado, y sin esto no se ve.
+                sesion.mensaje += " (trazo)"
+        case WindowDynamic(window=window):
+            sesion.mensaje = f"trazo de {len(window)} frames"
         case EvidenceAccumulated(prediction=prediction, window=window):
             # La confianza subiendo en vivo es lo que hace diagnosticable la demo
             # cuando una letra no sale: sin esto, «está acumulando evidencia sobre
@@ -215,20 +227,35 @@ def aplicar_evento(sesion: Sesion, evento: SegmentationEvent) -> None:
             pass
 
 
-def cargar_clasificador(path: Path) -> StaticKnnClassifier:
-    """Carga el modelo exportado.
+def cargar_registro(estatico: Path, dinamico: Path | None) -> ClassifierRegistry:
+    """Carga los modelos exportados en su ranura del registry.
 
     `from_export` rechaza un `feature_spec_version` o un
     `handedness_convention` que no coincidan, que es la defensa contra predecir
     en silencio con una normalización distinta a la del entrenamiento.
+
+    El estático es obligatorio; el dinámico no. Sin él la demo avisa y sigue:
+    deletrear estáticas no depende de la Fase 5, y los trazos que la
+    segmentación entregue salen UNKNOWN en vez de caer al estático.
     """
-    if not path.exists():
+    if not estatico.exists():
         raise SystemExit(
-            f"no hay modelo en {path}. Entrenalo primero:\n"
+            f"no hay modelo en {estatico}. Entrenalo primero:\n"
             "  uv run lsm-train --sin-sintetico"
         )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return StaticKnnClassifier.from_export(payload)
+    payload_estatico = json.loads(estatico.read_text(encoding="utf-8"))
+    payload_dinamico = None
+    if dinamico is not None and dinamico.exists():
+        payload_dinamico = json.loads(dinamico.read_text(encoding="utf-8"))
+    elif dinamico is not None:
+        print(
+            f"aviso: no hay modelo dinámico en {dinamico}; las letras con "
+            "movimiento no se reconocerán. `uv run lsm-train --sin-sintetico` "
+            "entrena los dos."
+        )
+    return ClassifierRegistry.from_exports(
+        static=payload_estatico, dynamic=payload_dinamico
+    )
 
 
 def flujo_desde_dataset(raiz: Path, config: Config) -> Iterator[Any]:
@@ -245,8 +272,24 @@ def flujo_desde_dataset(raiz: Path, config: Config) -> Iterator[Any]:
     hueco = frames_from_ms(
         config.spelling.space_after_absent_ms, config.capture.camera_fps
     )
+    # Antes del hueco, la mano se detiene donde acabó: es lo que hace quien
+    # termina una seña antes de bajar la mano. Sin este reposo las dinámicas
+    # no saldrían nunca: las grabaciones terminan con el trazo en marcha (la
+    # captura corta en `dynamic_max_frames`), el hueco llegaba en pleno
+    # movimiento y la máquina descartaba el trazo como interrumpido. Ver el
+    # ADR 0015.
+    reposo = (
+        frames_from_ms(
+            config.segmentation.motion_confirm_low_ms, config.capture.camera_fps
+        )
+        + 1
+    )
     for ruta in sorted(iter_sample_paths(raiz)):
-        yield from read_sample(ruta).frames
+        frames = read_sample(ruta).frames
+        yield from frames
+        if frames and not isinstance(frames[-1], InvalidFrame):
+            for _ in range(reposo):
+                yield frames[-1]
         for _ in range(hueco):
             yield InvalidFrame(reason=InvalidReason.NO_HAND, detail="entre muestras")
 
@@ -264,7 +307,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--modelo",
         type=Path,
         default=DEFAULT_MODEL,
-        help="modelo exportado por lsm-train",
+        help="modelo estático exportado por lsm-train",
+    )
+    parser.add_argument(
+        "--modelo-dinamico",
+        type=Path,
+        default=DEFAULT_DYNAMIC_MODEL,
+        dest="modelo_dinamico",
+        help="modelo dinámico exportado por lsm-train (opcional)",
     )
     parser.add_argument(
         "--desde-dataset",
@@ -312,17 +362,17 @@ def main(argv: list[str] | None = None) -> int:
         print(SIN_MUESTRAS.format(raiz=args.desde_dataset))
         return 1
 
-    classifier = cargar_clasificador(args.modelo)
+    registro = cargar_registro(args.modelo, args.modelo_dinamico)
     sesion = Sesion(config=config)
 
     if args.desde_dataset is not None:
         flujo = flujo_desde_dataset(args.desde_dataset, config)
-        for evento in run_segmentation(flujo, config, classifier.predict):
+        for evento in run_segmentation(flujo, config, registro):
             aplicar_evento(sesion, evento)
         print(render_text(sesion.state))
         return 0
 
-    return _sesion_en_vivo(config, classifier, sesion, medida)
+    return _sesion_en_vivo(config, registro, sesion, medida)
 
 
 def _medida_pedida(args: argparse.Namespace, config: Config) -> Medida | str | None:
@@ -398,7 +448,7 @@ def _cerrar_cuadro(
 
 def _sesion_en_vivo(
     config: Config,
-    classifier: StaticKnnClassifier,
+    registro: ClassifierRegistry,
     sesion: Sesion,
     medida: Medida | None = None,
 ) -> int:
@@ -529,7 +579,7 @@ def _sesion_en_vivo(
                 for evento in run_segmentation(
                     flujo(camera, detector),
                     config,
-                    classifier.predict,
+                    registro,
                     fps=sesion.fps,
                 ):
                     aplicar_evento(sesion, evento)

@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pytest
 
+from lsm.classifiers.registry import ClassifierRegistry
 from lsm.classifiers.static_knn import StaticKnnClassifier
 from lsm.cli.demo import (
     Medida,
@@ -51,6 +52,7 @@ from lsm.segmentation import (
     LetterEmitted,
     RejectionReason,
     SegmentationEvent,
+    WindowDynamic,
     WindowRejected,
     frames_from_ms,
     run_segmentation,
@@ -100,6 +102,9 @@ def _entrenado() -> StaticKnnClassifier:
 #: Se entrena una vez para todo el módulo: es determinista y no depende de nada
 #: que un test pueda ensuciar.
 CLASIFICADOR = _entrenado()
+#: Lo que la demo pasa de verdad a la segmentación: el registry, con solo el
+#: estático cargado. Los trazos que se colaran al camino dinámico saldrían UNKNOWN.
+REGISTRO = ClassifierRegistry(static=CLASIFICADOR)
 
 # --------------------------------------------------------------------------- #
 # El ritmo de los frames
@@ -110,19 +115,32 @@ CLASIFICADOR = _entrenado()
 
 #: Frames de viaje entre dos letras.
 #:
-#: Tan largos como el buffer circular **a propósito**. La ventana que se clasifica
-#: son los últimos `buffer_size` frames, así que si el viaje fuera más corto, la
-#: primera ventana que la máquina declare estable sobre la letra nueva todavía
-#: llevaría dentro frames de la anterior: se clasificaría una mezcla de dos manos y
-#: la máquina emitiría una letra que nadie hizo. Medido con un viaje de 4 frames,
-#: eso es exactamente lo que pasa — la S salía como A.
+#: Tan largos como el buffer circular. La razón original —un viaje más corto
+#: fundía dos manos en la ventana clasificada— desapareció con el ADR 0013, pero
+#: el ritmo de `QUIETO` y la segunda oportunidad de las letras que acumulan
+#: evidencia se calcularon con este viaje, y acortarlo mete el rebote dentro del
+#: cooldown de la letra anterior.
+#:
+#: **Desde el ADR 0015 este viaje es un candidato dinámico**: 800 ms de
+#: movimiento superan `motion_min`. El texto no cambia —el trazo se rechaza y la
+#: letra de llegada sale por el camino estático—, pero cada viaje deja un
+#: `LOW_CONFIDENCE` de la ruta dinámica y la letra de llegada sale con la quietud
+#: que cerró el candidato. Los tests que miden latencia estática usan
+#: `VIAJE_CORTO`.
 VIAJE = UMBRALES.buffer_size
+
+#: Un tránsito que se queda por debajo de `motion_min`: el viaje suma sus frames
+#: más el salto de llegada a la quietud, y con `motion_min` frames móviles se
+#: volvería candidato.
+VIAJE_CORTO = UMBRALES.motion_min_frames - 2
 
 #: Frames de mano quieta por letra, sumados término a término:
 #:
-#: - `stable_frames + 1`: el primer frame quieto gasta todavía la velocidad del
-#:   viaje; los `stable_frames` siguientes son los que la máquina exige para
-#:   declarar la ventana estable. Ahí se emite la letra.
+#: - `motion_confirm_low_frames + 1`: el primer frame quieto gasta todavía la
+#:   velocidad del viaje; los siguientes son la espera hasta la primera
+#:   clasificación. Como `VIAJE` es un candidato dinámico, esa espera es el
+#:   reposo que lo cierra —`motion_confirm_low_frames`— y no `stable_frames`:
+#:   la letra sale en el frame siguiente al rechazo del trazo (ADR 0015).
 #: - `+ emit_cooldown_frames`: el cooldown de EMIT, durante el cual no se clasifica.
 #: - `+ stable_frames`: lo que tarda la ventana en volver a declararse estable al
 #:   salir del cooldown.
@@ -135,7 +153,7 @@ VIAJE = UMBRALES.buffer_size
 #: esa propiedad, que es la mitad del criterio. Uno más largo solo acumula más
 #: rechazos por `REPEATED_LETTER`, ninguna emisión de más.
 QUIETO = (
-    (UMBRALES.stable_frames + 1)
+    (UMBRALES.motion_confirm_low_frames + 1)
     + UMBRALES.emit_cooldown_frames
     + UMBRALES.stable_frames
     + 1
@@ -168,7 +186,9 @@ def viaje(label: Label, count: int = VIAJE, step: float = 25.0) -> list[FrameSlo
     ]
 
 
-def frames(labels: tuple[Label, ...], *, rebote: bool = True) -> list[FrameSlot]:
+def frames(
+    labels: tuple[Label, ...], *, rebote: bool = True, largo_viaje: int = VIAJE
+) -> list[FrameSlot]:
     """Un bloque quieto por letra, con el viaje entre ellas.
 
     Sin `rebote` las señas se pegan una a otra, que es lo que hace falta para
@@ -177,19 +197,19 @@ def frames(labels: tuple[Label, ...], *, rebote: bool = True) -> list[FrameSlot]
     flujo: list[FrameSlot] = []
     for indice, label in enumerate(labels):
         if indice and rebote:
-            flujo += viaje(label)
+            flujo += viaje(label, count=largo_viaje)
         flujo += quieto(label)
     return flujo
 
 
 def eventos(flujo: list[FrameSlot], config: Config = CONFIG) -> list[SegmentationEvent]:
-    return list(run_segmentation(iter(flujo), config, CLASIFICADOR.predict))
+    return list(run_segmentation(iter(flujo), config, REGISTRO))
 
 
 def deletrear(flujo: list[FrameSlot], config: Config = CONFIG) -> SpellingState:
     """Corre la tubería entera y devuelve el estado del buffer de deletreo."""
     sesion = Sesion(config=config)
-    for evento in run_segmentation(iter(flujo), config, CLASIFICADOR.predict):
+    for evento in run_segmentation(iter(flujo), config, REGISTRO):
         aplicar_evento(sesion, evento)
     return sesion.state
 
@@ -215,6 +235,20 @@ def emitidas(eventos_: list[SegmentationEvent]) -> list[str]:
 
 def rechazos(eventos_: list[SegmentationEvent]) -> list[RejectionReason]:
     return [e.reason for e in eventos_ if isinstance(e, WindowRejected)]
+
+
+def rechazos_estaticos(eventos_: list[SegmentationEvent]) -> list[RejectionReason]:
+    """Los rechazos del camino estático: sin los que cierran un trazo dinámico.
+
+    Un rechazo de la ruta dinámica llega siempre justo detrás de su
+    `WindowDynamic`, en el mismo frame; así se distinguen sin adivinar.
+    """
+    trazos = {e.frame_index for e in eventos_ if isinstance(e, WindowDynamic)}
+    return [
+        e.reason
+        for e in eventos_
+        if isinstance(e, WindowRejected) and e.frame_index not in trazos
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -247,14 +281,18 @@ def test_ninguna_sena_se_parte_en_dos_ni_se_funde_con_la_siguiente() -> None:
     stream = eventos(frames(PALABRA))
 
     assert emitidas(stream) == ["C", "A", "S", "A", "S"]
-    assert set(rechazos(stream)) == {RejectionReason.REPEATED_LETTER}
+    # Cada viaje de 800 ms es un candidato dinámico que se rechaza (no hay
+    # modelo dinámico cargado): uno por viaje, y ninguno más. Ver `VIAJE`.
+    dinamicos = [e for e in stream if isinstance(e, WindowDynamic)]
+    assert len(dinamicos) == len(PALABRA) - 1
+    assert set(rechazos_estaticos(stream)) == {RejectionReason.REPEATED_LETTER}
     # Cuatro y no cinco: la `C` del corpus sintético se clasifica con 0.743,
     # por debajo de `high_confidence`, así que acumula evidencia hasta agotar la
     # ventana y emite en el frame 23 de su bloque en vez de en el 5. Se le acaba
     # el bloque antes de la segunda oportunidad. Las otras cuatro señas emiten
     # con la ventana mínima y sí la tienen. Ver la emisión progresiva en
     # `lsm.segmentation` y `docs/adr/0013-la-ventana-mezclada.md`.
-    assert len(rechazos(stream)) == 4
+    assert len(rechazos_estaticos(stream)) == 4
 
 
 def test_la_mano_que_viaja_no_escribe_nada() -> None:
@@ -311,9 +349,7 @@ def test_la_mano_abajo_entre_dos_palabras_pone_un_espacio_y_uno_solo() -> None:
     )
     flujo = [*frames(palabras[:2]), *hueco, *frames(palabras[2:])]
 
-    for evento in run_segmentation(
-        con_presencia(flujo, sesion), CONFIG, CLASIFICADOR.predict
-    ):
+    for evento in run_segmentation(con_presencia(flujo, sesion), CONFIG, REGISTRO):
         aplicar_evento(sesion, evento)
 
     assert render_text(sesion.state) == "ca sa"
@@ -385,9 +421,8 @@ def test_un_transito_corto_ya_no_funde_dos_manos_en_una_ventana() -> None:
     llevaba dentro frames de la anterior: se clasificaba una mezcla de dos manos
     y salia una letra que nadie firmo.
 
-    `VIAJE` vale `buffer_size` justamente para no tocar este sintoma; el resto de
-    los tests de este archivo siguen usandolo. Este lo toca a proposito, con el
-    transito mas corto que el ADR reporta haber medido.
+    Este lo toca a proposito, con el transito mas corto que el ADR reporta haber
+    medido.
     """
     corto = 4
     assert corto < UMBRALES.buffer_size
@@ -399,6 +434,27 @@ def test_un_transito_corto_ya_no_funde_dos_manos_en_una_ventana() -> None:
     ]
 
     assert render_text(deletrear(flujo)) == "sa"
+
+
+def test_un_transito_largo_pasa_por_el_camino_dinamico_y_la_letra_sale_igual() -> None:
+    """Un viaje de `buffer_size` frames (800 ms) supera `motion_min` y se vuelve
+    candidato dinámico. Con la configuración de fábrica eso no cambia el texto:
+    el trazo se rechaza —aquí no hay modelo dinámico; con él, el DTW lo rechaza
+    por distancia— y la letra de llegada sale por el camino estático en el frame
+    siguiente, con la quietud que cerró el candidato ya contada. Lo que sí cambia
+    es la latencia: esa letra sale tras `motion_confirm_low_ms` de quietud y no
+    tras `stable_ms`. Ver `docs/adr/0015-el-camino-dinamico-de-la-segmentacion.md`.
+    """
+    largo = UMBRALES.buffer_size
+    assert largo + 1 >= UMBRALES.motion_min_frames
+    flujo = [*quieto(Label.S), *viaje(Label.A, count=largo), *quieto(Label.A)]
+
+    stream = eventos(flujo)
+
+    assert emitidas(stream) == ["S", "A"]
+    assert RejectionReason.LOW_CONFIDENCE in rechazos(stream)
+    emision_a = [e for e in stream if isinstance(e, LetterEmitted)][1]
+    assert len(emision_a.window) == UMBRALES.motion_confirm_low_frames + 1
 
 
 def test_la_letra_segura_sale_rapido_y_la_dudosa_espera() -> None:
@@ -416,7 +472,7 @@ def test_la_letra_segura_sale_rapido_y_la_dudosa_espera() -> None:
     """
     emisiones = [
         evento
-        for evento in eventos(frames(PALABRA))
+        for evento in eventos(frames(PALABRA, largo_viaje=VIAJE_CORTO))
         if isinstance(evento, LetterEmitted)
     ]
     por_letra = {evento.prediction.label: len(evento.window) for evento in emisiones}

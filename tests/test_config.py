@@ -21,7 +21,7 @@ def test_config_por_defecto_cubre_los_umbrales_del_contrato() -> None:
     config = Config()
 
     assert config.quality.max_dispersion > 0.0
-    assert config.features.trajectory_weight == 4.0
+    assert config.features.trajectory_weight == 1.0
     assert config.smoothing.alpha == 1.0
     assert config.dtw.band_radius == 6
     assert config.dtw.min_source_frames >= 1
@@ -152,3 +152,55 @@ def test_un_rango_de_velocidad_vacio_se_rechaza() -> None:
     revés no hay velocidad válida y el reproductor no debería descubrirlo."""
     with pytest.raises(ValidationError):
         Config.model_validate({"signs": {"speed_min": 2.0, "speed_max": 1.0}})
+
+
+# --------------------------------------------------------------------------- #
+# Camino dinámico (ADR 0015)
+# --------------------------------------------------------------------------- #
+
+
+def test_motion_threshold_no_puede_quedar_bajo_velocity_threshold() -> None:
+    """Si quedara por debajo, un mismo frame contaría como quietud para STABLE y
+    como movimiento para el candidato: los dos caminos dejarían de excluirse."""
+    Config.model_validate(
+        {"segmentation": {"velocity_threshold": 0.02, "motion_threshold": 0.02}}
+    )
+
+    with pytest.raises(ValidationError, match="excluyentes"):
+        Config.model_validate(
+            {"segmentation": {"velocity_threshold": 0.03, "motion_threshold": 0.025}}
+        )
+
+
+def test_el_reposo_que_cierra_un_trazo_no_es_mas_corto_que_stable() -> None:
+    """Una pausa que el camino estático ya llama quietud partiría la dinámica."""
+    with pytest.raises(ValidationError, match="partiría una dinámica"):
+        Config.model_validate(
+            {"segmentation": {"stable_ms": 200.0, "motion_confirm_low_ms": 150.0}}
+        )
+
+
+def test_motion_min_tiene_que_ser_menor_que_motion_max() -> None:
+    with pytest.raises(ValidationError, match="motion_max_ms"):
+        Config.model_validate(
+            {"segmentation": {"motion_min_ms": 500.0, "motion_max_ms": 500.0}}
+        )
+
+
+def test_config_yaml_trae_los_umbrales_del_camino_dinamico() -> None:
+    """Explícitos en el archivo, no heredados del valor por defecto: son
+    medidos (ADR 0015) y quien lea `config.yaml` tiene que verlos."""
+    texto = (REPO_ROOT / "config.yaml").read_text(encoding="utf-8")
+    config = load_config(REPO_ROOT / "config.yaml")
+
+    for campo in (
+        "motion_threshold",
+        "motion_min_ms",
+        "motion_confirm_low_ms",
+        "motion_max_ms",
+        "max_distance",
+    ):
+        assert f"{campo}:" in texto
+    assert config.segmentation.motion_threshold >= (
+        config.segmentation.velocity_threshold
+    )

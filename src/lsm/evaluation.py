@@ -33,6 +33,7 @@ Código puro: sin disco, sin cámara, sin MediaPipe.
 from __future__ import annotations
 
 import itertools
+import math
 from collections.abc import Iterable, Mapping
 from collections.abc import Sequence as AbcSequence
 from dataclasses import dataclass
@@ -40,6 +41,14 @@ from enum import StrEnum
 from typing import Any, Final
 
 from lsm.capture import trajectory_arc_length
+from lsm.classifiers.dynamic_dtw import (
+    Rows,
+    Template,
+    dynamic_rows,
+    label_distances,
+    medoid,
+)
+from lsm.classifiers.dynamic_dtw import apply_thresholds as apply_dynamic_thresholds
 from lsm.classifiers.static_knn import (
     Ranking,
     Thresholds,
@@ -50,8 +59,14 @@ from lsm.classifiers.static_knn import (
 )
 from lsm.config import Config, Metric
 from lsm.features import SequenceFeatures, extract_sequence_features
-from lsm.types import NEGATIVE_LABEL, UNKNOWN_LABEL, Sample, SampleKind
-from lsm.vocabulary import DYNAMIC_LABELS, STATIC_LABELS
+from lsm.segmentation import (
+    Classify,
+    LetterEmitted,
+    WindowDynamic,
+    run_segmentation,
+)
+from lsm.types import NEGATIVE_LABEL, UNKNOWN_LABEL, Sample, SampleKind, WindowOrigin
+from lsm.vocabulary import DIRECTION_PENDING_LABELS, DYNAMIC_LABELS, STATIC_LABELS
 
 #: El vocabulario de la Fase 2: las 21 letras sin movimiento más la clase
 #: negativa, en orden alfabético con `NONE` al final. Es **la única** definición
@@ -241,7 +256,9 @@ class Fold:
     test: tuple[int, ...]
 
 
-def build_folds(dataset: Dataset, protocol: Protocol) -> tuple[Fold, ...]:
+def build_folds(
+    dataset: Dataset | DynamicDataset, protocol: Protocol
+) -> tuple[Fold, ...]:
     """Un fold por persona (o por sesión), en orden alfabético del identificador.
 
     Se niega con un solo grupo en vez de degradar sola al protocolo por sesión.
@@ -253,14 +270,15 @@ def build_folds(dataset: Dataset, protocol: Protocol) -> tuple[Fold, ...]:
     if not dataset.observations:
         raise InsufficientFoldsError("el dataset no tiene ninguna observación")
 
-    def clave(observation: Observation) -> str:
+    def clave(observation: Observation | DynamicObservation) -> str:
         return (
             observation.signer_id
             if protocol is Protocol.SIGNER
             else observation.session_id
         )
 
-    grupos = sorted({clave(o) for o in dataset.observations})
+    observaciones: tuple[Observation | DynamicObservation, ...] = dataset.observations
+    grupos = sorted({clave(o) for o in observaciones})
 
     if len(grupos) < 2:
         que = "firmante" if protocol is Protocol.SIGNER else "sesión"
@@ -276,10 +294,10 @@ def build_folds(dataset: Dataset, protocol: Protocol) -> tuple[Fold, ...]:
     folds: list[Fold] = []
     for grupo in grupos:
         train = tuple(
-            índice for índice, o in enumerate(dataset.observations) if clave(o) != grupo
+            índice for índice, o in enumerate(observaciones) if clave(o) != grupo
         )
         test = tuple(
-            índice for índice, o in enumerate(dataset.observations) if clave(o) == grupo
+            índice for índice, o in enumerate(observaciones) if clave(o) == grupo
         )
         folds.append(Fold(held_out=grupo, train=train, test=test))
     return tuple(folds)
@@ -826,3 +844,347 @@ def _moves_something(points: AbcSequence[GridPoint], path: str) -> bool:
             (point.accuracy, point.macro_accuracy, point.unknown_rate)
         )
     return any(len(metricas) > 1 for metricas in grupos.values())
+
+
+# --------------------------------------------------------------------------- #
+# Fase 5 — el clasificador dinámico
+# --------------------------------------------------------------------------- #
+#
+# Mismas reglas que arriba: leave-one-signer-out, nada de aleatoriedad, y todo lo
+# que decide qué significa un número vive aquí y se testea sin disco. Lo que
+# cambia es el clasificador —DTW contra medoides en vez de centroides— y el
+# alcance: las dinámicas cuya dirección canónica está decidida.
+
+#: Las dinámicas que la Fase 5 evalúa: todas menos las de dirección pendiente
+#: (`vocabulary.DIRECTION_PENDING_LABELS`, hoy LL y RR). Alfabético.
+PHASE5_LABELS: Final[tuple[str, ...]] = tuple(
+    sorted(label.value for label in DYNAMIC_LABELS - DIRECTION_PENDING_LABELS)
+)
+
+#: El eje de `features.trajectory_weight`, que en este camino sí mueve cosas.
+TRAJECTORY_WEIGHT: Final = "features.trajectory_weight"
+#: El eje de `dtw.band_radius`.
+BAND_RADIUS: Final = "dtw.band_radius"
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicObservation:
+    """Una muestra dinámica ya remuestreada: las 24 filas de `g_t` (§3.3)."""
+
+    label: str
+    signer_id: str
+    session_id: str
+    rows: Rows
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicDataset:
+    """Las observaciones dinámicas utilizables y el rastro de lo descartado."""
+
+    observations: tuple[DynamicObservation, ...]
+    #: Muestras cuya etiqueta no es del alcance (estáticas, `NONE`), por etiqueta.
+    excluded: dict[str, int]
+    #: Muestras de letras bloqueadas por dirección pendiente, por etiqueta. Aparte
+    #: de `excluded` porque no se descartan por alcance sino por una decisión
+    #: humana que falta.
+    blocked: dict[str, int]
+    #: Muestras que no dieron canal dinámico (escala degenerada o demasiado
+    #: cortas), por motivo.
+    rejected: dict[str, int]
+
+    @property
+    def labels(self) -> tuple[str, ...]:
+        return tuple(sorted({o.label for o in self.observations}))
+
+
+def observe_dynamic(
+    samples: Iterable[Sample],
+    config: Config,
+    labels: tuple[str, ...] = PHASE5_LABELS,
+) -> DynamicDataset:
+    """Extrae y remuestrea una vez; filtra al alcance de la Fase 5.
+
+    Las muestras se ordenan por (letra, persona, sesión, marca de tiempo) antes
+    de nada, igual que en `DynamicDtwClassifier.fit`: el desempate del medoide
+    depende del orden, y dos lecturas del disco no tienen por qué dar el mismo.
+    """
+    admitidas = set(labels)
+    observations: list[DynamicObservation] = []
+    excluded: dict[str, int] = {}
+    blocked: dict[str, int] = {}
+    rejected: dict[str, int] = {}
+
+    ordenadas = sorted(
+        samples, key=lambda s: (s.label, s.signer_id, s.session_id, s.timestamp)
+    )
+    for sample in ordenadas:
+        if sample.label in DIRECTION_PENDING_LABELS:
+            blocked[sample.label] = blocked.get(sample.label, 0) + 1
+            continue
+        if sample.label not in admitidas:
+            excluded[sample.label] = excluded.get(sample.label, 0) + 1
+            continue
+        rows = dynamic_rows(sample.sequence, config)
+        if rows is None:
+            rejected["SIN_CANAL_DINAMICO"] = rejected.get("SIN_CANAL_DINAMICO", 0) + 1
+            continue
+        observations.append(
+            DynamicObservation(
+                label=sample.label,
+                signer_id=sample.signer_id,
+                session_id=sample.session_id,
+                rows=rows,
+            )
+        )
+    return DynamicDataset(
+        observations=tuple(observations),
+        excluded=dict(sorted(excluded.items())),
+        blocked=dict(sorted(blocked.items())),
+        rejected=rejected,
+    )
+
+
+def group_templates(
+    dataset: DynamicDataset, indices: Iterable[int], band_radius: int
+) -> tuple[Template, ...]:
+    """El medoide de cada (letra, persona) entre las observaciones indicadas.
+
+    Es exactamente lo que hace `DynamicDtwClassifier.fit`, sobre observaciones
+    ya extraídas. Un grupo solo depende de su letra y su persona, no del fold:
+    quien barre muchos folds puede calcularlo una vez (`all_templates`).
+    """
+    grupos: dict[tuple[str, str], list[Rows]] = {}
+    for index in indices:
+        o = dataset.observations[index]
+        grupos.setdefault((o.label, o.signer_id), []).append(o.rows)
+    return tuple(
+        Template(label=label, signer_id=signer, rows=grupo[medoid(grupo, band_radius)])
+        for (label, signer), grupo in sorted(grupos.items())
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicScored:
+    """Una muestra de test con su ranking ya resuelto, antes de la puerta."""
+
+    truth: str
+    ranking: Ranking | None
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicFoldResult:
+    held_out: str
+    trained_labels: tuple[str, ...]
+    samples: tuple[DynamicScored, ...]
+
+
+def precompute_dynamic(
+    dataset: DynamicDataset, protocol: Protocol, band_radius: int
+) -> tuple[DynamicFoldResult, ...]:
+    """Plantillas por fold y ranking de cada muestra de test.
+
+    Los medoides se calculan una sola vez por (letra, persona) y cada fold se
+    queda con los de las personas que no deja fuera: con leave-one-signer-out
+    el grupo de una persona es el mismo en todos los folds en que entrena.
+    Bajo leave-one-session-out no vale —una persona entrena con parte de sus
+    sesiones— y se recalculan por fold.
+    """
+    folds = build_folds(dataset, protocol)
+    todas = (
+        group_templates(dataset, range(len(dataset.observations)), band_radius)
+        if protocol is Protocol.SIGNER
+        else ()
+    )
+
+    resultado: list[DynamicFoldResult] = []
+    for fold in folds:
+        if protocol is Protocol.SIGNER:
+            plantillas = tuple(t for t in todas if t.signer_id != fold.held_out)
+        else:
+            plantillas = group_templates(dataset, fold.train, band_radius)
+        muestras = tuple(
+            DynamicScored(
+                truth=dataset.observations[i].label,
+                ranking=rank(
+                    label_distances(
+                        dataset.observations[i].rows, plantillas, band_radius
+                    )
+                ),
+            )
+            for i in fold.test
+        )
+        resultado.append(
+            DynamicFoldResult(
+                held_out=fold.held_out,
+                trained_labels=tuple(sorted({t.label for t in plantillas})),
+                samples=muestras,
+            )
+        )
+    return tuple(resultado)
+
+
+def score_dynamic(folds: tuple[DynamicFoldResult, ...], max_distance: float) -> Report:
+    """La puerta de distancia sobre los rankings, y la matriz resultante.
+
+    Con `max_distance = math.inf` la puerta queda abierta: es el accuracy del
+    vecino más cercano, que es lo que el barrido compara entre `w_τ` y la banda
+    sin que la puerta —que depende de `w_τ`— contamine la comparación.
+    """
+    confusion: dict[Pair, int] = {}
+    per_label: dict[str, list[int]] = {}
+    total = correct = unknown = 0
+    for fold in folds:
+        for muestra in fold.samples:
+            prediction = apply_dynamic_thresholds(muestra.ranking, max_distance)
+            clave = (muestra.truth, prediction.label)
+            confusion[clave] = confusion.get(clave, 0) + 1
+            acierto = prediction.label == muestra.truth
+            contador = per_label.setdefault(muestra.truth, [0, 0, 0])
+            contador[0] += 1
+            contador[1] += int(acierto)
+            contador[2] += int(prediction.is_unknown)
+            total += 1
+            correct += int(acierto)
+            unknown += int(prediction.is_unknown)
+    return Report(
+        confusion=dict(sorted(confusion.items())),
+        per_label={
+            label: LabelScore(total=c[0], correct=c[1], unknown=c[2])
+            for label, c in sorted(per_label.items())
+        },
+        total=total,
+        correct=correct,
+        unknown=unknown,
+    )
+
+
+def nearest_distances(
+    folds: tuple[DynamicFoldResult, ...], *, correct: bool
+) -> tuple[float, ...]:
+    """`d₁` de las muestras cuyo vecino más cercano acertó (o falló), ordenadas.
+
+    Es el insumo de `dtw.max_distance`: la puerta tiene que dejar pasar casi
+    todas las primeras y cerrarse sobre lo que no es una letra dinámica.
+    """
+    return tuple(
+        sorted(
+            m.ranking.nearest
+            for fold in folds
+            for m in fold.samples
+            if m.ranking is not None and (m.ranking.label == m.truth) == correct
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicGridPoint:
+    """Un punto del barrido dinámico, con la puerta abierta."""
+
+    trajectory_weight: float
+    band_radius: int
+    report: Report
+    #: `d₁` de las muestras bien clasificadas: dónde tendría que ir la puerta
+    #: con este `w_τ`.
+    correct_nearest: tuple[float, ...]
+
+
+def sweep_dynamic(
+    samples: AbcSequence[Sample],
+    config: Config,
+    weights: tuple[float, ...],
+    bands: tuple[int, ...],
+    protocol: Protocol,
+    labels: tuple[str, ...] = PHASE5_LABELS,
+) -> tuple[DynamicGridPoint, ...]:
+    """El producto `w_τ × band_radius`, con la puerta de distancia abierta.
+
+    Se re-extrae una vez por peso —el peso cambia las filas— y el DTW se corre
+    entero en cada punto. No hay atajo por descomposición del costo local: el
+    §3.3 pondera **después** de interpolar, y reproducirlo con otra aritmética
+    mediría otra cosa que la que corre en producción.
+    """
+    points: list[DynamicGridPoint] = []
+    for weight in weights:
+        punto_config = _with_overrides(config, {TRAJECTORY_WEIGHT: weight})
+        dataset = observe_dynamic(samples, punto_config, labels)
+        for band in bands:
+            folds = precompute_dynamic(dataset, protocol, band)
+            points.append(
+                DynamicGridPoint(
+                    trajectory_weight=weight,
+                    band_radius=band,
+                    report=score_dynamic(folds, math.inf),
+                    correct_nearest=nearest_distances(folds, correct=True),
+                )
+            )
+    return tuple(points)
+
+
+# --------------------------------------------------------------------------- #
+# Reproducción por la máquina de estados
+# --------------------------------------------------------------------------- #
+#
+# La evaluación de arriba le da al clasificador la muestra entera, recortada por
+# quien grabó. En vivo no: el trazo lo recorta `segmentation.py`, y lo que se
+# quiere saber es si lo recorta bien —que una Z no salga partida en dos, que una
+# estática no pase por el camino dinámico—. Esto lo mide sobre las grabaciones.
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayOutcome:
+    """Lo que la máquina de estados hizo con una muestra reproducida."""
+
+    label: str
+    signer_id: str
+    #: Cuántos trazos entregó al clasificador dinámico. Uno es lo correcto para
+    #: una dinámica; más de uno es una letra partida; cero, una letra perdida.
+    dynamic_windows: int
+    #: Letras emitidas, en orden, con el camino por el que salieron.
+    emitted: tuple[tuple[str, WindowOrigin], ...]
+
+
+def replay_sample(
+    sample: Sample,
+    config: Config,
+    classify: Classify,
+    *,
+    rest_after: int,
+) -> ReplayOutcome:
+    """Pasa una muestra por `run_segmentation`, con la mano quieta al final.
+
+    La quietud final no es un adorno: las grabaciones dinámicas terminan con la
+    mano todavía en movimiento (la captura corta en `dynamic_max_frames`), y sin
+    reposo el candidato nunca se cerraría. Se repite el último frame, que es lo
+    que hace quien termina un trazo: detenerse donde acabó. A la tasa nominal,
+    que es la de la grabación.
+    """
+    frames = sample.sequence.frames
+    stream = [*frames, *([frames[-1]] * rest_after)]
+    windows = 0
+    emitted: list[tuple[str, WindowOrigin]] = []
+    for event in run_segmentation(stream, config, classify):
+        if isinstance(event, WindowDynamic):
+            windows += 1
+        elif isinstance(event, LetterEmitted):
+            emitted.append((event.prediction.label, event.origin))
+    return ReplayOutcome(
+        label=sample.label,
+        signer_id=sample.signer_id,
+        dynamic_windows=windows,
+        emitted=tuple(emitted),
+    )
+
+
+def without_dynamic_path(config: Config) -> Config:
+    """La misma configuración con el camino dinámico fuera de alcance.
+
+    Es la máquina de la v2 a efectos prácticos: ninguna racha llega a
+    `motion_min`. Sirve de referencia para medir qué cambió en las estáticas.
+    """
+    return _with_overrides(
+        config,
+        {
+            "segmentation.motion_min_ms": 59999.0,
+            "segmentation.motion_max_ms": 60000.0,
+        },
+    )

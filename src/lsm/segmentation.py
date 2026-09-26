@@ -73,6 +73,28 @@ El `emit_cooldown_ms` sigue existiendo y hace lo suyo: evitar treinta
 emisiones por segundo mientras la ventana sigue estable. El cerrojo resuelve un
 problema distinto, el de la repetición sostenida.
 
+**El camino dinámico** (v3, `docs/feature-spec.md` §6.7, ADR 0015). Una letra
+dinámica nunca dispara STABLE —el movimiento *es* la seña—, así que tiene su propio
+camino:
+
+    TRACKING ──(racha de movimiento ≥ motion_min)────> DYNAMIC_CANDIDATE
+    DYNAMIC_CANDIDATE ──(reposo ≥ motion_confirm_low)─> DYNAMIC_EMIT
+    DYNAMIC_CANDIDATE ──(trazo > motion_max)──────────> TRACKING (descarta)
+    DYNAMIC_EMIT ──(dinámico acepta)──────────────────> EMIT
+    DYNAMIC_EMIT ──(dinámico rechaza)─────────────────> TRACKING
+
+Movimiento es la misma `v_t` del §6.1 contra `motion_threshold`; no hay una
+segunda métrica. Los dos caminos son **excluyentes con histéresis**: mientras dura
+el candidato, STABLE está suspendido —el freno de un cambio de dirección de la Z o
+del gancho de la J deja la velocidad cerca de cero un par de frames, y sin esta
+suspensión se leería como letra estática—, y solo un reposo de
+`motion_confirm_low_ms`, más largo que esos frenos, cierra el trazo. Al revés, una
+parada que el camino estático ya llama quietud (`stable_ms`) corta la racha que
+todavía no llegó a candidato: el movimiento anterior era un tránsito.
+
+La ruta de la ventana la decide esta máquina y viaja al clasificador como
+`WindowOrigin`: el registry no vuelve a medir nada.
+
 Aquí solo vive la lógica de estados. El buffer de deletreo —acumular letras en
 palabras, espacio, borrado, y qué hacer con los dígrafos LL y RR— es `spelling.py`
 y llega en la Fase 3.
@@ -87,13 +109,13 @@ from __future__ import annotations
 import math
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, TypeAlias
 
 from lsm.config import Config
 from lsm.features import ExtractionRejected, extract_sequence_features
-from lsm.types import FrameSlot, Prediction, RawFrame, Sequence
+from lsm.types import FrameSlot, Prediction, RawFrame, Sequence, WindowOrigin
 
 #: Versión del contrato de segmentación: la §6 de `docs/feature-spec.md` (cómo se
 #: mide la velocidad) y la máquina de estados de este módulo.
@@ -114,7 +136,13 @@ from lsm.types import FrameSlot, Prediction, RawFrame, Sequence
 #: umbrales temporales pasan a milisegundos derivados de la tasa medida (§6.5).
 #: `FEATURE_SPEC_VERSION` **no** cambia: el promedio del §2 es el mismo, lo que
 #: cambia es qué frames entran, así que ningún modelo entrenado se invalida.
-SEGMENTATION_SPEC_VERSION: Final = 2
+#:
+#: **v3** (`docs/adr/0015-el-camino-dinamico-de-la-segmentacion.md`): el camino
+#: dinámico del §6.7 —DYNAMIC_CANDIDATE y DYNAMIC_EMIT—, que suspende STABLE
+#: mientras dura un trazo, y el origen de la ventana como argumento del
+#: clasificador. Tampoco cambia `FEATURE_SPEC_VERSION`: el trazo se extrae con
+#: las mismas §1 a §3 que ya existían.
+SEGMENTATION_SPEC_VERSION: Final = 3
 
 
 def frames_from_ms(ms: float, fps: float) -> int:
@@ -159,6 +187,11 @@ class FrameThresholds:
     emit_cooldown_frames: int
     reject_cooldown_frames: int
     missing_frames_to_idle: int
+    #: Camino dinámico (§6.7): frames móviles para volverse candidato, reposo
+    #: continuado que cierra el trazo, y largo máximo del trazo.
+    motion_min_frames: int
+    motion_confirm_low_frames: int
+    motion_max_frames: int
 
     @classmethod
     def from_config(cls, config: Config, fps: float) -> FrameThresholds:
@@ -173,20 +206,32 @@ class FrameThresholds:
             emit_cooldown_frames=frames_from_ms(settings.emit_cooldown_ms, fps),
             reject_cooldown_frames=frames_from_ms(settings.reject_cooldown_ms, fps),
             missing_frames_to_idle=frames_from_ms(settings.missing_to_idle_ms, fps),
+            motion_min_frames=frames_from_ms(settings.motion_min_ms, fps),
+            motion_confirm_low_frames=frames_from_ms(
+                settings.motion_confirm_low_ms, fps
+            ),
+            motion_max_frames=frames_from_ms(settings.motion_max_ms, fps),
         )
 
 
 class State(StrEnum):
-    """Estados de `ARQUITECTURA.md` §4.2.
+    """Estados de `ARQUITECTURA.md` §4.2, más el camino dinámico del §6.7.
 
     `EMIT` es el estado de cooldown posterior a una emisión: la letra se emite al
-    entrar, y lo que dura es la espera.
+    entrar, y lo que dura es la espera. Lo comparten los dos caminos.
+
+    `DYNAMIC_EMIT` es **transitorio**: se entra y se sale en el mismo frame, hacia
+    `EMIT` si el clasificador dinámico aceptó el trazo o hacia `TRACKING` si lo
+    rechazó. Existe como estado —y no solo como evento— porque es donde se decide
+    la ruta de la ventana, y el flujo de `StateChanged` tiene que dejarlo escrito.
     """
 
     IDLE = "IDLE"
     TRACKING = "TRACKING"
     STABLE = "STABLE"
     EMIT = "EMIT"
+    DYNAMIC_CANDIDATE = "DYNAMIC_CANDIDATE"
+    DYNAMIC_EMIT = "DYNAMIC_EMIT"
 
 
 class RejectionReason(StrEnum):
@@ -202,6 +247,12 @@ class RejectionReason(StrEnum):
     #: La letra es la misma que la última emitida y la mano no ha salido de STABLE
     #: desde entonces. Ver la regla de letras dobles en el encabezado del módulo.
     REPEATED_LETTER = "REPEATED_LETTER"
+    #: El candidato dinámico superó `motion_max_ms` sin que la mano se detuviera.
+    #: Se descarta **sin clasificar**: nadie tarda eso en trazar una letra.
+    DYNAMIC_TOO_LONG = "DYNAMIC_TOO_LONG"
+    #: Un hueco (mano perdida o escala degenerada) cortó el trazo a medias. No se
+    #: cose (`feature-spec.md` §0.3): el trazo se descarta entero.
+    DYNAMIC_INTERRUPTED = "DYNAMIC_INTERRUPTED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,12 +313,28 @@ class EvidenceAccumulated:
 
 
 @dataclass(frozen=True, slots=True)
+class WindowDynamic:
+    """El trazo de un candidato dinámico terminó y va al clasificador (§6.7).
+
+    Es el hermano de `WindowStable` en el otro camino. `window` es el trazo
+    **crudo** completo —desde el frame anterior al primer par en movimiento hasta
+    el último frame en movimiento—, sin el reposo que lo cerró y sin remuestrear:
+    el remuestreo del §3.2 es cosa del clasificador.
+    """
+
+    frame_index: int
+    window: Sequence
+
+
+@dataclass(frozen=True, slots=True)
 class LetterEmitted:
     """Una letra con confianza suficiente. Lo único que llega al texto."""
 
     frame_index: int
     prediction: Prediction
     window: Sequence
+    #: De qué camino salió. Lo usa la demo para decir qué clasificador habló.
+    origin: WindowOrigin = WindowOrigin.STABLE
 
 
 #: Eventos tipados, nunca cadenas: quien consume esto hace `match` sobre tipos y
@@ -277,6 +344,7 @@ SegmentationEvent: TypeAlias = (
     | HandLost
     | StateChanged
     | WindowStable
+    | WindowDynamic
     | WindowRejected
     | EvidenceAccumulated
     | LetterEmitted
@@ -284,7 +352,56 @@ SegmentationEvent: TypeAlias = (
 
 #: El clasificador entra inyectado para que este módulo no dependa de
 #: `lsm.classifiers` y siga siendo puro y testeable sin modelo.
-Classify: TypeAlias = Callable[[Sequence], Prediction]
+#:
+#: Recibe **de qué camino salió la ventana** (`WindowOrigin`). Esa decisión la
+#: toma esta máquina y solo esta máquina: el registry la obedece en vez de
+#: volver a medir el movimiento, que sería un segundo criterio capaz de
+#: discrepar con el primero sin que nada lo detectara.
+Classify: TypeAlias = Callable[[Sequence, WindowOrigin], Prediction]
+
+
+@dataclass(slots=True)
+class _Stroke:
+    """La racha de movimiento en curso: el trazo que un candidato entregaría.
+
+    Guarda frames **crudos** —no features— porque lo que llega al clasificador
+    dinámico es una `Sequence` `(T, 21, 3)` como cualquier otra (`CLAUDE.md`,
+    regla 1); el remuestreo del §3.2 lo hace él.
+    """
+
+    frames: list[RawFrame] = field(default_factory=list)
+    #: Frames en movimiento dentro de la racha. No consecutivos: ver
+    #: `motion_min_ms` en `config.py`.
+    moving: int = 0
+    #: Longitud del trazo en su último frame en movimiento. El reposo que cierra
+    #: el candidato no es parte de la letra y se corta aquí.
+    end: int = 0
+
+    @property
+    def active(self) -> bool:
+        return bool(self.frames)
+
+    def __len__(self) -> int:
+        return len(self.frames)
+
+    def start(self, origin: RawFrame) -> None:
+        self.frames = [origin]
+        self.moving = 0
+        self.end = 1
+
+    def add(self, frame: RawFrame, *, moving: bool) -> None:
+        self.frames.append(frame)
+        if moving:
+            self.moving += 1
+            self.end = len(self.frames)
+
+    def trace(self) -> Sequence:
+        return Sequence(frames=tuple(self.frames[: self.end]))
+
+    def reset(self) -> None:
+        self.frames = []
+        self.moving = 0
+        self.end = 0
 
 
 def run_segmentation(
@@ -298,7 +415,8 @@ def run_segmentation(
 
     `stream` puede ser finito (una grabación) o infinito (la cámara en vivo): se
     consume perezosamente, un frame a la vez, sin acumular nada más que el buffer
-    circular.
+    circular y, mientras dure, el trazo del candidato dinámico — acotado por
+    `motion_max_ms`.
 
     `fps` es la tasa con la que se convierten a cuadros los umbrales en
     milisegundos de `config.segmentation`. **La sesión en vivo pasa la tasa
@@ -322,14 +440,47 @@ def run_segmentation(
     #: significa que no hay cerrojo puesto y cualquier letra puede emitirse.
     pending_repeat = ""
 
+    # -- Camino dinámico (§6.7) ------------------------------------------------
+    #: La racha de movimiento en curso, desde su primer par en movimiento.
+    stroke = _Stroke()
+    #: Frames consecutivos con `v_t < motion_threshold`: lo que cierra un trazo.
+    low_run = 0
+    #: Frames consecutivos con `v_t < velocity_threshold`, en cualquier estado.
+    #: Es la quietud que el camino estático llamaría parada, y parte la racha.
+    still_run = 0
+    #: Tras descartar un candidato por largo, no nace otra racha hasta que la
+    #: mano repose: sin esto, alguien gesticulando entraría y saldría de
+    #: DYNAMIC_CANDIDATE una y otra vez.
+    exhausted = False
+    #: Tras emitir una dinámica, su pose final no es una letra nueva: la J acaba
+    #: en la mano de la I, la LL en la de la L. Mientras la mano no se mueva, el
+    #: camino estático no promueve a STABLE. Se libera como `pending_repeat`.
+    dynamic_lock = False
+
     for index, slot in enumerate(stream):
         frame = _usable_frame(slot, settings.min_detection_score)
 
         if frame is None:
             # Un hueco interrumpe la secuencia: el buffer se vacía en vez de coser
-            # los dos tramos (`feature-spec.md` §0.3).
+            # los dos tramos (`feature-spec.md` §0.3). Por lo mismo, el trazo en
+            # curso se descarta entero: coserlo inventaría un movimiento que
+            # nadie observó.
             buffer.clear()
             stable_run = 0
+            low_run = 0
+            still_run = 0
+            exhausted = False
+            stroke.reset()
+            if state is State.DYNAMIC_CANDIDATE:
+                yield WindowRejected(
+                    frame_index=index, reason=RejectionReason.DYNAMIC_INTERRUPTED
+                )
+                yield StateChanged(
+                    frame_index=index,
+                    previous=State.DYNAMIC_CANDIDATE,
+                    current=State.TRACKING,
+                )
+                state = State.TRACKING
             if state is State.IDLE:
                 continue
             missing += 1
@@ -343,6 +494,7 @@ def run_segmentation(
                 cooldown = 0
                 suppressed = 0
                 pending_repeat = ""
+                dynamic_lock = False
             continue
 
         missing = 0
@@ -366,9 +518,12 @@ def run_segmentation(
             )
             buffer.clear()
             stable_run = 0
-            if state is State.STABLE:
+            low_run = 0
+            still_run = 0
+            stroke.reset()
+            if state in (State.STABLE, State.DYNAMIC_CANDIDATE):
                 yield StateChanged(
-                    frame_index=index, previous=State.STABLE, current=State.TRACKING
+                    frame_index=index, previous=state, current=State.TRACKING
                 )
                 state = State.TRACKING
             continue
@@ -377,11 +532,44 @@ def run_segmentation(
         # de EMIT: si el rebote entre dos letras iguales cayera entero dentro del
         # cooldown y no se mirara, el cerrojo de repetición no se liberaría y la
         # segunda letra quedaría bloqueada sin que quien firma pueda hacer nada.
-        moving = bool(features.velocities) and (
-            features.velocities[-1] >= settings.velocity_threshold
-        )
+        velocity = features.velocities[-1] if features.velocities else None
+        moving = velocity is not None and velocity >= settings.velocity_threshold
+        motion = velocity is not None and velocity >= settings.motion_threshold
         if moving:
             pending_repeat = ""
+            dynamic_lock = False
+
+        # La racha de movimiento también avanza en todos los estados salvo IDLE:
+        # un trazo que empieza durante el cooldown de la letra anterior sigue
+        # siendo el mismo trazo cuando el cooldown acaba.
+        if velocity is not None:
+            if motion:
+                low_run = 0
+                if not stroke.active and not exhausted:
+                    # El trazo arranca en el frame ANTERIOR al primer par en
+                    # movimiento: ese es el punto de partida del recorrido, y
+                    # sin él τ tendría su origen ya desplazado.
+                    stroke.start(buffer[-2])
+                if stroke.active:
+                    stroke.add(frame, moving=True)
+            else:
+                low_run += 1
+                if stroke.active:
+                    stroke.add(frame, moving=False)
+                if low_run >= thresholds.motion_confirm_low_frames:
+                    exhausted = False
+                    if state is not State.DYNAMIC_CANDIDATE:
+                        stroke.reset()
+            still_run = 0 if moving else still_run + 1
+            if (
+                still_run >= thresholds.stable_frames
+                and state is not State.DYNAMIC_CANDIDATE
+            ):
+                # La mano se detuvo tanto como para que el camino estático lo
+                # llame parada: el movimiento anterior fue un tránsito, no el
+                # principio de un trazo. Sin este corte, los tránsitos cortos de
+                # un deletreo rápido se sumarían entre sí hasta parecer uno largo.
+                stroke.reset()
 
         if state is State.EMIT:
             cooldown -= 1
@@ -393,8 +581,73 @@ def run_segmentation(
                 stable_run = 0
             continue
 
-        if not features.velocities:
+        if velocity is None:
             # Un solo frame en el buffer: todavía no hay velocidad que medir.
+            continue
+
+        if state is State.DYNAMIC_CANDIDATE:
+            # STABLE está suspendido: el freno de un cambio de dirección no es
+            # una letra estática. `stable_run` se sigue contando para que, si el
+            # trazo se rechaza, el camino estático retome sin esperar de nuevo.
+            stable_run = 0 if moving else stable_run + 1
+
+            if len(stroke) > thresholds.motion_max_frames:
+                yield WindowRejected(
+                    frame_index=index, reason=RejectionReason.DYNAMIC_TOO_LONG
+                )
+                yield StateChanged(
+                    frame_index=index,
+                    previous=State.DYNAMIC_CANDIDATE,
+                    current=State.TRACKING,
+                )
+                state = State.TRACKING
+                stroke.reset()
+                exhausted = low_run < thresholds.motion_confirm_low_frames
+                continue
+
+            if low_run < thresholds.motion_confirm_low_frames:
+                continue
+
+            trazo = stroke.trace()
+            stroke.reset()
+            yield StateChanged(
+                frame_index=index,
+                previous=State.DYNAMIC_CANDIDATE,
+                current=State.DYNAMIC_EMIT,
+            )
+            yield WindowDynamic(frame_index=index, window=trazo)
+
+            prediction = classify(trazo, WindowOrigin.DYNAMIC)
+            if prediction.is_unknown or prediction.confidence < settings.min_confidence:
+                # Un tránsito largo entre dos letras acaba aquí, y es lo normal:
+                # la mano ya reposa sobre la letra siguiente y `stable_run`
+                # conserva ese reposo, así que el camino estático la toma en el
+                # frame siguiente en vez de esperar otra vez.
+                yield WindowRejected(
+                    frame_index=index, reason=RejectionReason.LOW_CONFIDENCE
+                )
+                yield StateChanged(
+                    frame_index=index,
+                    previous=State.DYNAMIC_EMIT,
+                    current=State.TRACKING,
+                )
+                state = State.TRACKING
+                continue
+
+            yield LetterEmitted(
+                frame_index=index,
+                prediction=prediction,
+                window=trazo,
+                origin=WindowOrigin.DYNAMIC,
+            )
+            yield StateChanged(
+                frame_index=index, previous=State.DYNAMIC_EMIT, current=State.EMIT
+            )
+            state = State.EMIT
+            cooldown = thresholds.emit_cooldown_frames
+            stable_run = 0
+            pending_repeat = prediction.label
+            dynamic_lock = True
             continue
 
         if moving:
@@ -405,9 +658,21 @@ def run_segmentation(
                 )
                 state = State.TRACKING
                 suppressed = 0
+            if stroke.moving >= thresholds.motion_min_frames:
+                yield StateChanged(
+                    frame_index=index,
+                    previous=State.TRACKING,
+                    current=State.DYNAMIC_CANDIDATE,
+                )
+                state = State.DYNAMIC_CANDIDATE
             continue
 
         stable_run += 1
+
+        if dynamic_lock:
+            # La pose en la que termina una dinámica no es una letra nueva. Ver
+            # `dynamic_lock` arriba.
+            continue
 
         if state is State.TRACKING and stable_run < thresholds.stable_frames:
             continue
@@ -458,7 +723,7 @@ def run_segmentation(
             suppressed = thresholds.reject_cooldown_frames
             continue
 
-        prediction = classify(window)
+        prediction = classify(window, WindowOrigin.STABLE)
         if prediction.is_unknown or prediction.confidence < settings.min_confidence:
             yield WindowRejected(
                 frame_index=index, reason=RejectionReason.LOW_CONFIDENCE

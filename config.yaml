@@ -28,8 +28,17 @@ features:
   # (42). Con w_τ = 0 las letras dinámicas se vuelven indistinguibles de sus
   # equivalentes estáticas: J colapsa sobre I. Subirlo hace que el trazo domine
   # sobre la configuración de los dedos.
-  # 4.0 es un punto de partida razonado, no medido. Ajustar con datos reales.
-  trajectory_weight: 4.0
+  # MEDIDO en la Fase 5 (ADR 0016), barrido w_τ × band_radius con
+  # leave-one-signer-out sobre s01-s03: 1.0 da el mejor accuracy del DTW
+  # (0.801 contra 0.738 con el 4.0 de partida) y sube la Z de 0.85 a 0.98.
+  # Por encima de 2 empeora todo. Solo afecta al clasificador dinámico: el
+  # estático no consume el canal de trayectoria (inerte por construcción).
+  #
+  # Los golden vectors se regeneraron con este valor (solo cambian sus
+  # dynamic_rows, y el peso viaja declarado en su bloque config): la fórmula del
+  # §3.3 no cambió, así que FEATURE_SPEC_VERSION tampoco. El modelo dinámico
+  # exporta el peso con el que se entrenó, y el navegador tiene que usar ese.
+  trajectory_weight: 1.0
 
 # Clasificador de letras estáticas por centroides (ARQUITECTURA.md §4.3).
 #
@@ -104,6 +113,19 @@ dtw:
   # secuencia se rechaza: estirar 2 frames a 24 inventa una trayectoria que nadie
   # ejecutó.
   min_source_frames: 4
+  # Costo DTW normalizado máximo contra la plantilla más cercana para aceptar
+  # la letra. Por encima, UNKNOWN: DTW siempre encuentra una plantilla menos
+  # lejana, y sin esta puerta un movimiento cualquiera se forzaría a la más
+  # cercana. Depende de features.trajectory_weight: medido con w_τ = 1.0.
+  #
+  # MEDIDO (ADR 0016): p99 de d₁ de los aciertos leave-one-signer-out. Es una
+  # puerta GRUESA y a propósito: la distancia no separa estáticas de dinámicas
+  # (las estáticas grabadas dan d₁ p99 = 3.35, dentro del rango de los
+  # aciertos), así que apretarla solo perdería letras buenas. Lo que filtra de
+  # verdad es la segmentación —solo el 5.9% de las estáticas llega al camino
+  # dinámico— y el margen: con segmentation.min_confidence = 0.6 pasan el 53%
+  # de los aciertos y el 0.8% de los fallos.
+  max_distance: 6.0
 
 # Máquina de estados de segmentación (ARQUITECTURA.md §4.2).
 #
@@ -195,6 +217,42 @@ segmentation:
 
   # Ausencia de mano continuada que lleva de vuelta a IDLE.
   missing_to_idle_ms: 267.0
+
+  # --- Camino dinámico (docs/feature-spec.md §6.7, ADR 0015) ---------------
+  #
+  # Una letra dinámica nunca se estabiliza: el movimiento ES la seña. Estos
+  # cuatro umbrales definen el otro camino por la máquina, el que acumula el
+  # trazo mientras hay movimiento sostenido y lo entrega al clasificador
+  # dinámico cuando la mano se detiene. Mientras dura, STABLE queda suspendido:
+  # es lo que evita que el freno de un cambio de dirección de la Z se lea como
+  # letra estática.
+  #
+  # MEDIDOS sobre v_t de las 3586 muestras de s01-s03 (ADR 0015): con estos
+  # valores el 5.9% de las estáticas grabadas entraría a candidato por temblor
+  # —y el DTW las rechaza— y el 0.6% de las dinámicas se partiría (Z 1%, J 0%).
+  #
+  # Velocidad del §6.1 por encima de la cual un frame cuenta como movimiento.
+  # Por frame, igual que velocity_threshold, y con su misma deuda: depende de
+  # la tasa. Debe ser >= velocity_threshold (se valida). El p90 de v_t en las
+  # estáticas grabadas es 0.027: por debajo de 0.025 el temblor de una mano
+  # quieta empieza a contar como trazo.
+  motion_threshold: 0.025
+
+  # Frames de movimiento que una racha tiene que acumular para volverse
+  # candidato. Cuenta frames móviles, NO consecutivos: la cámara duplica
+  # cuadros y en pleno trazo v_t alterna alto y casi cero.
+  motion_min_ms: 333.0
+
+  # Reposo continuado que cierra el trazo y lo manda al clasificador. Más
+  # largo que el freno de un cambio de dirección (hasta ~300 ms en la Z
+  # grabada) y >= stable_ms (se valida). Es también la latencia de una letra
+  # dinámica: sale 400 ms después de que la mano se detiene.
+  motion_confirm_low_ms: 400.0
+
+  # Candidato que dura más que esto se descarta sin clasificar. Las muestras
+  # grabadas duran 3 s de trazo continuo (tope de captura), así que el límite
+  # va por encima.
+  motion_max_ms: 4000.0
 
 # Detector de manos: los knobs que MediaPipe consume antes de que exista un
 # frame de landmarks (src/lsm/io/hands.py). No van en `segmentation` porque la

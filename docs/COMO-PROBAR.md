@@ -211,12 +211,18 @@ se re-deriva con un comando en vez de volver a citar a tres personas.
 Ninguno de los dos necesita cámara ni MediaPipe.
 
 ```bash
-uv run lsm-train --sin-sintetico     # o: make train
-uv run lsm-eval  --sin-sintetico     # o: make eval
+uv run lsm-train --sin-sintetico           # o: make train
+uv run lsm-eval  --sin-sintetico           # o: make eval
+uv run lsm-eval-dinamico --sin-sintetico   # o: make eval-dinamico
 ```
 
-`lsm-train` exporta a `data/models/static_knn.json` y **no mide nada** a
-propósito: la precisión honesta la da `lsm-eval`.
+`lsm-train` exporta **dos** modelos y **no mide nada** a propósito: la precisión
+honesta la dan `lsm-eval` (estáticas) y `lsm-eval-dinamico` (dinámicas).
+
+| Modelo | Qué letras |
+|---|---|
+| `data/models/static_knn.json` | las 21 estáticas más `NONE` |
+| `data/models/dynamic_dtw.json` | J, K, Ñ, Q, X, Z. **LL y RR no**: su dirección canónica está pendiente de decisión humana (`docs/glosario-lsm.md`, PENDIENTE-HUMANO I) y el entrenamiento las cuenta como bloqueadas |
 
 `lsm-eval` escribe tres archivos en `data/models/eval/`:
 
@@ -247,15 +253,40 @@ La validación es **leave-one-signer-out**, nunca un split aleatorio de frames:
 frames consecutivos de la misma grabación son casi idénticos y repartirlos entre
 train y test mide memorización, no generalización.
 
+### 5.1 Las letras dinámicas
+
+`lsm-eval-dinamico` escribe `reporte-fase5.md` y `resultados-fase5.json` en
+`data/models/eval/`. Cuatro secciones: el resultado por letra con la
+configuración actual; el barrido `trajectory_weight × band_radius` con **la Z
+aparte**; las distancias con las que se fija `dtw.max_distance`; y la
+reproducción de cada grabación por la máquina de estados —cuántas dinámicas salen
+enteras, partidas o perdidas, y qué cambió en las estáticas—. Es el sustento del
+ADR 0016.
+
+Con el dataset de la Fase 1 tarda unos 70 minutos (la rejilla completa son
+36 puntos, y la reproducción pasa 3200 grabaciones por la máquina): el DTW es Python puro a
+propósito, porque es la implementación de referencia que TypeScript tiene que
+reproducir. Para una pasada rápida:
+
+```bash
+uv run lsm-eval-dinamico --rejilla rapido --sin-reproduccion
+```
+
 ---
 
 ## 6. La demo
 
-Necesita cámara, MediaPipe y un modelo entrenado (`make train`):
+Necesita cámara, MediaPipe y los modelos entrenados (`make train`):
 
 ```bash
 uv run lsm-demo                          # 📷 sesión en vivo
 ```
+
+Carga `data/models/static_knn.json` y, si existe, `data/models/dynamic_dtw.json`
+(`--modelo` y `--modelo-dinamico` para otras rutas). Sin el dinámico avisa y
+sigue: las estáticas se deletrean igual y los trazos salen como rechazo en vez
+de caer al clasificador estático. Una letra que sale por el camino dinámico
+lleva `(trazo)` en el mensaje del HUD.
 
 Sin `--extra capture` instalado, imprime el mismo aviso que `make setup-capture`
 y sale con código 1: el resto del proyecto corre sin esas dependencias y la

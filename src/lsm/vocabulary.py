@@ -452,6 +452,19 @@ STATIC_LABELS: Final = frozenset(
 )
 
 
+#: Dinámicas cuya **dirección canónica** está pendiente de decisión humana
+#: (`docs/glosario-lsm.md`, PENDIENTE-HUMANO I). La trayectoria del glosario dice
+#: «movimientos horizontales» sin sentido de arranque, y el dataset grabado mezcla
+#: los dos sentidos dentro de cada persona: dos firmas de τ inversas bajo una
+#: misma etiqueta, que el DTW trataría como dos clases.
+#:
+#: **Bloquea la construcción de sus plantillas** en `classifiers.dynamic_dtw`
+#: hasta que se resuelva. Elegir una dirección desde el código sería una
+#: afirmación sobre LSM, y este módulo solo transcribe el glosario. Cuando la
+#: decisión exista, se anota allí y se vacía este conjunto.
+DIRECTION_PENDING_LABELS: Final = frozenset({Label.DOBLE_L, Label.DOBLE_R})
+
+
 def spec(label: Label) -> LetterSpec:
     """Datos del glosario para una letra.
 

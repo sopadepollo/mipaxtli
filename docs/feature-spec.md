@@ -268,7 +268,14 @@ remuestrea `f_t`, luego `τ_t`, y solo entonces se concatenan.
 g_t = concat( f_t , w_τ · τ_t )        ∈ ℝ⁴⁴
 ```
 
-`w_τ = config.features.trajectory_weight`, por defecto `4.0`.
+`w_τ = config.features.trajectory_weight`, por defecto `1.0`.
+
+> **Calibrado en la Fase 5** (ADR 0016): el punto de partida era `4.0`; el barrido
+> con leave-one-signer-out dio `1.0`. La fórmula no cambia —por eso
+> `FEATURE_SPEC_VERSION` tampoco—, pero los `dynamic_rows` de los golden vectors
+> se regeneraron con el valor nuevo, que el archivo declara en su bloque
+> `config`. El modelo dinámico exporta el peso con que se entrenó, y quien lo
+> ejecute tiene que construir `g_t` con ese.
 
 Justificación del peso: el canal de forma aporta 42 componentes y el de trayectoria
 solo 2. Sin ponderación, la distancia euclidiana queda dominada por la forma y el
@@ -281,6 +288,42 @@ registrarse.
 DTW sobre las secuencias `(24, 44)` con distancia euclidiana local, ventana de
 Sakoe-Chiba de radio `config.dtw.band_radius` (por defecto `6`), y costo normalizado
 por la longitud del camino de alineación.
+
+> **Precisión, no cambio** (Fase 5, `docs/adr/0016-clasificador-dinamico-y-barrido.md`).
+> El párrafo de arriba no fijaba lo bastante para que dos implementaciones den los
+> mismos bits. Lo siguiente es la definición normativa; `FEATURE_SPEC_VERSION` no
+> cambia porque ningún modelo exportado usaba todavía esta sección.
+
+Sean `a` y `b` dos secuencias de `T_ref` filas de `g_t`.
+
+```
+c(i, j) = sqrt( Σ_k (a_i[k] − b_j[k])² )        # k ascendente, raíz al final
+
+celdas admitidas: |i − j| ≤ band_radius
+
+D[0][0] = c(0, 0);   L[0][0] = 1
+D[i][j] = c(i, j) + D[p];   L[i][j] = L[p] + 1
+    donde p es el predecesor de menor D entre, EN ESTE ORDEN,
+    (i−1, j−1), (i−1, j), (i, j−1); solo gana uno posterior si su D es
+    ESTRICTAMENTE menor. Fuera de la banda, D = +∞.
+
+distancia = D[T_ref−1][T_ref−1] / L[T_ref−1][T_ref−1]
+```
+
+- **El desempate es parte del contrato.** Decide qué camino se cuenta y por tanto
+  `L`: con dos predecesores empatados en `D`, elegir otro cambia el divisor. Con
+  este orden el DTW no es exactamente simétrico, y ninguna implementación debe
+  suponer `d(a, b) = d(b, a)`.
+- **La suma de `c` no usa `sum()` de Python**: desde 3.12 compensa con Neumaier y
+  TypeScript no lo hará. Bucle explícito en las dos.
+- Las dos secuencias miden `T_ref`: el §3.2 lo garantiza, y una banda inclinada
+  para longitudes distintas no hace falta en ninguna de las dos implementaciones.
+
+**Decisión.** Una plantilla por (letra, persona): el medoide DTW del grupo, la
+muestra con menor suma de distancias al resto (empates al índice menor, con el
+grupo ordenado por sesión y marca de tiempo). `d_letra` es el mínimo sobre sus
+plantillas; la confianza es `d₂ / (d₁ + d₂)` entre las dos letras más cercanas
+—la misma escala que `static_knn`—, y **UNKNOWN si `d₁ > config.dtw.max_distance`**.
 
 ---
 
@@ -418,12 +461,16 @@ porque los tres casos se comportan distinto y no basta con probar uno:
 
 ## 6. Velocidad y estabilidad — contrato de segmentación
 
-**`SEGMENTATION_SPEC_VERSION = 2`** (`src/lsm/segmentation.py`).
+**`SEGMENTATION_SPEC_VERSION = 3`** (`src/lsm/segmentation.py`).
 
 > **v2** — `docs/adr/0013-la-ventana-mezclada.md`. Se añaden §6.4 (qué ventana se
 > clasifica), §6.5 (los umbrales temporales en milisegundos) y §6.6 (emisión
 > progresiva). `FEATURE_SPEC_VERSION` no cambia: el promedio del §2 es el mismo y
 > ningún modelo entrenado se invalida — lo que cambia es **qué frames entran**.
+>
+> **v3** — `docs/adr/0015-el-camino-dinamico-de-la-segmentacion.md`. Se añade la
+> §6.7: el camino dinámico, que resuelve lo que la §6.3 dejó escrito sin
+> resolver. `FEATURE_SPEC_VERSION` tampoco cambia.
 
 Esta sección **no está bajo `FEATURE_SPEC_VERSION`** y se versiona aparte. Las dos
 cosas cambian por motivos distintos: el vector de features cambia cuando cambia lo
@@ -504,6 +551,11 @@ movimiento coherente, en vez de esperar a que se detenga.
 No se resuelve aquí. Se deja escrito para no descubrirlo en la Fase 5 con el
 dataset ya grabado. Ver `docs/adr/0004-contrato-de-segmentacion.md`.
 
+> **Resuelto en la v3** (§6.7). La conclusión de arriba se sostiene a medias: el
+> enrutamiento no cuelga de `velocity_threshold`, pero tampoco hizo falta una
+> métrica nueva. Se usa la misma `v_t` contra otro umbral, `motion_threshold`, y
+> lo que distingue un trazo de un tránsito es cuánto dura, no qué se mide.
+
 ### 6.4 Qué ventana se clasifica
 
 Sea `stable_run` el número de **pares consecutivos** cuya velocidad quedó por
@@ -542,8 +594,9 @@ Dos consecuencias que una reimplementación tiene que reproducir exactamente:
 ### 6.5 Los umbrales temporales están en milisegundos
 
 `buffer_ms`, `stable_ms`, `emit_cooldown_ms`, `reject_cooldown_ms`,
-`missing_to_idle_ms` y `spelling.space_after_absent_ms` son **duraciones**. Se
-convierten a cuadros con la tasa de la sesión:
+`missing_to_idle_ms`, `motion_min_ms`, `motion_confirm_low_ms`, `motion_max_ms` y
+`spelling.space_after_absent_ms` son **duraciones**. Se convierten a cuadros con
+la tasa de la sesión:
 
 ```
 cuadros(ms, fps) = max( 1, floor( ms · fps / 1000 + 0.5 ) )
@@ -569,7 +622,8 @@ suponiendo 30 fps; la medición de `lsm-demo --medir-fps` en la máquina de
 referencia dio **17.8 fps sostenidos**, de modo que cada umbral duraba 1.7 veces
 lo que su comentario afirmaba: los 24 frames de buffer eran 1348 ms y no 800.
 
-**Excepción anotada:** `velocity_threshold` sigue en unidades de mano **por
+**Excepción anotada:** `velocity_threshold` —y desde la v3 `motion_threshold`, que
+comparte métrica y unidad— sigue en unidades de mano **por
 frame** y por tanto sigue dependiendo de la tasa — a menor tasa, dos frames
 consecutivos están más separados en el tiempo y la misma mano física da un `v_t`
 mayor. Expresarla por segundo es el arreglo pendiente; no se hizo con lo demás
@@ -596,6 +650,67 @@ muestras cruzan `high_confidence = 0.82` y saldrían de inmediato.
 El cerrojo de letra repetida se evalúa **antes** de acumular: acumular evidencia
 de una letra que el cerrojo no va a dejar salir gastaría la ventana entera para
 terminar en el mismo rechazo.
+
+### 6.7 El camino dinámico (v3)
+
+Una letra dinámica nunca cumple la condición de STABLE: el movimiento *es* la seña
+(§6.3). Tiene su propio camino por la máquina:
+
+```
+TRACKING ──(racha con ≥ motion_min frames móviles)──> DYNAMIC_CANDIDATE
+DYNAMIC_CANDIDATE ──(low_run ≥ motion_confirm_low)──> DYNAMIC_EMIT
+DYNAMIC_CANDIDATE ──(trazo > motion_max frames)─────> TRACKING   (descarta)
+DYNAMIC_CANDIDATE ──(hueco o escala degenerada)─────> TRACKING   (descarta)
+DYNAMIC_EMIT ──(clasificador dinámico acepta)───────> EMIT
+DYNAMIC_EMIT ──(UNKNOWN o < min_confidence)─────────> TRACKING
+```
+
+**Movimiento** es la `v_t` del §6.1 —la del último par, la misma que decide
+`moving`— contra `motion_threshold`. No hay una segunda métrica. Se exige
+`motion_threshold ≥ velocity_threshold`: ningún frame cuenta a la vez como
+quietud para STABLE y como movimiento para el candidato.
+
+Contadores, evaluados en **todos los estados salvo IDLE**, también durante el
+cooldown de EMIT (un trazo que empieza mientras la letra anterior se enfría sigue
+siendo el mismo trazo):
+
+| contador | qué cuenta | se reinicia |
+|---|---|---|
+| `low_run` | frames consecutivos con `v_t < motion_threshold` | con un frame en movimiento, o un hueco |
+| `still_run` | frames consecutivos con `v_t < velocity_threshold` | con un frame que supera `velocity_threshold`, o un hueco |
+| racha | frames móviles desde que empezó; no consecutivos | ver abajo |
+
+- **Nace una racha** con un frame en movimiento si no hay una en curso. Su trazo
+  empieza en el **frame anterior** a ese primer par en movimiento: es el punto de
+  partida del recorrido, y el origen de τ (§3.1).
+- **Muere una racha que no llegó a candidato** cuando `low_run ≥
+  motion_confirm_low`, o cuando `still_run ≥ stable_frames`. El segundo corte es
+  el que impide que los tránsitos cortos de un deletreo rápido se sumen hasta
+  parecer un trazo largo: si la mano se detuvo lo que el camino estático llama
+  quietud, lo anterior era un tránsito.
+- **Los frames móviles no son consecutivos** a propósito. La cámara entrega
+  cuadros duplicados y en pleno trazo `v_t` alterna alto y casi cero (medido en
+  las grabaciones: ADR 0015). Exigir consecutivos no dispararía nunca.
+- **Entrada**: en TRACKING —tras salir de STABLE si hacía falta—, en un frame en
+  movimiento, con `moving ≥ motion_min_frames`.
+- **Mientras dura DYNAMIC_CANDIDATE, STABLE está suspendido.** `stable_run` se
+  sigue contando para que, si el trazo se rechaza, el camino estático retome en
+  el frame siguiente sin volver a esperar `stable_frames`.
+- **DYNAMIC_EMIT entrega el trazo crudo** desde su frame de partida hasta el
+  **último frame en movimiento**, sin el reposo que lo cerró y sin remuestrear.
+  El remuestreo (§3.2) lo hace el clasificador. Viaja con `WindowOrigin.DYNAMIC`.
+- **Largo máximo**: se compara el número de frames del trazo, contados desde su
+  frame de partida, con `motion_max_frames`, con `>`. Tras descartar por largo no
+  nace otra racha hasta que `low_run ≥ motion_confirm_low`.
+- **Tras emitir una dinámica**, además del `pending_repeat` de siempre, un
+  cerrojo impide que TRACKING promueva a STABLE hasta que un frame supere
+  `velocity_threshold` o se pierda la mano: la pose en que termina una dinámica
+  no es una letra nueva (la J acaba en la mano de la I).
+- La emisión dinámica **no es progresiva**: se clasifica una vez, y se emite si
+  la confianza alcanza `min_confidence`.
+
+`motion_threshold` está en unidades de mano **por frame**, con la misma deuda que
+`velocity_threshold` (§6.5). Las tres duraciones van en milisegundos.
 
 ---
 

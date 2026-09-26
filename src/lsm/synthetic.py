@@ -501,3 +501,99 @@ def synthetic_samples(
                         )
                     )
     return tuple(muestras)
+
+
+# --------------------------------------------------------------------------- #
+# Dataset sintético dinámico (Fase 5)
+# --------------------------------------------------------------------------- #
+#
+# Lo mismo que el de arriba para el clasificador dinámico: que `lsm-train` y
+# `lsm-eval-dinamico` corran sin grabaciones. **Tampoco se parece a LSM**: cada
+# clase traza una figura de Lissajous distinta con una mano distinta, y cada
+# repetición la ejecuta a otro ritmo y con otra amplitud, que es la variación que
+# DTW existe para tolerar.
+
+
+def _trazo_de_clase(ordinal: int, t: float) -> tuple[float, float]:
+    """Punto de la figura de la clase en `t ∈ [0, 1]`, en píxeles desde el inicio.
+
+    Frecuencias y fase salen del ordinal, así que dos clases dan figuras
+    distintas por construcción. Empieza en el origen para que el primer frame
+    sea el punto de partida del trazo, como en τ.
+    """
+    fx = 1 + ordinal % 3
+    fy = 1 + (ordinal // 3) % 3
+    fase = 0.5 * math.pi * (ordinal % 4)
+    x = 90.0 * (math.sin(2.0 * math.pi * fx * t + fase) - math.sin(fase))
+    y = 70.0 * math.sin(2.0 * math.pi * fy * t)
+    return (x, y)
+
+
+def synthetic_dynamic_samples(
+    labels: tuple[str, ...],
+    *,
+    signers: int = 3,
+    sessions: int = 1,
+    repetitions: int = 4,
+    width: int = 1280,
+    height: int = 720,
+) -> tuple[Sample, ...]:
+    """Muestras `DYNAMIC` etiquetadas, deterministas y sin cámara.
+
+    El ordinal de cada clase es su **posición en `labels`**, como en
+    `synthetic_samples`. La duración varía entre 20 y 40 frames y el ritmo no es
+    uniforme —el trazo se acelera y frena—, de modo que dos repeticiones de la
+    misma letra no se alinean frame a frame y la distancia euclidiana directa las
+    separaría: es la prueba de que DTW hace su trabajo.
+    """
+    if not labels:
+        raise ValueError("un dataset necesita al menos una etiqueta")
+    muestras: list[Sample] = []
+    for ordinal, label in enumerate(labels):
+        base = class_hand(ordinal)
+        for signer in range(signers):
+            mano = _signer_hand(base, signer)
+            signer_id = f"sint{signer:02d}"
+            for session in range(sessions):
+                session_id = f"{signer_id}-d{session:02d}"
+                for repeticion in range(repetitions):
+                    ruido = _Noise(f"dyn|{label}|{signer}|{session}|{repeticion}")
+                    largo = 30 + int(10.0 * ruido.next())
+                    amplitud = 1.0 + 0.15 * ruido.next()
+                    sesgo = 0.25 * ruido.next()
+                    inicio = (560.0 + 60.0 * ruido.next(), 360.0 + 40.0 * ruido.next())
+                    frames: list[RawFrame] = []
+                    for index in range(largo):
+                        u = index / (largo - 1)
+                        # Ritmo no uniforme: t(u) monótona con t(0)=0 y t(1)=1.
+                        t = u + sesgo * u * (1.0 - u)
+                        dx, dy = _trazo_de_clase(ordinal, t)
+                        frames.append(
+                            to_frame(
+                                translated(
+                                    mano,
+                                    inicio[0] + amplitud * dx + 0.8 * ruido.next(),
+                                    inicio[1] + amplitud * dy + 0.8 * ruido.next(),
+                                ),
+                                width=width,
+                                height=height,
+                            )
+                        )
+                    muestras.append(
+                        Sample(
+                            sequence=Sequence(frames=tuple(frames)),
+                            label=label,
+                            signer_id=signer_id,
+                            session_id=session_id,
+                            timestamp=_SYNTHETIC_EPOCH
+                            + timedelta(minutes=len(muestras)),
+                            handedness=Handedness.RIGHT,
+                            light_level=LightLevel.INDOOR,
+                            light_direction=LightDirection.FRONTAL,
+                            distance=Distance.MEDIUM,
+                            mean_luminance=0.35 + 0.05 * signer,
+                            mean_scale_px=100.0 + 6.0 * signer,
+                            kind=SampleKind.DYNAMIC,
+                        )
+                    )
+    return tuple(muestras)

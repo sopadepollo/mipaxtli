@@ -195,7 +195,12 @@ Detalles a implementar:
 - Cooldown tras emitir, para no repetir la misma letra mientras la mano sigue quieta.
 - Para señas dinámicas: si se detecta movimiento sostenido con un patrón (no ruido),
   la ventana completa se manda al clasificador dinámico en vez de esperar
-  estabilidad.
+  estabilidad. **Especificado en la Fase 5** como el camino
+  `DYNAMIC_CANDIDATE → DYNAMIC_EMIT` (`feature-spec.md` §6.7,
+  `docs/adr/0015-el-camino-dinamico-de-la-segmentacion.md`): misma velocidad
+  del §6, otro umbral, frames móviles acumulados con tolerancia a huecos, y STABLE
+  suspendido mientras dura el trazo para que el freno de un cambio de dirección no
+  se lea como letra estática.
 
 Los umbrales van en un archivo de configuración, no hardcodeados. Se van a ajustar
 mucho durante las pruebas.
@@ -274,6 +279,11 @@ estabilidad nunca se cumplirá mientras se ejecuta una J o una Z, así que el
 enrutamiento estático/dinámico necesitará su propio criterio y probablemente un
 camino distinto por esta máquina. Ver `docs/adr/0004-contrato-de-segmentacion.md`.
 
+Así fue: la v3 del contrato (`feature-spec.md` §6.7) añade DYNAMIC_CANDIDATE y
+DYNAMIC_EMIT. El criterio propio resultó ser la misma velocidad contra otro
+umbral, más **duración**: lo que separa un trazo de un tránsito es cuánto dura el
+movimiento, no qué se mide.
+
 ### 4.3 Estáticas vs dinámicas: dos clasificadores, una interfaz
 
 **Interfaz común (`classifiers/base.py`):**
@@ -303,6 +313,16 @@ tocar nada más. Registrar la decisión en un ADR.
 
 **Enrutamiento:** un `registry.py` decide qué clasificador usar según la energía de
 movimiento de la ventana, o simplemente corre ambos y toma la mayor confianza.
+
+> **Resuelto en la Fase 5, y de ninguna de las dos formas.** La energía de
+> movimiento ya la evaluó la máquina de estados: la ventana llega al registry con
+> su `WindowOrigin` —STABLE o DYNAMIC— y el registry lo obedece en vez de medir
+> otra vez, que sería un segundo criterio capaz de discrepar con el primero sin
+> que nada lo detectara. Correr ambos y tomar la mayor confianza tampoco sirve
+> como regla general: para `L`/`LL`, `R`/`RR`, `N`/`Ñ` e `I`/`J` la mano es la
+> misma y el estático ganaría con confianza alta. Queda solo como red para el
+> caso —que la máquina no produce— de que lleguen las dos rutas a la vez. Ver
+> `src/lsm/classifiers/registry.py` y el ADR 0015.
 
 ### 4.4 Clase de rechazo
 

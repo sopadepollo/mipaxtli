@@ -41,7 +41,7 @@ from lsm.capture import CAPTURE_SPEC_VERSION
 from lsm.features import FEATURE_SPEC_VERSION
 from lsm.io.dataset import iter_sample_paths, read_sample
 from lsm.segmentation import SEGMENTATION_SPEC_VERSION
-from lsm.synthetic import synthetic_samples
+from lsm.synthetic import synthetic_dynamic_samples, synthetic_samples
 from lsm.types import Sample
 
 #: Cómo se nombra el corpus sintético en la huella y en el reporte.
@@ -189,12 +189,18 @@ def load_corpus(
     repetitions: int = SYNTHETIC_REPETITIONS,
     signers: int = SYNTHETIC_SIGNERS,
     repo: Path | None = None,
+    dynamic_labels: tuple[str, ...] = (),
 ) -> Corpus:
     """Lee `data/raw`; si está vacío y se permite, genera el corpus sintético.
 
     Levanta `CorpusError` cuando no hay muestras y el sintético está desactivado.
     El mensaje dice qué falta y cómo grabarlo: quien llegue aquí probablemente
     acaba de clonar el repositorio.
+
+    `dynamic_labels` solo afecta al corpus sintético: añade muestras dinámicas
+    de esas letras (Fase 5). Con grabaciones reales se lee todo lo que haya, y
+    quien consume filtra. Vacío por defecto para que el corpus sintético de la
+    Fase 2 —y su huella— sigan siendo exactamente los de antes.
     """
     repo = repo or Path.cwd()
     paths = list(iter_sample_paths(root))
@@ -227,6 +233,10 @@ def load_corpus(
         sessions=SYNTHETIC_SESSIONS,
         repetitions=repetitions,
     )
+    if dynamic_labels:
+        samples = samples + synthetic_dynamic_samples(
+            dynamic_labels, signers=signers, repetitions=repetitions
+        )
     return Corpus(
         samples=samples,
         provenance=_describe(

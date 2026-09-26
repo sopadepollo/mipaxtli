@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from lsm.classifiers.dynamic_dtw import DynamicDtwClassifier
+from lsm.classifiers.registry import ClassifierRegistry
 from lsm.classifiers.static_knn import StaticKnnClassifier
 from lsm.cli.train import main
 from lsm.evaluation import EXCLUDED_LABELS, PHASE2_LABELS
@@ -29,6 +31,11 @@ def entrenar(tmp_path: Path, *extra: str) -> Path:
             str(REPO_ROOT / "config.yaml"),
             "--salida",
             str(salida),
+            # Siempre a tmp_path: el valor por defecto es data/models, y un test
+            # que escribiera ahí dejaría un modelo sintético donde la demo
+            # busca el real.
+            "--salida-dinamico",
+            str(tmp_path / "dinamico.json"),
             "--repeticiones-sinteticas",
             "2",
             *extra,
@@ -93,3 +100,23 @@ def test_dos_entrenamientos_dan_el_mismo_archivo(tmp_path: Path) -> None:
     segundo = entrenar(tmp_path).read_bytes()
 
     assert primero == segundo
+
+
+def test_tambien_escribe_el_modelo_dinamico_y_el_registry_lo_carga(
+    tmp_path: Path,
+) -> None:
+    """Los dos modelos salen del mismo corpus y la demo los carga juntos."""
+    estatico = entrenar(tmp_path)
+    dinamico = tmp_path / "dinamico.json"
+
+    payload = json.loads(dinamico.read_text(encoding="utf-8"))
+    recargado = DynamicDtwClassifier.from_export(payload)
+    registry = ClassifierRegistry.from_exports(
+        static=json.loads(estatico.read_text(encoding="utf-8")), dynamic=payload
+    )
+
+    assert payload["classifier"] == "dynamic_dtw"
+    assert not {"DOBLE_L", "DOBLE_R"} & set(payload["labels"])
+    assert payload["data"]["dataset"]["synthetic"] is True
+    assert recargado.templates
+    assert registry.dynamic is not None

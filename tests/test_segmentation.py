@@ -27,15 +27,24 @@ from lsm.segmentation import (
     SegmentationEvent,
     State,
     StateChanged,
+    WindowDynamic,
     WindowRejected,
     WindowStable,
     frames_from_ms,
     run_segmentation,
 )
 from lsm.synthetic import canonical_hand, to_frame, translated
-from lsm.types import FrameSlot, InvalidFrame, InvalidReason, Prediction, Sequence
+from lsm.types import (
+    FrameSlot,
+    InvalidFrame,
+    InvalidReason,
+    Prediction,
+    RawFrame,
+    Sequence,
+    WindowOrigin,
+)
 
-Classify = Callable[[Sequence], Prediction]
+Classify = Callable[[Sequence, WindowOrigin], Prediction]
 
 #: La tasa con la que corren estos tests. Fija y explícita: los umbrales viven en
 #: milisegundos y solo se convierten a cuadros con una tasa, así que sin fijarla
@@ -65,6 +74,14 @@ CONFIG = Config.model_validate(
             "min_confidence": 0.6,
             "high_confidence": 0.9,
             "velocity_threshold": 0.02,
+            # El camino dinámico, apartado de estos tests: el tránsito más largo
+            # que usan son 12 frames de viaje, y 20 frames móviles no los
+            # alcanza ninguno. Los tests del camino dinámico llevan su propia
+            # configuración (`DYNAMIC_CONFIG`) y ejercitan la interacción a
+            # propósito.
+            "motion_min_ms": _ms(20),
+            "motion_confirm_low_ms": _ms(4),
+            "motion_max_ms": _ms(60),
         }
     }
 )
@@ -83,7 +100,7 @@ FINGERTIPS = (4, 8, 12, 16, 20)
 
 
 def always(prediction: Prediction) -> Classify:
-    def classify(sequence: Sequence) -> Prediction:  # noqa: ARG001 — doble de pruebas
+    def classify(sequence: Sequence, origin: WindowOrigin) -> Prediction:  # noqa: ARG001 — doble de pruebas
         return prediction
 
     return classify
@@ -93,7 +110,7 @@ def responses(*predictions: Prediction) -> Classify:
     """Devuelve las predicciones en orden; la última se repite indefinidamente."""
     pending = list(predictions)
 
-    def classify(sequence: Sequence) -> Prediction:  # noqa: ARG001 — doble de pruebas
+    def classify(sequence: Sequence, origin: WindowOrigin) -> Prediction:  # noqa: ARG001 — doble de pruebas
         return pending.pop(0) if len(pending) > 1 else pending[0]
 
     return classify
@@ -279,7 +296,7 @@ def test_un_rechazo_no_reclasifica_en_cada_frame() -> None:
     reclasifica la misma ventana 30 veces por segundo para volver a rechazarla."""
     calls = 0
 
-    def counting(sequence: Sequence) -> Prediction:  # noqa: ARG001
+    def counting(sequence: Sequence, origin: WindowOrigin) -> Prediction:  # noqa: ARG001
         nonlocal calls
         calls += 1
         return UNSURE_A
@@ -379,7 +396,7 @@ def test_una_ventana_inestable_se_rechaza_antes_de_clasificar() -> None:
         }
     )
 
-    def never_called(sequence: Sequence) -> Prediction:  # noqa: ARG001
+    def never_called(sequence: Sequence, origin: WindowOrigin) -> Prediction:  # noqa: ARG001
         pytest.fail("no debe clasificarse una ventana inestable")
 
     events = list(run_segmentation(jittery_frames(8), config, never_called))
@@ -729,3 +746,326 @@ def test_la_maquina_usa_la_tasa_que_se_le_pasa() -> None:
 
     assert primera_emision(rapida) == 6  # 200 ms a 30 fps son 6 cuadros
     assert primera_emision(lenta) == 3  # y a 15 fps, 3
+
+
+# --------------------------------------------------------------------------- #
+# El camino dinámico (§6.7, ADR 0015)
+# --------------------------------------------------------------------------- #
+#
+# La mano sintética mide ~100 px de muñeca a nudillo, así que un paso de k px por
+# frame da `v_t ≈ k / 100`: 10 px es trazo franco (0.10), 2.2 px cae entre
+# `velocity_threshold` y `motion_threshold` (0.022) y 0 px es quietud.
+
+#: Umbrales apretados del camino dinámico, a 30 fps. Los del camino estático son
+#: los de `CONFIG`; lo que cambia es que aquí un trazo de 4 frames móviles ya es
+#: candidato y 4 frames de reposo lo cierran.
+DYNAMIC_CONFIG = Config.model_validate(
+    {
+        "segmentation": {
+            **CONFIG.segmentation.model_dump(),
+            "velocity_threshold": 0.02,
+            "motion_threshold": 0.025,
+            "motion_min_ms": _ms(4),
+            "motion_confirm_low_ms": _ms(4),
+            "motion_max_ms": _ms(30),
+        }
+    }
+)
+DYNAMIC_UMBRALES = FrameThresholds.from_config(DYNAMIC_CONFIG, FPS)
+
+CONFIDENT_J = Prediction(label="J", confidence=0.93)
+
+
+def trazo(
+    *segments: tuple[float, float, int], start: tuple[float, float] = (400.0, 300.0)
+) -> list[RawFrame]:
+    """Un recorrido por tramos `(dx, dy, frames)`, en píxeles por frame.
+
+    El primer frame está en `start`; cada tramo añade `frames` frames movidos
+    `(dx, dy)` desde el anterior. Un tramo `(0, 0, n)` es una pausa: la mano
+    frena en un cambio de dirección.
+    """
+    x, y = start
+    frames = [to_frame(translated(canonical_hand(), x, y), width=1280, height=720)]
+    for dx, dy, count in segments:
+        for _ in range(count):
+            x += dx
+            y += dy
+            frames.append(
+                to_frame(translated(canonical_hand(), x, y), width=1280, height=720)
+            )
+    return frames
+
+
+def quieta_tras(frames: list[RawFrame], count: int) -> list[RawFrame]:
+    """La mano detenida donde terminó el trazo, `count` frames."""
+    return [frames[-1]] * count
+
+
+def muneca_px(frames: list[RawFrame]) -> tuple[float, float]:
+    """Dónde quedó la muñeca, en píxeles, en el último frame de un trazo."""
+    ultimo = frames[-1]
+    return (ultimo.landmarks[0].x * 1280, ultimo.landmarks[0].y * 720)
+
+
+class PorOrigen:
+    """Doble de clasificador que responde según la ruta y anota quién le llamó."""
+
+    def __init__(
+        self,
+        stable: Prediction = CONFIDENT_A,
+        dynamic: Prediction = CONFIDENT_J,
+    ) -> None:
+        self.responses = {WindowOrigin.STABLE: stable, WindowOrigin.DYNAMIC: dynamic}
+        self.calls: list[tuple[WindowOrigin, Sequence]] = []
+
+    def __call__(self, sequence: Sequence, origin: WindowOrigin) -> Prediction:
+        self.calls.append((origin, sequence))
+        return self.responses[origin]
+
+    def origins(self) -> list[WindowOrigin]:
+        return [origin for origin, _ in self.calls]
+
+
+def run_dynamic(
+    stream: Iterable[FrameSlot], classify: Classify, config: Config = DYNAMIC_CONFIG
+) -> list[SegmentationEvent]:
+    return list(run_segmentation(stream, config, classify, fps=FPS))
+
+
+def dynamic_windows(events: list[SegmentationEvent]) -> list[Sequence]:
+    return [e.window for e in events if isinstance(e, WindowDynamic)]
+
+
+def reached(events: list[SegmentationEvent]) -> set[State]:
+    return {current for _, current in transitions(events)}
+
+
+def test_una_dinamica_limpia_se_entrega_entera() -> None:
+    """El trazo completo, del primer frame al último en movimiento, y nada más.
+
+    Ni el reposo que lo cierra —no es parte de la letra— ni un recorte del
+    principio: la trayectoria entera es lo que distingue la letra, y el §3.1 mide
+    τ desde el primer frame.
+    """
+    stroke = trazo((10.0, 0.0, 6), (0.0, 10.0, 6))
+    clasificador = PorOrigen()
+
+    events = run_dynamic([*stroke, *quieta_tras(stroke, 8)], clasificador)
+
+    assert dynamic_windows(events) == [Sequence(frames=tuple(stroke))]
+    assert clasificador.origins() == [WindowOrigin.DYNAMIC]
+    assert emitted(events) == ["J"]
+    emision = next(e for e in events if isinstance(e, LetterEmitted))
+    assert emision.origin is WindowOrigin.DYNAMIC
+    assert (State.TRACKING, State.DYNAMIC_CANDIDATE) in transitions(events)
+    assert (State.DYNAMIC_CANDIDATE, State.DYNAMIC_EMIT) in transitions(events)
+    assert (State.DYNAMIC_EMIT, State.EMIT) in transitions(events)
+
+
+def test_la_pausa_de_un_cambio_de_direccion_no_parte_la_dinamica() -> None:
+    """La Z: tres tramos con dos frenos, cada uno más largo que `stable_frames`.
+
+    Cada freno deja la velocidad en cero tres frames, y `stable_frames` son dos:
+    el camino estático, por su cuenta, declararía STABLE en mitad del trazo y
+    clasificaría el freno como letra. Con el candidato abierto, STABLE está
+    suspendido y los tres tramos llegan juntos al clasificador dinámico.
+    """
+    pausa = DYNAMIC_UMBRALES.stable_frames + 1
+    assert pausa < DYNAMIC_UMBRALES.motion_confirm_low_frames
+    stroke = trazo(
+        (10.0, 0.0, 6),
+        (0.0, 0.0, pausa),
+        (-8.0, 8.0, 6),
+        (0.0, 0.0, pausa),
+        (10.0, 0.0, 6),
+    )
+    clasificador = PorOrigen()
+
+    events = run_dynamic([*stroke, *quieta_tras(stroke, 8)], clasificador)
+
+    assert dynamic_windows(events) == [Sequence(frames=tuple(stroke))]
+    assert WindowOrigin.STABLE not in clasificador.origins()
+    assert not any(isinstance(e, WindowStable) for e in events)
+    assert emitted(events) == ["J"]
+
+
+def test_sin_la_suspension_el_freno_si_se_leeria_como_estatica() -> None:
+    """El contraste del test anterior: el defecto que la suspensión corrige.
+
+    Con el camino dinámico fuera de alcance —un `motion_min` que ningún trazo
+    alcanza—, la misma Z pasa por STABLE en su primer freno. Si este test dejara
+    de cumplirse, el anterior ya no estaría probando nada.
+    """
+    sin_camino = Config.model_validate(
+        {
+            "segmentation": {
+                **DYNAMIC_CONFIG.segmentation.model_dump(),
+                "motion_min_ms": _ms(200),
+                "motion_max_ms": _ms(400),
+            }
+        }
+    )
+    pausa = DYNAMIC_UMBRALES.stable_frames + 1
+    stroke = trazo((10.0, 0.0, 6), (0.0, 0.0, pausa), (-8.0, 8.0, 6))
+    clasificador = PorOrigen()
+
+    events = run_dynamic(stroke, clasificador, sin_camino)
+
+    assert WindowOrigin.STABLE in clasificador.origins()
+    assert (State.TRACKING, State.STABLE) in transitions(events)
+
+
+def test_un_transito_que_no_llega_a_motion_min_no_se_vuelve_candidato() -> None:
+    """Movimiento franco pero corto: el viaje de una letra a la siguiente.
+
+    Cada frame supera `motion_threshold` y aun así la racha no alcanza
+    `motion_min`: no hay candidato, el clasificador dinámico no se entera, y la
+    letra de llegada sale por el camino estático como siempre. Nada se emite a
+    medias.
+    """
+    llegada = trazo((10.0, 0.0, DYNAMIC_UMBRALES.motion_min_frames - 1))
+    stream = [*quieta_tras(llegada[:1], 6), *llegada, *quieta_tras(llegada, 6)]
+    clasificador = PorOrigen()
+
+    events = run_dynamic(stream, clasificador)
+
+    assert State.DYNAMIC_CANDIDATE not in reached(events)
+    assert dynamic_windows(events) == []
+    assert WindowOrigin.DYNAMIC not in clasificador.origins()
+    assert emitted(events) == ["A", "A"]
+
+
+def test_un_arrastre_bajo_motion_threshold_no_cuenta_como_trazo() -> None:
+    """La otra forma de casi cruzar: lento pero largo.
+
+    A 2.2 px por frame la mano no está quieta para el camino estático
+    (`v_t` ≈ 0.022 > `velocity_threshold`) pero tampoco se mueve para el dinámico
+    (< `motion_threshold`). Por largo que sea, no hay racha que acumular.
+    """
+    arrastre = trazo((2.2, 0.0, 4 * DYNAMIC_UMBRALES.motion_max_frames))
+    clasificador = PorOrigen()
+
+    events = run_dynamic(arrastre, clasificador)
+
+    assert State.DYNAMIC_CANDIDATE not in reached(events)
+    assert clasificador.calls == []
+
+
+def test_una_estatica_pura_nunca_entra_a_candidato() -> None:
+    """Mano quieta con temblor de los dedos: solo existe el camino estático."""
+    clasificador = PorOrigen()
+
+    events = run_dynamic([*still_frames(10), *jittery_frames(40)], clasificador)
+
+    assert State.DYNAMIC_CANDIDATE not in reached(events)
+    assert set(clasificador.origins()) == {WindowOrigin.STABLE}
+
+
+def test_los_transitos_cortos_de_un_deletreo_rapido_no_se_suman() -> None:
+    """Tres viajes cortos separados por paradas de letra estática.
+
+    Juntos superan `motion_min`, pero cada parada dura lo que el camino estático
+    llama quietud y corta la racha. Sin ese corte, a la tercera letra el
+    deletreo entero parecería un trazo largo.
+
+    El estático duda en cada parada a propósito: si emitiera, el viaje siguiente
+    caería dentro del cooldown de EMIT, donde no se entra a candidato, y el test
+    pasaría sin haber puesto a prueba el corte.
+    """
+    corto = DYNAMIC_UMBRALES.motion_min_frames - 2
+    parada = DYNAMIC_UMBRALES.stable_frames + 1
+    assert parada < DYNAMIC_UMBRALES.motion_confirm_low_frames
+    assert 3 * (corto + 1) >= DYNAMIC_UMBRALES.motion_min_frames
+    stroke = trazo(
+        (10.0, 0.0, corto),
+        (0.0, 0.0, parada),
+        (0.0, 10.0, corto),
+        (0.0, 0.0, parada),
+        (-10.0, 0.0, corto),
+    )
+    clasificador = PorOrigen(stable=UNSURE_A)
+
+    events = run_dynamic([*stroke, *quieta_tras(stroke, 6)], clasificador)
+
+    assert State.DYNAMIC_CANDIDATE not in reached(events)
+    assert WindowOrigin.DYNAMIC not in clasificador.origins()
+
+
+def test_un_transito_largo_rechazado_deja_paso_a_la_estatica() -> None:
+    """Un viaje largo sí se vuelve candidato; el DTW lo rechaza y la letra de
+    llegada sale en el frame siguiente, sin volver a esperar `stable_frames`:
+    el reposo que cerró el candidato ya contaba como quietud."""
+    viaje = trazo((10.0, 0.0, DYNAMIC_UMBRALES.motion_min_frames + 3))
+    clasificador = PorOrigen(dynamic=Prediction.unknown(confidence=0.55))
+
+    events = run_dynamic([*viaje, *quieta_tras(viaje, 10)], clasificador)
+
+    rechazo = next(e for e in events if isinstance(e, WindowRejected))
+    assert rechazo.reason is RejectionReason.LOW_CONFIDENCE
+    assert (State.DYNAMIC_EMIT, State.TRACKING) in transitions(events)
+    assert emitted(events) == ["A"]
+    emision = next(e for e in events if isinstance(e, LetterEmitted))
+    assert emision.frame_index == rechazo.frame_index + 1
+    assert emision.origin is WindowOrigin.STABLE
+
+
+def test_la_pose_final_de_una_dinamica_no_se_emite_como_estatica() -> None:
+    """La J termina en la mano de la I. Sostenerla después del trazo no escribe
+    una I: hasta que la mano se mueva, el camino estático no promueve a STABLE.
+    El movimiento siguiente libera el cerrojo, como el rebote de las dobles."""
+    stroke = trazo((10.0, 0.0, 6), (0.0, 10.0, 6))
+    sostenida = quieta_tras(stroke, 40)
+    rebote = trazo((10.0, 0.0, 2), start=muneca_px(stroke))
+    clasificador = PorOrigen()
+
+    events = run_dynamic(
+        [*stroke, *sostenida, *rebote, *quieta_tras(rebote, 8)], clasificador
+    )
+
+    assert emitted(events) == ["J", "A"]
+    primera_estatica = clasificador.origins().index(WindowOrigin.STABLE)
+    assert clasificador.origins()[:primera_estatica] == [WindowOrigin.DYNAMIC]
+
+
+def test_un_candidato_demasiado_largo_se_descarta_sin_clasificar() -> None:
+    """Movimiento que no para: se descarta al pasar `motion_max`, y mientras la
+    mano siga moviéndose no nace otro candidato — si no, alguien gesticulando
+    entraría y saldría de DYNAMIC_CANDIDATE sin fin."""
+    agitada = trazo((10.0, 0.0, 3 * DYNAMIC_UMBRALES.motion_max_frames))
+    clasificador = PorOrigen()
+
+    events = run_dynamic(agitada, clasificador)
+
+    rechazos = [e.reason for e in events if isinstance(e, WindowRejected)]
+    assert rechazos == [RejectionReason.DYNAMIC_TOO_LONG]
+    assert clasificador.calls == []
+    entradas = [t for t in transitions(events) if t[1] is State.DYNAMIC_CANDIDATE]
+    assert len(entradas) == 1
+
+
+def test_un_hueco_descarta_el_trazo_entero() -> None:
+    """Sin coser (§0.3): un frame sin mano en mitad del trazo lo invalida, y lo
+    que viene después empieza de cero."""
+    antes = trazo((10.0, 0.0, 8))
+    despues = trazo((0.0, 10.0, 2), start=muneca_px(antes))
+    clasificador = PorOrigen()
+
+    events = run_dynamic(
+        [*antes, *missing_frames(1), *despues, *quieta_tras(despues, 8)],
+        clasificador,
+    )
+
+    rechazos = [e.reason for e in events if isinstance(e, WindowRejected)]
+    assert RejectionReason.DYNAMIC_INTERRUPTED in rechazos
+    assert dynamic_windows(events) == []
+    assert WindowOrigin.DYNAMIC not in clasificador.origins()
+
+
+def test_los_umbrales_del_camino_dinamico_se_convierten_a_cuadros() -> None:
+    """Como el resto: milisegundos en `config.yaml`, cuadros con la tasa."""
+    umbrales = FrameThresholds.from_config(Config(), fps=30.0)
+
+    assert umbrales.motion_min_frames == 10
+    assert umbrales.motion_confirm_low_frames == 12
+    assert umbrales.motion_max_frames == 120

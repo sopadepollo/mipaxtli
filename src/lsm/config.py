@@ -63,7 +63,13 @@ class FeaturesConfig(_Section):
     #: w_τ: peso del canal de trayectoria frente al de forma. La forma aporta 42
     #: componentes y la trayectoria 2; sin ponderar, el trazo —que es lo único que
     #: distingue una J de una I— queda invisible en la distancia euclidiana.
-    trajectory_weight: float = Field(default=4.0, ge=0.0, le=100.0)
+    #:
+    #: MEDIDO en la Fase 5 (ADR 0016): 1.0 y no el 4.0 de partida. La I y la J
+    #: nunca compiten dentro del DTW —llegan por caminos distintos de la
+    #: segmentación—, y entre las dinámicas la forma es la señal más estable
+    #: entre personas. Los golden vectors se generan con este valor y lo
+    #: declaran en su bloque `config`.
+    trajectory_weight: float = Field(default=1.0, ge=0.0, le=100.0)
 
 
 class StaticKnnConfig(_Section):
@@ -126,6 +132,21 @@ class DtwConfig(_Section):
     #: secuencia se rechaza en vez de interpolarse: estirar 2 frames a 24 inventa
     #: una trayectoria que nadie ejecutó.
     min_source_frames: int = Field(default=4, ge=1, le=1000)
+
+    #: Costo DTW normalizado máximo contra la plantilla más cercana para no
+    #: devolver `UNKNOWN`, en unidades de `g_t` (§3.3) por paso de alineación.
+    #:
+    #: Es la puerta que tapa lo que entra al camino dinámico sin ser una letra
+    #: dinámica: un tránsito largo entre dos letras, un saludo, una estática que
+    #: tembló lo bastante para cruzar el umbral de movimiento. DTW siempre tiene
+    #: una plantilla más cercana, y sin esta puerta esa gana. Depende de
+    #: `features.trajectory_weight`, que escala dos de las 44 componentes: si se
+    #: toca una, hay que volver a medir la otra.
+    #:
+    #: MEDIDO (ADR 0016) con `w_τ = 1.0`: el p99 de `d₁` de los aciertos
+    #: leave-one-signer-out. Puerta gruesa a propósito: la distancia no separa
+    #: estáticas de dinámicas, y lo que filtra es la segmentación más el margen.
+    max_distance: float = Field(default=6.0, gt=0.0, le=1000.0)
 
 
 class SegmentationConfig(_Section):
@@ -199,6 +220,67 @@ class SegmentationConfig(_Section):
 
     #: Ausencia de mano continuada que lleva de vuelta a IDLE, en milisegundos.
     missing_to_idle_ms: float = Field(default=267.0, gt=0.0, le=60000.0)
+
+    # -- Camino dinámico (feature-spec.md §6.7, ADR 0015) ------------------- #
+
+    #: Velocidad `v_t` del §6.1 por encima de la cual un frame **cuenta como
+    #: movimiento** para el camino dinámico. Es la misma métrica que
+    #: `velocity_threshold`, no una segunda: lo que cambia es el umbral.
+    #:
+    #: Unidades de mano **por frame**, con la misma deuda anotada que
+    #: `velocity_threshold`: depende de la tasa. Tiene que ser ≥ que
+    #: `velocity_threshold` —se valida— para que ningún frame pueda contar a la
+    #: vez como quietud para STABLE y como movimiento para el candidato.
+    motion_threshold: float = Field(default=0.025, gt=0.0, le=100.0)
+
+    #: Frames de movimiento que tiene que acumular una racha para pasar de
+    #: TRACKING a DYNAMIC_CANDIDATE, en milisegundos. Cuenta frames móviles,
+    #: no consecutivos: la cámara entrega cuadros duplicados y `v_t` alterna
+    #: alto/casi cero en pleno trazo (ADR 0015), así que exigir consecutivos no
+    #: dispararía nunca. Lo que corta una racha es `motion_confirm_low_ms`.
+    motion_min_ms: float = Field(default=333.0, gt=0.0, le=60000.0)
+
+    #: Reposo continuado —frames con `v_t < motion_threshold`— que da por
+    #: terminado el movimiento, en milisegundos. En DYNAMIC_CANDIDATE es lo que
+    #: dispara DYNAMIC_EMIT; en TRACKING es lo que mata una racha que no llegó a
+    #: candidato. Tiene que ser más largo que el freno de un cambio de dirección
+    #: de la Z o del gancho de la J, o esas letras se parten por la mitad.
+    motion_confirm_low_ms: float = Field(default=400.0, gt=0.0, le=60000.0)
+
+    #: Duración máxima de un candidato dinámico, en milisegundos, contada desde
+    #: el primer frame del trazo. Por encima se descarta sin clasificar y se
+    #: vuelve a TRACKING: nadie tarda eso en trazar una letra, y lo que sí dura
+    #: tanto —alguien gesticulando— no debe llegar al clasificador dinámico.
+    motion_max_ms: float = Field(default=4000.0, gt=0.0, le=60000.0)
+
+    @model_validator(mode="after")
+    def _coherencia_del_camino_dinamico(self) -> SegmentationConfig:
+        if self.motion_threshold < self.velocity_threshold:
+            msg = (
+                f"motion_threshold ({self.motion_threshold}) es menor que "
+                f"velocity_threshold ({self.velocity_threshold}): un mismo frame "
+                "contaría a la vez como quietud para STABLE y como movimiento "
+                "para el candidato dinámico, y los dos caminos dejarían de ser "
+                "excluyentes"
+            )
+            raise ValueError(msg)
+        if self.motion_min_ms >= self.motion_max_ms:
+            msg = (
+                f"motion_min_ms ({self.motion_min_ms}) no es menor que "
+                f"motion_max_ms ({self.motion_max_ms}): todo candidato se "
+                "descartaría por largo en el mismo frame en que nace"
+            )
+            raise ValueError(msg)
+        if self.motion_confirm_low_ms < self.stable_ms:
+            msg = (
+                f"motion_confirm_low_ms ({self.motion_confirm_low_ms}) es menor "
+                f"que stable_ms ({self.stable_ms}): el reposo que cierra un trazo "
+                "sería más corto que el que la máquina ya llama quietud, y una "
+                "pausa que para el camino estático no es una letra partiría una "
+                "dinámica en dos"
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def _coherencia_entre_umbrales(self) -> SegmentationConfig:

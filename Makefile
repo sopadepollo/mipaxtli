@@ -4,7 +4,7 @@
 
 UV ?= uv
 
-.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval demo medir-fps signs signs-render signs-verificar
+.PHONY: help setup setup-capture model calibrar verify test test-nucleo lint format golden docker-test capture train eval eval-dinamico demo medir-fps signs signs-render signs-verificar
 
 help:
 	@echo "setup        instala dependencias con uv"
@@ -108,9 +108,12 @@ capture:
 verify:
 	$(UV) run lsm-capture verificar
 
-# Entrena static_knn sobre las 21 letras estaticas mas NONE y exporta el modelo
-# a data/models/static_knn.json. Las 8 letras dinamicas quedan fuera hasta la
-# Fase 5. No mide precision a proposito: eso es `make eval`.
+# Entrena los dos clasificadores y exporta dos modelos:
+#   data/models/static_knn.json   21 letras estaticas mas NONE
+#   data/models/dynamic_dtw.json  las dinamicas con direccion decidida (Fase 5)
+# LL y RR se cuentan como BLOQUEADAS y no tienen plantilla: su direccion
+# canonica esta pendiente de decision humana (docs/glosario-lsm.md).
+# No mide precision a proposito: eso es `make eval` y `make eval-dinamico`.
 #
 # Mientras data/raw este vacio usa un corpus SINTETICO y lo dice en pantalla y
 # dentro del propio archivo. Para exigir dataset real: ARGS="--sin-sintetico".
@@ -135,6 +138,16 @@ train:
 # dataset dan los mismos bytes, que es lo que permite comparar dos calibraciones.
 eval:
 	$(UV) run lsm-eval $(ARGS)
+
+# Reporte de la Fase 5 en data/models/eval/reporte-fase5.md: DTW con
+# leave-one-signer-out por letra, barrido trajectory_weight x band_radius con la
+# Z aparte, distribucion de distancias para dtw.max_distance, y reproduccion de
+# cada grabacion por la maquina de estados (enteras / partidas / perdidas).
+# Tarda ~70 min con el dataset de la Fase 1. Para una pasada rapida:
+#
+#   make eval-dinamico ARGS="--rejilla rapido --sin-reproduccion"
+eval-dinamico:
+	$(UV) run lsm-eval-dinamico $(ARGS)
 
 # Demo en vivo: senas -> texto. Necesita camara, MediaPipe y un modelo
 # entrenado (`make train`). Controles: bajar la mano cierra la palabra,

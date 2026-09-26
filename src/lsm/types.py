@@ -390,6 +390,26 @@ class Prediction:
         return cls(label=UNKNOWN_LABEL, confidence=confidence)
 
 
+class WindowOrigin(StrEnum):
+    """De qué camino de la máquina de estados salió una ventana.
+
+    Es lo que decide qué clasificador la atiende (`classifiers/registry.py`), y
+    se decide **una sola vez**, en la segmentación: una ventana que salió de
+    STABLE es una configuración sostenida y va al estático; una que salió de
+    DYNAMIC_EMIT es un trazo y va al dinámico. Re-derivar la ruta midiendo otra
+    vez el movimiento en el registry abriría dos criterios que pueden discrepar
+    en silencio. Ver `docs/adr/0015-el-camino-dinamico-de-la-segmentacion.md`.
+
+    Vive aquí y no en `segmentation.py` para que `classifiers/` no tenga que
+    importar la máquina de estados para saber con qué le llaman.
+    """
+
+    #: El tramo verificado estable del §6.4: forma sostenida.
+    STABLE = "STABLE"
+    #: El trazo acumulado desde que empezó el movimiento sostenido (§6.7).
+    DYNAMIC = "DYNAMIC"
+
+
 class SampleKind(StrEnum):
     """Cómo se grabó la muestra.
 
