@@ -424,3 +424,30 @@ def test_las_dimensiones_del_cuadro_viajan_con_el_frame() -> None:
     assert isinstance(slot, RawFrame)
     assert (slot.width, slot.height) == (640, 480)
     assert slot.aspect_ratio == pytest.approx(640 / 480)
+
+
+def test_con_reloj_real_las_marcas_siguen_al_reloj_y_nunca_se_repiten() -> None:
+    """ADR 0017: tras descartar repetidos, el intervalo real (~65 ms) doblaba al
+    nominal (33 ms) y el rastreador perdía la mano. Con `clock`, las marcas son
+    las del reloj; si el reloj no avanza, suben de uno en uno, porque el modo
+    VIDEO rechaza una marca repetida."""
+    lecturas = iter([10.0, 10.065, 10.065, 10.2])
+    detector = _detector(clock=lambda: next(lecturas))
+
+    marcas = []
+    for _ in range(4):
+        detector._elapsed_ms = detector._next_timestamp()
+        marcas.append(detector.timestamp_ms)
+
+    assert marcas == [10000, 10065, 10066, 10200]
+
+
+def test_sin_reloj_las_marcas_son_el_contador_reproducible() -> None:
+    detector = _detector(frame_interval_ms=33)
+
+    marcas = []
+    for _ in range(3):
+        detector._elapsed_ms = detector._next_timestamp()
+        marcas.append(detector.timestamp_ms)
+
+    assert marcas == [33, 66, 99]

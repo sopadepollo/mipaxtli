@@ -314,6 +314,12 @@ hands:
   mismatch_min_score: 0.9
   mismatch_ms: 1500.0
 
+  # Marcas de tiempo reales para MediaPipe (modo VIDEO) en vez del contador de
+  # 1000/camera_fps ms por cuadro. Con los repetidos descartados el intervalo
+  # real es ~65 ms; con el nominal de 33 ms el rastreador perdía la mano en los
+  # trazos rápidos (huecos de mediana 15 cuadros, ADR 0017). false = contador.
+  real_timestamps: true
+
 # Recolección de dataset (src/lsm/cli/capture.py, ARQUITECTURA.md §4.7).
 capture:
   # Cámara y resolución pedidas a OpenCV. Es una petición: si el driver no la

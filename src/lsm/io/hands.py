@@ -26,7 +26,7 @@ especificación corrompería el vector sin que nada falle.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol, TypeAlias, runtime_checkable
@@ -140,10 +140,12 @@ class MediaPipeHandDetector:
     modo VIDEO mantiene el rastreo entre cuadros a cambio de exigir timestamps
     monótonos, que este detector genera con un contador propio (`_elapsed_ms`).
 
-    Se usa un contador y no el reloj porque el reloj no es reproducible: pasar la
-    misma grabación dos veces por el detector daría timestamps distintos y, con
-    ellos, resultados distintos. El contador hace que dos ejecuciones sobre los
-    mismos cuadros sean la misma ejecución.
+    Hay dos fuentes de marcas, según `clock`. El **contador** es reproducible:
+    pasar la misma grabación dos veces da la misma ejecución. El **reloj real**
+    (`hands.real_timestamps`, lo que usan la demo y la captura) es lo que el
+    rastreador necesita en vivo: tras descartar los cuadros repetidos el
+    intervalo real es ~65 ms, y con el contador de 33 ms MediaPipe esperaba la
+    mitad del movimiento y perdía la mano en los trazos rápidos (ADR 0017).
 
     ### La lateralidad, y por qué el interruptor no se decide leyendo documentación
 
@@ -201,6 +203,13 @@ class MediaPipeHandDetector:
     declared_hand: Handedness | None = None
 
     _landmarker: Any = field(default=None, init=False, repr=False)
+    #: Reloj en segundos para las marcas de tiempo de MediaPipe. `None` usa el
+    #: contador nominal (`frame_interval_ms` por cuadro), reproducible. Con
+    #: `hands.real_timestamps` la demo y la captura pasan `time.monotonic`: tras
+    #: descartar los cuadros repetidos el intervalo real es ~65 ms, y con el
+    #: nominal de 33 ms el rastreador esperaba la mitad del movimiento y perdía
+    #: la mano en los trazos rápidos (ADR 0017, diagnóstico del 2026-09-27).
+    clock: Callable[[], float] | None = None
     _elapsed_ms: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -266,7 +275,7 @@ class MediaPipeHandDetector:
         import mediapipe as mp
 
         height, width = int(image.shape[0]), int(image.shape[1])
-        self._elapsed_ms += self.frame_interval_ms
+        self._elapsed_ms = self._next_timestamp()
         result = self._landmarker.detect_for_video(
             mp.Image(image_format=mp.ImageFormat.SRGB, data=image), self._elapsed_ms
         )
@@ -343,11 +352,21 @@ class MediaPipeHandDetector:
             detection_score=best_score,
         )
 
+    def _next_timestamp(self) -> int:
+        """La marca del próximo cuadro: contador nominal o reloj real (`clock`).
+
+        Estrictamente creciente en los dos casos: el modo VIDEO de MediaPipe
+        rechaza una marca repetida o que retrocede.
+        """
+        if self.clock is None:
+            return self._elapsed_ms + self.frame_interval_ms
+        return max(self._elapsed_ms + 1, int(self.clock() * 1000.0))
+
     @property
     def timestamp_ms(self) -> int:
         """La marca de tiempo que recibió MediaPipe en el último `detect`.
 
-        Es **nominal**: avanza `frame_interval_ms` por cuadro, no el tiempo real.
+        Nominal (`frame_interval_ms` por cuadro) o del reloj real, según `clock`.
         El diagnóstico de tracking la registra junto al reloj de verdad para ver
         cuánto difieren (`src/lsm/tracking_diagnostics.py`).
         """
@@ -389,9 +408,17 @@ def build_detector(
         min_hand_presence_confidence=config.hands.min_hand_presence_confidence,
         min_tracking_confidence=config.hands.min_tracking_confidence,
         frame_interval_ms=max(1, round(1000 / config.capture.camera_fps)),
+        clock=_reloj() if config.hands.real_timestamps else None,
         swap_handedness=config.hands.mediapipe_reports_mirrored_handedness,
         declared_hand=declared_hand,
     )
+
+
+def _reloj() -> Callable[[], float]:
+    """`time.monotonic`, importado aquí: la frontera con el hardware es este módulo."""
+    import time
+
+    return time.monotonic
 
 
 def _flip(side: Handedness) -> Handedness:

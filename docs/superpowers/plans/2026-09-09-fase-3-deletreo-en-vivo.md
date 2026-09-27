@@ -1,10 +1,10 @@
 # Fase 3 — Deletreo en vivo: plan de implementación
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> \*\*For agentic workers:\*\* REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- \[ ]`) syntax for tracking.
 
 **Goal:** Conectar cámara → MediaPipe → features → segmentación → clasificador → texto, de modo que se pueda deletrear una palabra de cinco letras sin errores de segmentación.
 
-**Architecture:** `src/lsm/spelling.py` es un reductor **puro** e inmutable: `step(estado, señal, config) -> StepResult`. La demo le pasa lo que ve en cada frame y guarda el estado devuelto para dibujarlo. `src/lsm/cli/demo.py` conecta el hardware; `run_segmentation` no se toca, porque su contrato está versionado. El truco del bucle es que el flujo que se le pasa a `run_segmentation` es un generador que captura, dibuja y lee el teclado en cada `next()`.
+**Architecture:** `src/lsm/spelling.py` es un reductor **puro** e inmutable: `step(estado, señal, config) -> StepResult`. La demo le pasa lo que ve en cada frame y guarda el estado devuelto para dibujarlo. `src/lsm/cli/demo.py` conecta el hardware; `run\_segmentation` no se toca, porque su contrato está versionado. El truco del bucle es que el flujo que se le pasa a `run\_segmentation` es un generador que captura, dibuja y lee el teclado en cada `next()`.
 
 **Tech Stack:** Python 3.11+, uv, Pydantic v2, pytest, mypy strict, ruff. OpenCV y MediaPipe son dependencias **opcionales** (extra `capture`) y solo se importan dentro de funciones.
 
@@ -14,121 +14,122 @@
 
 Copiadas de `CLAUDE.md` y del spec. Aplican a **todas** las tareas.
 
-- **`src/lsm/spelling.py` es código puro.** Sin OpenCV, sin MediaPipe, sin acceso a disco, sin cámara. Toda la I/O vive en `src/lsm/io/` y `src/lsm/cli/`. Hay un test que lo comprueba.
-- **MediaPipe solo se importa en `src/lsm/io/hands.py`.** OpenCV, solo en `io/camera.py`, `io/preview.py` y dentro de funciones de `cli/`.
-- **Cero umbrales hardcodeados.** Todo valor ajustable vive en `config.yaml`, validado con Pydantic.
-- **El tipo base es una secuencia `(T, 21, 3)`**, nunca un frame suelto. No introducir APIs que acepten un frame.
-- **No se toca `src/lsm/segmentation.py`.** Su contrato está versionado con `SEGMENTATION_SPEC_VERSION` (`docs/adr/0004-contrato-de-segmentacion.md`). Si el trabajo revelara que no funciona, hay que parar y proponerlo, no parchear desde el CLI.
-- **Terminología:** el proyecto traduce **deletreo manual**, no lengua de señas. `signer` = persona que ejecuta la seña, `label` = letra, `sample` = secuencia etiquetada.
-- **Los defaults de Pydantic y los valores de `config.yaml` tienen que coincidir.** `tests/test_config.py::test_el_config_yaml_de_ejemplo_es_valido_y_coincide_con_los_defaults` lo exige.
-- **Comandos:** `uv run pytest`, `uv run mypy`, `uv run ruff check .`, `uv run ruff format --check .`. Si trabajas en WSL con el repositorio en Linux, prefija todo con `wsl -d Ubuntu -- bash -lc 'cd ~/mipaxtli && ...'`.
-- **Los mensajes de commit terminan con** las dos líneas de atribución que ya usan los commits de la rama (`Co-Authored-By:` y `Claude-Session:`). Cópialas de `git log -1`.
+* **`src/lsm/spelling.py` es código puro.** Sin OpenCV, sin MediaPipe, sin acceso a disco, sin cámara. Toda la I/O vive en `src/lsm/io/` y `src/lsm/cli/`. Hay un test que lo comprueba.
+* **MediaPipe solo se importa en `src/lsm/io/hands.py`.** OpenCV, solo en `io/camera.py`, `io/preview.py` y dentro de funciones de `cli/`.
+* **Cero umbrales hardcodeados.** Todo valor ajustable vive en `config.yaml`, validado con Pydantic.
+* **El tipo base es una secuencia `(T, 21, 3)`**, nunca un frame suelto. No introducir APIs que acepten un frame.
+* **No se toca `src/lsm/segmentation.py`.** Su contrato está versionado con `SEGMENTATION\_SPEC\_VERSION` (`docs/adr/0004-contrato-de-segmentacion.md`). Si el trabajo revelara que no funciona, hay que parar y proponerlo, no parchear desde el CLI.
+* **Terminología:** el proyecto traduce **deletreo manual**, no lengua de señas. `signer` = persona que ejecuta la seña, `label` = letra, `sample` = secuencia etiquetada.
+* **Los defaults de Pydantic y los valores de `config.yaml` tienen que coincidir.** `tests/test\_config.py::test\_el\_config\_yaml\_de\_ejemplo\_es\_valido\_y\_coincide\_con\_los\_defaults` lo exige.
+* **Comandos:** `uv run pytest`, `uv run mypy`, `uv run ruff check .`, `uv run ruff format --check .`. Si trabajas en WSL con el repositorio en Linux, prefija todo con `wsl -d Ubuntu -- bash -lc 'cd \~/mipaxtli \&\& ...'`.
+* **Los mensajes de commit terminan con** las dos líneas de atribución que ya usan los commits de la rama (`Co-Authored-By:` y `Claude-Session:`). Cópialas de `git log -1`.
 
 ## Mapa de archivos
 
-| Archivo | Responsabilidad | Tarea |
-|---|---|---|
-| `src/lsm/config.py` | Añade `SpellingConfig` y la validación cruzada contra `segmentation` | 1 |
-| `config.yaml` | Documenta la sección `spelling` | 1 |
-| `src/lsm/spelling.py` | **Nuevo.** Señales, estado, eventos, `step`, renderizado | 2, 3, 4 |
-| `tests/test_spelling.py` | **Nuevo.** El reductor, con listas de señales | 2, 3, 4 |
-| `src/lsm/io/preview.py` | Añade `DemoHudState` y `draw_demo_hud` | 5 |
-| `src/lsm/cli/demo.py` | **Nuevo.** Cablea todo; `--desde-dataset` y sesión en vivo | 6, 7 |
-| `tests/test_cli_demo.py` | **Nuevo.** El criterio de la fase, sin cámara | 7 |
-| `pyproject.toml` | Registra el script `lsm-demo` | 6 |
-| `Makefile` | `make demo` deja de ser un `exit 1` | 8 |
-| `docs/COMO-PROBAR.md` | Completa la sección 6 | 8 |
-| `README.md` | Fase 3 cerrada | 8 |
+|Archivo|Responsabilidad|Tarea|
+|-|-|-|
+|`src/lsm/config.py`|Añade `SpellingConfig` y la validación cruzada contra `segmentation`|1|
+|`config.yaml`|Documenta la sección `spelling`|1|
+|`src/lsm/spelling.py`|**Nuevo.** Señales, estado, eventos, `step`, renderizado|2, 3, 4|
+|`tests/test\_spelling.py`|**Nuevo.** El reductor, con listas de señales|2, 3, 4|
+|`src/lsm/io/preview.py`|Añade `DemoHudState` y `draw\_demo\_hud`|5|
+|`src/lsm/cli/demo.py`|**Nuevo.** Cablea todo; `--desde-dataset` y sesión en vivo|6, 7|
+|`tests/test\_cli\_demo.py`|**Nuevo.** El criterio de la fase, sin cámara|7|
+|`pyproject.toml`|Registra el script `lsm-demo`|6|
+|`Makefile`|`make demo` deja de ser un `exit 1`|8|
+|`docs/COMO-PROBAR.md`|Completa la sección 6|8|
+|`README.md`|Fase 3 cerrada|8|
 
----
+\---
 
 ### Task 1: La configuración del espacio
 
 **Files:**
-- Modify: `src/lsm/config.py` (añadir `SpellingConfig` antes de `class Config`, y el campo en `Config`)
-- Modify: `config.yaml` (nueva sección al final)
-- Test: `tests/test_config.py`
+
+* Modify: `src/lsm/config.py` (añadir `SpellingConfig` antes de `class Config`, y el campo en `Config`)
+* Modify: `config.yaml` (nueva sección al final)
+* Test: `tests/test\_config.py`
 
 **Interfaces:**
-- Consumes: `_Section`, `Field`, `model_validator` de `src/lsm/config.py`
-- Produces: `config.spelling.space_after_absent_frames: int`
 
-- [ ] **Step 1: Escribe el test que falla**
+* Consumes: `\_Section`, `Field`, `model\_validator` de `src/lsm/config.py`
+* Produces: `config.spelling.space\_after\_absent\_frames: int`
+* \[ ] **Step 1: Escribe el test que falla**
 
-En `tests/test_config.py`, al final del archivo:
+En `tests/test\_config.py`, al final del archivo:
 
 ```python
-def test_el_espacio_exige_mas_ausencia_que_la_vuelta_a_idle() -> None:
+def test\_el\_espacio\_exige\_mas\_ausencia\_que\_la\_vuelta\_a\_idle() -> None:
     """Si bastara con lo que la maquina de estados considera "mano perdida", un
     parpadeo del detector escribiria un espacio. El espacio es una intencion de
     quien firma, no un fallo de deteccion."""
     with pytest.raises(ValidationError):
-        Config.model_validate(
+        Config.model\_validate(
             {
-                "segmentation": {"missing_frames_to_idle": 8},
-                "spelling": {"space_after_absent_frames": 8},
+                "segmentation": {"missing\_frames\_to\_idle": 8},
+                "spelling": {"space\_after\_absent\_frames": 8},
             }
         )
 
 
-def test_el_espacio_por_defecto_es_un_segundo_a_treinta_fps() -> None:
-    assert Config().spelling.space_after_absent_frames == 30
+def test\_el\_espacio\_por\_defecto\_es\_un\_segundo\_a\_treinta\_fps() -> None:
+    assert Config().spelling.space\_after\_absent\_frames == 30
 ```
 
-- [ ] **Step 2: Corre el test y comprueba que falla**
+* \[ ] **Step 2: Corre el test y comprueba que falla**
 
 ```bash
-uv run pytest tests/test_config.py -k espacio -v
+uv run pytest tests/test\_config.py -k espacio -v
 ```
 
 Esperado: FAIL. `Config` no tiene atributo `spelling` y `extra="forbid"` rechaza la clave.
 
-- [ ] **Step 3: Implementa la sección**
+* \[ ] **Step 3: Implementa la sección**
 
-En `src/lsm/config.py`, justo antes de `class Config(_Section):`:
+En `src/lsm/config.py`, justo antes de `class Config(\_Section):`:
 
 ```python
-class SpellingConfig(_Section):
+class SpellingConfig(\_Section):
     """Acumulación de letras en palabras (`ARQUITECTURA.md` §4.2)."""
 
     #: Frames consecutivos sin mano antes de cerrar la palabra en curso. A 30 fps,
     #: 30 frames es un segundo. Es el único gesto de control del proyecto: bajar
     #: la mano entre palabras es lo que se hace de todos modos, y el clasificador
     #: no tiene clases libres para un gesto dedicado.
-    space_after_absent_frames: int = Field(default=30, ge=1, le=600)
+    space\_after\_absent\_frames: int = Field(default=30, ge=1, le=600)
 ```
 
 Añade el campo a `Config`, después de `capture`:
 
 ```python
-    spelling: SpellingConfig = Field(default_factory=SpellingConfig)
+    spelling: SpellingConfig = Field(default\_factory=SpellingConfig)
 ```
 
 Y la validación cruzada, como método de `Config` junto a las que ya hay:
 
 ```python
-    @model_validator(mode="after")
-    def _el_espacio_no_lo_dispara_un_parpadeo(self) -> Config:
+    @model\_validator(mode="after")
+    def \_el\_espacio\_no\_lo\_dispara\_un\_parpadeo(self) -> Config:
         """El espacio tiene que costar más ausencia que volver a IDLE.
 
-        `missing_frames_to_idle` es cuánto tarda la máquina de estados en dar la
+        `missing\_frames\_to\_idle` es cuánto tarda la máquina de estados en dar la
         mano por perdida, y se cruza con cualquier oclusión momentánea. Si el
         espacio se disparara ahí, un parpadeo del detector partiría una palabra
         en dos y quien firma no tendría forma de evitarlo.
         """
-        espacio = self.spelling.space_after_absent_frames
-        idle = self.segmentation.missing_frames_to_idle
+        espacio = self.spelling.space\_after\_absent\_frames
+        idle = self.segmentation.missing\_frames\_to\_idle
         if espacio <= idle:
             msg = (
-                f"spelling.space_after_absent_frames ({espacio}) no supera "
-                f"segmentation.missing_frames_to_idle ({idle}): un parpadeo "
+                f"spelling.space\_after\_absent\_frames ({espacio}) no supera "
+                f"segmentation.missing\_frames\_to\_idle ({idle}): un parpadeo "
                 "del detector escribiría un espacio"
             )
             raise ValueError(msg)
         return self
 ```
 
-- [ ] **Step 4: Documenta la sección en `config.yaml`**
+* \[ ] **Step 4: Documenta la sección en `config.yaml`**
 
 Al final del archivo:
 
@@ -143,41 +144,42 @@ spelling:
   # 22 y las 21 letras están ocupadas, así que un gesto dedicado sería una clase
   # nueva, y una clase nueva son tres personas citadas otra vez.
   #
-  # config.py valida que supere a segmentation.missing_frames_to_idle. Si no, un
+  # config.py valida que supere a segmentation.missing\_frames\_to\_idle. Si no, un
   # parpadeo del detector partiría una palabra en dos.
-  space_after_absent_frames: 30
+  space\_after\_absent\_frames: 30
 ```
 
-- [ ] **Step 5: Corre los tests y comprueba que pasan**
+* \[ ] **Step 5: Corre los tests y comprueba que pasan**
 
 ```bash
-uv run pytest tests/test_config.py -v
+uv run pytest tests/test\_config.py -v
 ```
 
-Esperado: PASS, incluido `test_el_config_yaml_de_ejemplo_es_valido_y_coincide_con_los_defaults`.
+Esperado: PASS, incluido `test\_el\_config\_yaml\_de\_ejemplo\_es\_valido\_y\_coincide\_con\_los\_defaults`.
 
-- [ ] **Step 6: Commit**
+* \[ ] **Step 6: Commit**
 
 ```bash
-git add src/lsm/config.py config.yaml tests/test_config.py
+git add src/lsm/config.py config.yaml tests/test\_config.py
 git commit -m "feat(config): el umbral del espacio, validado contra la vuelta a IDLE"
 ```
 
----
+\---
 
 ### Task 2: El estado y las letras
 
 **Files:**
-- Create: `src/lsm/spelling.py`
-- Test: `tests/test_spelling.py`
+
+* Create: `src/lsm/spelling.py`
+* Test: `tests/test\_spelling.py`
 
 **Interfaces:**
-- Consumes: `Config` de `lsm.config`; `Label` y `spec` de `lsm.vocabulary` (**`Label` NO está en `types.py`**)
-- Produces: `SpellingState`, `LetterSignal`, `StepResult`, `LetterWritten`, `step()`, `render_word()`, `render_text()`
 
-- [ ] **Step 1: Escribe los tests que fallan**
+* Consumes: `Config` de `lsm.config`; `Label` y `spec` de `lsm.vocabulary` (**`Label` NO está en `types.py`**)
+* Produces: `SpellingState`, `LetterSignal`, `StepResult`, `LetterWritten`, `step()`, `render\_word()`, `render\_text()`
+* \[ ] **Step 1: Escribe los tests que fallan**
 
-Crea `tests/test_spelling.py`:
+Crea `tests/test\_spelling.py`:
 
 ```python
 """El reductor de deletreo, sin camara y sin modelo.
@@ -188,15 +190,15 @@ Eso es todo lo que hace falta: `spelling.py` es puro por la regla 2 de
 fase en vez de delante de una webcam.
 """
 
-from __future__ import annotations
+from \_\_future\_\_ import annotations
 
 from lsm.config import Config
 from lsm.spelling import (
     LetterSignal,
     Signal,
     SpellingState,
-    render_text,
-    render_word,
+    render\_text,
+    render\_word,
     step,
 )
 from lsm.vocabulary import Label
@@ -204,7 +206,7 @@ from lsm.vocabulary import Label
 CONFIG = Config()
 
 
-def aplicar(señales: list[Signal], config: Config = CONFIG) -> SpellingState:
+def aplicar(señales: list\[Signal], config: Config = CONFIG) -> SpellingState:
     """Corre una lista de señales desde el estado vacio."""
     state = SpellingState()
     for señal in señales:
@@ -212,18 +214,18 @@ def aplicar(señales: list[Signal], config: Config = CONFIG) -> SpellingState:
     return state
 
 
-def letras(*labels: Label) -> list[Signal]:
-    return [LetterSignal(label=label) for label in labels]
+def letras(\*labels: Label) -> list\[Signal]:
+    return \[LetterSignal(label=label) for label in labels]
 
 
-def test_cinco_letras_dan_cinco_simbolos() -> None:
+def test\_cinco\_letras\_dan\_cinco\_simbolos() -> None:
     state = aplicar(letras(Label.C, Label.A, Label.S, Label.A, Label.S))
 
     assert state.word == (Label.C, Label.A, Label.S, Label.A, Label.S)
-    assert render_word(state) == "casas"
+    assert render\_word(state) == "casas"
 
 
-def test_la_clase_negativa_no_escribe_nada() -> None:
+def test\_la\_clase\_negativa\_no\_escribe\_nada() -> None:
     """`segmentation.py` filtra UNKNOWN y la confianza baja, pero NO filtra NONE:
     con la clase negativa acertando bien, llegaran LetterEmitted con label NONE
     cada vez que la persona baje la mano. Escribirlos seria poner una letra en
@@ -231,37 +233,37 @@ def test_la_clase_negativa_no_escribe_nada() -> None:
     state = aplicar(letras(Label.C, Label.NONE, Label.A))
 
     assert state.word == (Label.C, Label.A)
-    assert render_word(state) == "ca"
+    assert render\_word(state) == "ca"
 
 
-def test_el_digrafo_es_un_simbolo_y_dos_erres_son_dos() -> None:
+def test\_el\_digrafo\_es\_un\_simbolo\_y\_dos\_erres\_son\_dos() -> None:
     """El buffer guarda simbolos del glosario, no caracteres. Las dos formas se
     leen igual y se deshacen distinto, que es la razon de la decision."""
-    una = aplicar(letras(Label.DOBLE_R))
+    una = aplicar(letras(Label.DOBLE\_R))
     dos = aplicar(letras(Label.R, Label.R))
 
-    assert render_word(una) == render_word(dos) == "rr"
+    assert render\_word(una) == render\_word(dos) == "rr"
     assert len(una.word) == 1
     assert len(dos.word) == 2
 
 
-def test_la_enie_se_escribe_con_su_letra() -> None:
-    assert render_word(aplicar(letras(Label.ENIE))) == "ñ"
+def test\_la\_enie\_se\_escribe\_con\_su\_letra() -> None:
+    assert render\_word(aplicar(letras(Label.ENIE))) == "ñ"
 
 
-def test_el_texto_vacio_es_una_cadena_vacia() -> None:
-    assert render_text(SpellingState()) == ""
+def test\_el\_texto\_vacio\_es\_una\_cadena\_vacia() -> None:
+    assert render\_text(SpellingState()) == ""
 ```
 
-- [ ] **Step 2: Corre los tests y comprueba que fallan**
+* \[ ] **Step 2: Corre los tests y comprueba que fallan**
 
 ```bash
-uv run pytest tests/test_spelling.py -v
+uv run pytest tests/test\_spelling.py -v
 ```
 
 Esperado: FAIL con `ModuleNotFoundError: No module named 'lsm.spelling'`.
 
-- [ ] **Step 3: Implementa el mínimo**
+* \[ ] **Step 3: Implementa el mínimo**
 
 Crea `src/lsm/spelling.py`:
 
@@ -269,10 +271,10 @@ Crea `src/lsm/spelling.py`:
 """Acumulación de letras en palabras: el buffer de deletreo.
 
 `ARQUITECTURA.md` §4.2 dejó esto para la Fase 3, y con él la pregunta de qué se
-hace con los dígrafos. La respuesta está en el tipo: **el buffer guarda símbolos
-del glosario, no caracteres.**
+hace con los dígrafos. La respuesta está en el tipo: \*\*el buffer guarda símbolos
+del glosario, no caracteres.\*\*
 
-`DOBLE_R` es un símbolo que se lee `rr`; dos `R` seguidas son dos símbolos que
+`DOBLE\_R` es un símbolo que se lee `rr`; dos `R` seguidas son dos símbolos que
 también se leen `rr`. Se ven igual y se deshacen distinto, que es exactamente lo
 que se quiere: `BACKSPACE` borra un símbolo, así que deshace lo que se señó. Con
 un buffer de caracteres, borrar sobre una `RR` dejaría una `r` que nadie ejecutó.
@@ -285,7 +287,7 @@ ejercita con una lista de señales, que es lo que permite comprobar el criterio 
 aceptación —cinco letras, cinco símbolos— en CI y no delante de una webcam.
 """
 
-from __future__ import annotations
+from \_\_future\_\_ import annotations
 
 from dataclasses import dataclass, replace
 from typing import TypeAlias
@@ -320,14 +322,14 @@ SpellingEvent: TypeAlias = LetterWritten
 class SpellingState:
     """El buffer de deletreo. Inmutable.
 
-    Guarda **símbolos** y no texto: el texto se deriva con `render_word` y
-    `render_text`, y así el estado conserva qué se señó de verdad.
+    Guarda \*\*símbolos\*\* y no texto: el texto se deriva con `render\_word` y
+    `render\_text`, y así el estado conserva qué se señó de verdad.
     """
 
     #: La palabra en curso.
-    word: tuple[Label, ...] = ()
+    word: tuple\[Label, ...] = ()
     #: Palabras ya cerradas, cada una con sus símbolos.
-    finished: tuple[tuple[Label, ...], ...] = ()
+    finished: tuple\[tuple\[Label, ...], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,10 +350,10 @@ def step(  # noqa: ARG001 — `config` lo usa el espacio, que llega en la tarea 
     """
     match signal:
         case LetterSignal(label=label):
-            return _escribir_letra(state, label)
+            return \_escribir\_letra(state, label)
 
 
-def _escribir_letra(state: SpellingState, label: Label) -> StepResult:
+def \_escribir\_letra(state: SpellingState, label: Label) -> StepResult:
     """La clase negativa no escribe.
 
     `segmentation.py` filtra `UNKNOWN` y la confianza por debajo del umbral, pero
@@ -367,132 +369,133 @@ def _escribir_letra(state: SpellingState, label: Label) -> StepResult:
     if label is Label.NONE:
         return StepResult(state=state)
     return StepResult(
-        state=replace(state, word=(*state.word, label)),
+        state=replace(state, word=(\*state.word, label)),
         event=LetterWritten(label=label),
     )
 
 
-def render_word(state: SpellingState) -> str:
+def render\_word(state: SpellingState) -> str:
     """La palabra en curso, tal como se escribe para una persona."""
-    return _render(state.word)
+    return \_render(state.word)
 
 
-def render_text(state: SpellingState) -> str:
+def render\_text(state: SpellingState) -> str:
     """Todo el texto: las palabras cerradas y la que está en curso."""
-    palabras = [_render(word) for word in state.finished]
+    palabras = \[\_render(word) for word in state.finished]
     if state.word:
-        palabras.append(_render(state.word))
+        palabras.append(\_render(state.word))
     return " ".join(palabras)
 
 
-def _render(word: tuple[Label, ...]) -> str:
+def \_render(word: tuple\[Label, ...]) -> str:
     """`LetterSpec.display` existe justo para esto: `Ñ`, `LL`, `RR`."""
     return "".join(spec(label).display.lower() for label in word)
 ```
 
-- [ ] **Step 4: Corre los tests y comprueba que pasan**
+* \[ ] **Step 4: Corre los tests y comprueba que pasan**
 
 ```bash
-uv run pytest tests/test_spelling.py -v
-uv run mypy && uv run ruff check .
+uv run pytest tests/test\_spelling.py -v
+uv run mypy \&\& uv run ruff check .
 ```
 
 Esperado: PASS. Si mypy se queja de que el `match` de `step` no es exhaustivo, es porque `Signal` tiene un solo miembro: se resuelve solo en la tarea 3.
 
-- [ ] **Step 5: Commit**
+* \[ ] **Step 5: Commit**
 
 ```bash
-git add src/lsm/spelling.py tests/test_spelling.py
+git add src/lsm/spelling.py tests/test\_spelling.py
 git commit -m "feat(spelling): el buffer guarda simbolos del glosario, no caracteres"
 ```
 
----
+\---
 
 ### Task 3: El espacio, con sus dos cerrojos
 
 **Files:**
-- Modify: `src/lsm/spelling.py`
-- Test: `tests/test_spelling.py`
+
+* Modify: `src/lsm/spelling.py`
+* Test: `tests/test\_spelling.py`
 
 **Interfaces:**
-- Consumes: todo lo de la tarea 2
-- Produces: `HandPresent`, `HandAbsent`, `SpaceWritten`; `SpellingState.absent_frames`, `SpellingState.space_emitted`
 
-- [ ] **Step 1: Escribe los tests que fallan**
+* Consumes: todo lo de la tarea 2
+* Produces: `HandPresent`, `HandAbsent`, `SpaceWritten`; `SpellingState.absent\_frames`, `SpellingState.space\_emitted`
+* \[ ] **Step 1: Escribe los tests que fallan**
 
-Añade a `tests/test_spelling.py`:
+Añade a `tests/test\_spelling.py`:
 
 ```python
 from lsm.spelling import HandAbsent, HandPresent, SpaceWritten
 
 
-def ausencia(frames: int) -> list[Signal]:
-    return [HandAbsent()] * frames
+def ausencia(frames: int) -> list\[Signal]:
+    return \[HandAbsent()] \* frames
 
 
-UMBRAL = CONFIG.spelling.space_after_absent_frames
+UMBRAL = CONFIG.spelling.space\_after\_absent\_frames
 
 
-def test_la_ausencia_corta_no_pone_espacio() -> None:
+def test\_la\_ausencia\_corta\_no\_pone\_espacio() -> None:
     """Un parpadeo del detector no es una intencion de quien firma."""
-    state = aplicar([*letras(Label.C, Label.A), *ausencia(UMBRAL - 1)])
+    state = aplicar(\[\*letras(Label.C, Label.A), \*ausencia(UMBRAL - 1)])
 
     assert state.finished == ()
-    assert render_text(state) == "ca"
+    assert render\_text(state) == "ca"
 
 
-def test_al_alcanzar_el_umbral_pone_un_espacio_y_solo_uno() -> None:
+def test\_al\_alcanzar\_el\_umbral\_pone\_un\_espacio\_y\_solo\_uno() -> None:
     """La mano abajo no es un evento, es un estado que dura: sin cerrojo pondria
-    un espacio en cada frame. Es el mismo problema que `pending_repeat` resuelve
+    un espacio en cada frame. Es el mismo problema que `pending\_repeat` resuelve
     en segmentation.py, un nivel mas arriba."""
-    state = aplicar([*letras(Label.C, Label.A), *ausencia(UMBRAL * 3)])
+    state = aplicar(\[\*letras(Label.C, Label.A), \*ausencia(UMBRAL \* 3)])
 
     assert state.finished == ((Label.C, Label.A),)
     assert state.word == ()
-    assert render_text(state) == "ca"
+    assert render\_text(state) == "ca"
 
 
-def test_la_mano_de_vuelta_libera_el_cerrojo() -> None:
-    señales = [
-        *letras(Label.C, Label.A),
-        *ausencia(UMBRAL),
+def test\_la\_mano\_de\_vuelta\_libera\_el\_cerrojo() -> None:
+    señales = \[
+        \*letras(Label.C, Label.A),
+        \*ausencia(UMBRAL),
         HandPresent(),
-        *letras(Label.S, Label.A),
-        *ausencia(UMBRAL),
+        \*letras(Label.S, Label.A),
+        \*ausencia(UMBRAL),
     ]
 
     state = aplicar(señales)
 
     assert state.finished == ((Label.C, Label.A), (Label.S, Label.A))
-    assert render_text(state) == "ca sa"
+    assert render\_text(state) == "ca sa"
 
 
-def test_la_ausencia_sobre_una_palabra_vacia_no_pone_espacio() -> None:
+def test\_la\_ausencia\_sobre\_una\_palabra\_vacia\_no\_pone\_espacio() -> None:
     """Ni al principio ni entre dos ausencias seguidas: espacios sueltos o
     dobles serian texto que nadie seño."""
-    state = aplicar([*ausencia(UMBRAL * 2), HandPresent(), *ausencia(UMBRAL * 2)])
+    state = aplicar(\[\*ausencia(UMBRAL \* 2), HandPresent(), \*ausencia(UMBRAL \* 2)])
 
     assert state.finished == ()
-    assert render_text(state) == ""
+    assert render\_text(state) == ""
 
 
-def test_el_espacio_emite_su_evento() -> None:
-    state = aplicar([*letras(Label.A), *ausencia(UMBRAL - 1)])
+def test\_el\_espacio\_emite\_su\_evento() -> None:
+    state = aplicar(\[\*letras(Label.A), \*ausencia(UMBRAL - 1)])
 
     resultado = step(state, HandAbsent(), CONFIG)
 
     assert isinstance(resultado.event, SpaceWritten)
 ```
 
-- [ ] **Step 2: Corre los tests y comprueba que fallan**
+* \[ ] **Step 2: Corre los tests y comprueba que fallan**
 
 ```bash
-uv run pytest tests/test_spelling.py -k "ausencia or espacio or cerrojo" -v
+uv run pytest tests/test\_spelling.py -k "ausencia or espacio or cerrojo" -v
 ```
 
 Esperado: FAIL con `ImportError: cannot import name 'HandAbsent'`.
 
-- [ ] **Step 3: Implementa**
+* \[ ] **Step 3: Implementa**
 
 En `src/lsm/spelling.py`, añade los tipos junto a `LetterSignal`:
 
@@ -524,12 +527,12 @@ Añade los dos campos a `SpellingState`:
 ```python
     #: Frames consecutivos sin mano. Vive en el estado y no en el CLI para que el
     #: criterio del espacio sea puro y se pueda testear con una lista de señales.
-    absent_frames: int = 0
+    absent\_frames: int = 0
     #: Ya se puso espacio por esta ausencia. Sin esto, la mano quieta abajo
     #: escribiría un espacio por frame: la mano abajo no es un evento, es un
-    #: estado que dura. Es el mismo cerrojo que `pending_repeat` en
+    #: estado que dura. Es el mismo cerrojo que `pending\_repeat` en
     #: `segmentation.py`, un nivel más arriba.
-    space_emitted: bool = False
+    space\_emitted: bool = False
 ```
 
 Amplía el `match` de `step`:
@@ -537,75 +540,76 @@ Amplía el `match` de `step`:
 ```python
     match signal:
         case LetterSignal(label=label):
-            return _escribir_letra(state, label)
+            return \_escribir\_letra(state, label)
         case HandPresent():
             return StepResult(
-                state=replace(state, absent_frames=0, space_emitted=False)
+                state=replace(state, absent\_frames=0, space\_emitted=False)
             )
         case HandAbsent():
-            return _mano_ausente(state, config)
+            return \_mano\_ausente(state, config)
 ```
 
 Y la función nueva:
 
 ```python
-def _mano_ausente(state: SpellingState, config: Config) -> StepResult:
+def \_mano\_ausente(state: SpellingState, config: Config) -> StepResult:
     """Cierra la palabra cuando la ausencia deja de ser un parpadeo."""
-    absent = state.absent_frames + 1
-    alcanzado = absent >= config.spelling.space_after_absent_frames
+    absent = state.absent\_frames + 1
+    alcanzado = absent >= config.spelling.space\_after\_absent\_frames
 
-    if not alcanzado or state.space_emitted:
-        return StepResult(state=replace(state, absent_frames=absent))
+    if not alcanzado or state.space\_emitted:
+        return StepResult(state=replace(state, absent\_frames=absent))
 
     # El cerrojo se pone aunque no haya nada que cerrar: si no, cada frame
     # siguiente volvería a evaluar el umbral sobre una palabra vacía.
     if not state.word:
         return StepResult(
-            state=replace(state, absent_frames=absent, space_emitted=True)
+            state=replace(state, absent\_frames=absent, space\_emitted=True)
         )
 
     return StepResult(
         state=replace(
             state,
             word=(),
-            finished=(*state.finished, state.word),
-            absent_frames=absent,
-            space_emitted=True,
+            finished=(\*state.finished, state.word),
+            absent\_frames=absent,
+            space\_emitted=True,
         ),
         event=SpaceWritten(),
     )
 ```
 
-- [ ] **Step 4: Corre los tests y comprueba que pasan**
+* \[ ] **Step 4: Corre los tests y comprueba que pasan**
 
 ```bash
-uv run pytest tests/test_spelling.py -v && uv run mypy && uv run ruff check .
+uv run pytest tests/test\_spelling.py -v \&\& uv run mypy \&\& uv run ruff check .
 ```
 
 Esperado: PASS, todos.
 
-- [ ] **Step 5: Commit**
+* \[ ] **Step 5: Commit**
 
 ```bash
-git add src/lsm/spelling.py tests/test_spelling.py
+git add src/lsm/spelling.py tests/test\_spelling.py
 git commit -m "feat(spelling): la mano abajo cierra la palabra, con su cerrojo"
 ```
 
----
+\---
 
 ### Task 4: Borrado y cierre de frase
 
 **Files:**
-- Modify: `src/lsm/spelling.py`
-- Test: `tests/test_spelling.py`
+
+* Modify: `src/lsm/spelling.py`
+* Test: `tests/test\_spelling.py`
 
 **Interfaces:**
-- Consumes: todo lo anterior
-- Produces: `Backspace`, `CommitText`, `SymbolDeleted`, `NothingToDelete`, `TextCommitted`
 
-- [ ] **Step 1: Escribe los tests que fallan**
+* Consumes: todo lo anterior
+* Produces: `Backspace`, `CommitText`, `SymbolDeleted`, `NothingToDelete`, `TextCommitted`
+* \[ ] **Step 1: Escribe los tests que fallan**
 
-Añade a `tests/test_spelling.py`:
+Añade a `tests/test\_spelling.py`:
 
 ```python
 from lsm.spelling import (
@@ -617,27 +621,27 @@ from lsm.spelling import (
 )
 
 
-def test_backspace_borra_un_simbolo() -> None:
-    state = aplicar([*letras(Label.C, Label.A, Label.S), Backspace()])
+def test\_backspace\_borra\_un\_simbolo() -> None:
+    state = aplicar(\[\*letras(Label.C, Label.A, Label.S), Backspace()])
 
-    assert render_word(state) == "ca"
+    assert render\_word(state) == "ca"
 
 
-def test_backspace_deshace_exactamente_lo_que_se_seño() -> None:
+def test\_backspace\_deshace\_exactamente\_lo\_que\_se\_seño() -> None:
     """La razon de guardar simbolos: sobre una RR el borrado quita la seña
     entera, y sobre dos R quita una R. Con un buffer de caracteres, lo primero
     dejaria una `r` que nadie ejecuto."""
-    digrafo = aplicar([*letras(Label.DOBLE_R), Backspace()])
-    dos_erres = aplicar([*letras(Label.R, Label.R), Backspace()])
+    digrafo = aplicar(\[\*letras(Label.DOBLE\_R), Backspace()])
+    dos\_erres = aplicar(\[\*letras(Label.R, Label.R), Backspace()])
 
-    assert render_word(digrafo) == ""
-    assert render_word(dos_erres) == "r"
+    assert render\_word(digrafo) == ""
+    assert render\_word(dos\_erres) == "r"
 
 
-def test_backspace_sobre_una_palabra_vacia_no_hace_nada_y_lo_dice() -> None:
+def test\_backspace\_sobre\_una\_palabra\_vacia\_no\_hace\_nada\_y\_lo\_dice() -> None:
     """No recupera la palabra anterior: reabrir algo ya cerrado no vale la
     complejidad en esta fase."""
-    state = aplicar([*letras(Label.A), *ausencia(UMBRAL)])
+    state = aplicar(\[\*letras(Label.A), \*ausencia(UMBRAL)])
 
     resultado = step(state, Backspace(), CONFIG)
 
@@ -645,20 +649,20 @@ def test_backspace_sobre_una_palabra_vacia_no_hace_nada_y_lo_dice() -> None:
     assert isinstance(resultado.event, NothingToDelete)
 
 
-def test_backspace_emite_el_simbolo_que_quito() -> None:
-    state = aplicar(letras(Label.C, Label.DOBLE_L))
+def test\_backspace\_emite\_el\_simbolo\_que\_quito() -> None:
+    state = aplicar(letras(Label.C, Label.DOBLE\_L))
 
     resultado = step(state, Backspace(), CONFIG)
 
-    assert resultado.event == SymbolDeleted(label=Label.DOBLE_L)
+    assert resultado.event == SymbolDeleted(label=Label.DOBLE\_L)
 
 
-def test_enter_cierra_la_frase_y_deja_el_estado_vacio() -> None:
-    señales = [
-        *letras(Label.C, Label.A),
-        *ausencia(UMBRAL),
+def test\_enter\_cierra\_la\_frase\_y\_deja\_el\_estado\_vacio() -> None:
+    señales = \[
+        \*letras(Label.C, Label.A),
+        \*ausencia(UMBRAL),
         HandPresent(),
-        *letras(Label.S, Label.A),
+        \*letras(Label.S, Label.A),
     ]
     state = aplicar(señales)
 
@@ -668,22 +672,22 @@ def test_enter_cierra_la_frase_y_deja_el_estado_vacio() -> None:
     assert resultado.state == SpellingState()
 
 
-def test_enter_sobre_un_texto_vacio_no_emite_nada() -> None:
+def test\_enter\_sobre\_un\_texto\_vacio\_no\_emite\_nada() -> None:
     resultado = step(SpellingState(), CommitText(), CONFIG)
 
     assert resultado.event is None
     assert resultado.state == SpellingState()
 ```
 
-- [ ] **Step 2: Corre los tests y comprueba que fallan**
+* \[ ] **Step 2: Corre los tests y comprueba que fallan**
 
 ```bash
-uv run pytest tests/test_spelling.py -k "backspace or enter" -v
+uv run pytest tests/test\_spelling.py -k "backspace or enter" -v
 ```
 
 Esperado: FAIL con `ImportError: cannot import name 'Backspace'`.
 
-- [ ] **Step 3: Implementa**
+* \[ ] **Step 3: Implementa**
 
 Añade los tipos:
 
@@ -732,15 +736,15 @@ Amplía el `match`:
 
 ```python
         case Backspace():
-            return _borrar(state)
+            return \_borrar(state)
         case CommitText():
-            return _cerrar_frase(state)
+            return \_cerrar\_frase(state)
 ```
 
 Y las dos funciones:
 
 ```python
-def _borrar(state: SpellingState) -> StepResult:
+def \_borrar(state: SpellingState) -> StepResult:
     """Quita el último símbolo de la palabra en curso.
 
     Con la palabra vacía no hace nada. Recuperar la palabra anterior significaría
@@ -750,77 +754,78 @@ def _borrar(state: SpellingState) -> StepResult:
     if not state.word:
         return StepResult(state=state, event=NothingToDelete())
     return StepResult(
-        state=replace(state, word=state.word[:-1]),
-        event=SymbolDeleted(label=state.word[-1]),
+        state=replace(state, word=state.word\[:-1]),
+        event=SymbolDeleted(label=state.word\[-1]),
     )
 
 
-def _cerrar_frase(state: SpellingState) -> StepResult:
+def \_cerrar\_frase(state: SpellingState) -> StepResult:
     """Vacía el buffer y entrega el texto para imprimirlo."""
-    texto = render_text(state)
+    texto = render\_text(state)
     if not texto:
         return StepResult(state=state)
     return StepResult(state=SpellingState(), event=TextCommitted(text=texto))
 ```
 
-- [ ] **Step 4: Corre los tests y comprueba que pasan**
+* \[ ] **Step 4: Corre los tests y comprueba que pasan**
 
 ```bash
-uv run pytest tests/test_spelling.py -v && uv run mypy && uv run ruff check .
+uv run pytest tests/test\_spelling.py -v \&\& uv run mypy \&\& uv run ruff check .
 ```
 
 Esperado: PASS. mypy ya no debería quejarse del `match`: `Signal` está completo.
 
-- [ ] **Step 5: Añade el test de pureza**
+* \[ ] **Step 5: Añade el test de pureza**
 
-`CLAUDE.md` regla 2 tiene que ser ejecutable. Busca en `tests/` el test que ya comprueba que los módulos puros no importan OpenCV ni MediaPipe (`grep -rn "mediapipe" tests/ | grep -i import`) y añade `lsm.spelling` a su lista de módulos. Si no encuentras uno, añade este a `tests/test_spelling.py`:
+`CLAUDE.md` regla 2 tiene que ser ejecutable. Busca en `tests/` el test que ya comprueba que los módulos puros no importan OpenCV ni MediaPipe (`grep -rn "mediapipe" tests/ | grep -i import`) y añade `lsm.spelling` a su lista de módulos. Si no encuentras uno, añade este a `tests/test\_spelling.py`:
 
 ```python
-def test_el_modulo_es_puro() -> None:
+def test\_el\_modulo\_es\_puro() -> None:
     """`CLAUDE.md` regla 2: sin OpenCV, sin MediaPipe, sin disco, sin camara.
     Es lo que permite que esta suite corra en CI sin hardware."""
     import lsm.spelling
 
-    fuente = Path(lsm.spelling.__file__).read_text(encoding="utf-8")
+    fuente = Path(lsm.spelling.\_\_file\_\_).read\_text(encoding="utf-8")
     for prohibido in ("import cv2", "import mediapipe", "open(", "Path("):
         assert prohibido not in fuente, prohibido
 ```
 
 Con `from pathlib import Path` arriba.
 
-- [ ] **Step 6: Commit**
+* \[ ] **Step 6: Commit**
 
 ```bash
-git add src/lsm/spelling.py tests/test_spelling.py
+git add src/lsm/spelling.py tests/test\_spelling.py
 git commit -m "feat(spelling): borrado por simbolo y cierre de frase"
 ```
 
----
+\---
 
 ### Task 5: El HUD de la demo
 
 **Files:**
-- Modify: `src/lsm/io/preview.py`
-- Test: `tests/test_io_preview.py` (créalo si no existe)
+
+* Modify: `src/lsm/io/preview.py`
+* Test: `tests/test\_io\_preview.py` (créalo si no existe)
 
 **Interfaces:**
-- Consumes: `_panel` y el estilo de `draw_hud` en `io/preview.py`; `State` de `lsm.segmentation`; `Prediction` de `lsm.types`
-- Produces: `DemoHudState`, `draw_demo_hud(image, state)`
 
-- [ ] **Step 1: Lee cómo dibuja el HUD de captura**
+* Consumes: `\_panel` y el estilo de `draw\_hud` en `io/preview.py`; `State` de `lsm.segmentation`; `Prediction` de `lsm.types`
+* Produces: `DemoHudState`, `draw\_demo\_hud(image, state)`
+* \[ ] **Step 1: Lee cómo dibuja el HUD de captura**
 
 ```bash
 sed -n '86,160p' src/lsm/io/preview.py
 ```
 
-Fíjate en cómo usa `_panel`, de dónde saca los colores y cómo posiciona el texto. El HUD nuevo debe parecerse, no inventar un estilo.
+Fíjate en cómo usa `\_panel`, de dónde saca los colores y cómo posiciona el texto. El HUD nuevo debe parecerse, no inventar un estilo.
 
-- [ ] **Step 2: Escribe el test que falla**
+* \[ ] **Step 2: Escribe el test que falla**
 
-`draw_demo_hud` necesita OpenCV, así que el test se salta si no está — igual que hacen los tests de `io/` que ya existen. Lo que sí se puede comprobar sin OpenCV es el dato:
+`draw\_demo\_hud` necesita OpenCV, así que el test se salta si no está — igual que hacen los tests de `io/` que ya existen. Lo que sí se puede comprobar sin OpenCV es el dato:
 
 ```python
-def test_el_hud_de_la_demo_dice_confianza_y_estado() -> None:
+def test\_el\_hud\_de\_la\_demo\_dice\_confianza\_y\_estado() -> None:
     """Confianza y estado siempre visibles: es lo que hace depurable la demo, y
     sin ellos un rechazo y un fallo de deteccion se ven igual."""
     state = DemoHudState(
@@ -837,15 +842,15 @@ def test_el_hud_de_la_demo_dice_confianza_y_estado() -> None:
     assert state.ultima.confidence == 0.91
 ```
 
-- [ ] **Step 3: Corre el test y comprueba que falla**
+* \[ ] **Step 3: Corre el test y comprueba que falla**
 
 ```bash
-uv run pytest tests/test_io_preview.py -v
+uv run pytest tests/test\_io\_preview.py -v
 ```
 
 Esperado: FAIL con `ImportError: cannot import name 'DemoHudState'`.
 
-- [ ] **Step 4: Implementa**
+* \[ ] **Step 4: Implementa**
 
 En `src/lsm/io/preview.py`:
 
@@ -872,25 +877,25 @@ class DemoHudState:
     mensaje: str
 
 
-def draw_demo_hud(image: Any, state: DemoHudState) -> None:
+def draw\_demo\_hud(image: Any, state: DemoHudState) -> None:
     """Dibuja el HUD de la demo. Modifica `image` en el lugar.
 
-    Confianza y estado van **siempre**, no solo cuando hay letra: sin ellos, una
+    Confianza y estado van \*\*siempre\*\*, no solo cuando hay letra: sin ellos, una
     ventana rechazada por confianza baja y una mano que el detector no encuentra
     se ven exactamente igual, y depurar la demo se vuelve adivinar.
     """
     import cv2
 
-    alto, ancho = image.shape[:2]
-    _panel(image, 0, 0, ancho, 96)
+    alto, ancho = image.shape\[:2]
+    \_panel(image, 0, 0, ancho, 96)
 
     cv2.putText(
         image, f"texto:   {state.texto}", (12, 30),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA,
+        cv2.FONT\_HERSHEY\_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE\_AA,
     )
     cv2.putText(
         image, f"palabra: {state.palabra}", (12, 58),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA,
+        cv2.FONT\_HERSHEY\_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE\_AA,
     )
 
     confianza = "—" if state.ultima is None else f"{state.ultima.confidence:.2f}"
@@ -900,20 +905,20 @@ def draw_demo_hud(image: Any, state: DemoHudState) -> None:
         image,
         f"{state.estado}   ultima: {letra} ({confianza})   sigma: {sigma}",
         (12, 84),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 220, 180), 1, cv2.LINE_AA,
+        cv2.FONT\_HERSHEY\_SIMPLEX, 0.55, (180, 220, 180), 1, cv2.LINE\_AA,
     )
 
     if state.mensaje:
-        _panel(image, 0, alto - 40, ancho, 40)
+        \_panel(image, 0, alto - 40, ancho, 40)
         cv2.putText(
             image, state.mensaje, (12, alto - 14),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (120, 200, 255), 1, cv2.LINE_AA,
+            cv2.FONT\_HERSHEY\_SIMPLEX, 0.55, (120, 200, 255), 1, cv2.LINE\_AA,
         )
 
     aviso = "las 8 letras dinamicas llegan en la Fase 5"
     cv2.putText(
         image, aviso, (12, alto - 48),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1, cv2.LINE_AA,
+        cv2.FONT\_HERSHEY\_SIMPLEX, 0.45, (140, 140, 140), 1, cv2.LINE\_AA,
     )
 ```
 
@@ -921,32 +926,33 @@ Los imports que hagan falta arriba: `from lsm.segmentation import State` y `from
 
 > El aviso de las dinámicas no es decoración: sin él, quien pruebe la demo hará una `J`, no pasará nada, y concluirá que el sistema falla cuando lo que ocurre es que esa letra no está implementada.
 
-- [ ] **Step 5: Corre los tests y comprueba que pasan**
+* \[ ] **Step 5: Corre los tests y comprueba que pasan**
 
 ```bash
-uv run pytest tests/test_io_preview.py -v && uv run mypy && uv run ruff check .
+uv run pytest tests/test\_io\_preview.py -v \&\& uv run mypy \&\& uv run ruff check .
 ```
 
-- [ ] **Step 6: Commit**
+* \[ ] **Step 6: Commit**
 
 ```bash
-git add src/lsm/io/preview.py tests/test_io_preview.py
+git add src/lsm/io/preview.py tests/test\_io\_preview.py
 git commit -m "feat(preview): HUD de la demo con confianza y estado siempre visibles"
 ```
 
----
+\---
 
 ### Task 6: El CLI y la sesión, sin cámara todavía
 
 **Files:**
-- Create: `src/lsm/cli/demo.py`
-- Modify: `pyproject.toml` (sección `[project.scripts]`)
+
+* Create: `src/lsm/cli/demo.py`
+* Modify: `pyproject.toml` (sección `\[project.scripts]`)
 
 **Interfaces:**
-- Consumes: `run_segmentation`, `LetterEmitted`, `WindowStable`, `WindowRejected`, `StateChanged`, `State` de `lsm.segmentation`; `StaticKnnClassifier` de `lsm.classifiers.static_knn`; todo `lsm.spelling`
-- Produces: `Sesion` (clase con `.aplicar(signal)`, `.hud()`, `.state`), `cargar_clasificador(path)`, `flujo_desde_dataset(raiz, config)`, `main(argv)`
 
-- [ ] **Step 1: Escribe el CLI**
+* Consumes: `run\_segmentation`, `LetterEmitted`, `WindowStable`, `WindowRejected`, `StateChanged`, `State` de `lsm.segmentation`; `StaticKnnClassifier` de `lsm.classifiers.static\_knn`; todo `lsm.spelling`
+* Produces: `Sesion` (clase con `.aplicar(signal)`, `.hud()`, `.state`), `cargar\_clasificador(path)`, `flujo\_desde\_dataset(raiz, config)`, `main(argv)`
+* \[ ] **Step 1: Escribe el CLI**
 
 Crea `src/lsm/cli/demo.py`. Empieza por lo que **no** necesita cámara: la sesión, la carga del modelo y el flujo desde dataset.
 
@@ -958,7 +964,7 @@ Todas las piezas ya existían; esto es el cable.
 
 ## Quién mueve el bucle
 
-`run_segmentation` **consume** el flujo, así que la demo no puede iterar frame a
+`run\_segmentation` \*\*consume\*\* el flujo, así que la demo no puede iterar frame a
 frame por fuera. En vez de cambiar la segmentación —cuyo contrato está versionado
 (`docs/adr/0004-contrato-de-segmentacion.md`)—, el flujo que se le pasa es un
 generador que en cada `next()` captura el cuadro, dibuja el HUD con el estado que
@@ -966,7 +972,7 @@ dejó el frame anterior, lee el teclado y cede el `FrameSlot`. Iterar los evento
 mueve el bucle entero.
 """
 
-from __future__ import annotations
+from \_\_future\_\_ import annotations
 
 import argparse
 import json
@@ -975,9 +981,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lsm.classifiers.static_knn import StaticKnnClassifier
-from lsm.config import Config, load_config
-from lsm.io.dataset import iter_sample_paths, read_sample
+from lsm.classifiers.static\_knn import StaticKnnClassifier
+from lsm.config import Config, load\_config
+from lsm.io.dataset import iter\_sample\_paths, read\_sample
 from lsm.io.preview import DemoHudState
 from lsm.segmentation import (
     LetterEmitted,
@@ -986,7 +992,7 @@ from lsm.segmentation import (
     StateChanged,
     WindowRejected,
     WindowStable,
-    run_segmentation,
+    run\_segmentation,
 )
 from lsm.spelling import (
     Backspace,
@@ -1001,14 +1007,14 @@ from lsm.spelling import (
     SpellingState,
     SymbolDeleted,
     TextCommitted,
-    render_text,
-    render_word,
+    render\_text,
+    render\_word,
     step,
 )
 from lsm.types import InvalidFrame, InvalidReason, Prediction
 from lsm.vocabulary import Label, spec
 
-DEFAULT_MODEL = Path("data/models/static_knn.json")
+DEFAULT\_MODEL = Path("data/models/static\_knn.json")
 
 
 @dataclass
@@ -1020,8 +1026,8 @@ class Sesion:
     """
 
     config: Config
-    state: SpellingState = field(default_factory=SpellingState)
-    estado_maquina: State = State.IDLE
+    state: SpellingState = field(default\_factory=SpellingState)
+    estado\_maquina: State = State.IDLE
     ultima: Prediction | None = None
     dispersion: float | None = None
     mensaje: str = ""
@@ -1046,19 +1052,19 @@ class Sesion:
 
     def hud(self) -> DemoHudState:
         return DemoHudState(
-            texto=render_text(self.state),
-            palabra=render_word(self.state),
-            estado=self.estado_maquina,
+            texto=render\_text(self.state),
+            palabra=render\_word(self.state),
+            estado=self.estado\_maquina,
             ultima=self.ultima,
             dispersion=self.dispersion,
             mensaje=self.mensaje,
         )
 
 
-def aplicar_evento(sesion: Sesion, evento: SegmentationEvent) -> None:
+def aplicar\_evento(sesion: Sesion, evento: SegmentationEvent) -> None:
     """Traduce un evento de la máquina de estados a lo que la demo hace con él.
 
-    `WindowRejected` lleva el motivo pero **no** la predicción: la ventana pudo
+    `WindowRejected` lleva el motivo pero \*\*no\*\* la predicción: la ventana pudo
     rechazarse antes de clasificarla. Por eso el motivo va al mensaje y la última
     predicción se deja como estaba.
     """
@@ -1071,28 +1077,28 @@ def aplicar_evento(sesion: Sesion, evento: SegmentationEvent) -> None:
         case WindowRejected(reason=reason):
             sesion.mensaje = f"rechazo: {reason}"
         case StateChanged(current=current):
-            sesion.estado_maquina = current
-        case _:
+            sesion.estado\_maquina = current
+        case \_:
             pass
 
 
-def cargar_clasificador(path: Path) -> StaticKnnClassifier:
+def cargar\_clasificador(path: Path) -> StaticKnnClassifier:
     """Carga el modelo exportado.
 
-    `from_export` rechaza un `feature_spec_version` o un
-    `handedness_convention` que no coincidan, que es la defensa contra predecir
+    `from\_export` rechaza un `feature\_spec\_version` o un
+    `handedness\_convention` que no coincidan, que es la defensa contra predecir
     en silencio con una normalización distinta a la del entrenamiento.
     """
     if not path.exists():
         raise SystemExit(
-            f"no hay modelo en {path}. Entrenalo primero:\n"
+            f"no hay modelo en {path}. Entrenalo primero:\\n"
             "  uv run lsm-train --sin-sintetico"
         )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return StaticKnnClassifier.from_export(payload)
+    payload = json.loads(path.read\_text(encoding="utf-8"))
+    return StaticKnnClassifier.from\_export(payload)
 
 
-def flujo_desde_dataset(raiz: Path, config: Config) -> Iterator[Any]:
+def flujo\_desde\_dataset(raiz: Path, config: Config) -> Iterator\[Any]:
     """Las muestras de `raiz`, en orden, separadas por ausencia de mano.
 
     El hueco entre muestras no es adorno: sin él las señas se fundirían en una
@@ -1100,12 +1106,12 @@ def flujo_desde_dataset(raiz: Path, config: Config) -> Iterator[Any]:
     siguiente. Su longitud es la del espacio, para que además cierre la palabra
     igual que lo haría en vivo.
     """
-    hueco = config.spelling.space_after_absent_frames
-    for ruta in sorted(iter_sample_paths(raiz)):
-        for slot in read_sample(ruta).frames:
+    hueco = config.spelling.space\_after\_absent\_frames
+    for ruta in sorted(iter\_sample\_paths(raiz)):
+        for slot in read\_sample(ruta).frames:
             yield slot
-        for _ in range(hueco):
-            yield InvalidFrame(reason=InvalidReason.NO_HAND, detail="entre muestras")
+        for \_ in range(hueco):
+            yield InvalidFrame(reason=InvalidReason.NO\_HAND, detail="entre muestras")
 ```
 
 > Comprueba las firmas reales de `WindowStable` y `WindowRejected` antes de
@@ -1113,12 +1119,12 @@ def flujo_desde_dataset(raiz: Path, config: Config) -> Iterator[Any]:
 > Si sus campos no se llaman `dispersion`, `reason` o `prediction`, usa los
 > nombres que haya — no inventes.
 
-- [ ] **Step 2: Añade el `main` y el parser**
+* \[ ] **Step 2: Añade el `main` y el parser**
 
 Al final de `src/lsm/cli/demo.py`:
 
 ```python
-def _build_parser() -> argparse.ArgumentParser:
+def \_build\_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lsm-demo",
         description=(
@@ -1126,18 +1132,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "cámara y las convierte en texto. El procesamiento es local."
         ),
     )
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
-    parser.add_argument(
+    parser.add\_argument("--config", type=Path, default=Path("config.yaml"))
+    parser.add\_argument(
         "--modelo",
         type=Path,
-        default=DEFAULT_MODEL,
+        default=DEFAULT\_MODEL,
         help="modelo exportado por lsm-train",
     )
-    parser.add_argument(
+    parser.add\_argument(
         "--desde-dataset",
         type=Path,
         default=None,
-        dest="desde_dataset",
+        dest="desde\_dataset",
         help=(
             "reproduce las muestras de esa ruta en vez de abrir la cámara. "
             "No necesita webcam ni MediaPipe."
@@ -1146,77 +1152,78 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
-    config = load_config(args.config)
-    classifier = cargar_clasificador(args.modelo)
+def main(argv: list\[str] | None = None) -> int:
+    args = \_build\_parser().parse\_args(argv)
+    config = load\_config(args.config)
+    classifier = cargar\_clasificador(args.modelo)
     sesion = Sesion(config=config)
 
-    if args.desde_dataset is not None:
-        flujo = flujo_desde_dataset(args.desde_dataset, config)
-        for evento in run_segmentation(flujo, config, classifier.predict):
-            aplicar_evento(sesion, evento)
-        print(render_text(sesion.state))
+    if args.desde\_dataset is not None:
+        flujo = flujo\_desde\_dataset(args.desde\_dataset, config)
+        for evento in run\_segmentation(flujo, config, classifier.predict):
+            aplicar\_evento(sesion, evento)
+        print(render\_text(sesion.state))
         return 0
 
-    return _sesion_en_vivo(config, classifier, sesion)
+    return \_sesion\_en\_vivo(config, classifier, sesion)
 ```
 
-`_sesion_en_vivo` llega en la tarea 7. Por ahora:
+`\_sesion\_en\_vivo` llega en la tarea 7. Por ahora:
 
 ```python
-def _sesion_en_vivo(
+def \_sesion\_en\_vivo(
     config: Config, classifier: StaticKnnClassifier, sesion: Sesion
 ) -> int:
     raise SystemExit("la sesión en vivo llega en la tarea 7")
 ```
 
-- [ ] **Step 3: Registra el script**
+* \[ ] **Step 3: Registra el script**
 
-En `pyproject.toml`, dentro de `[project.scripts]`:
+En `pyproject.toml`, dentro de `\[project.scripts]`:
 
 ```toml
 lsm-demo = "lsm.cli.demo:main"
 ```
 
-- [ ] **Step 4: Comprueba que importa sin OpenCV ni MediaPipe**
+* \[ ] **Step 4: Comprueba que importa sin OpenCV ni MediaPipe**
 
 ```bash
 uv run python -c "import lsm.cli.demo; print('importa sin arrastrar hardware')"
-uv run mypy && uv run ruff check .
+uv run mypy \&\& uv run ruff check .
 ```
 
 Esperado: no falla. Si falla por un import de OpenCV, muévelo dentro de la función que lo use — es lo que hace `cli/capture.py`.
 
-- [ ] **Step 5: Commit**
+* \[ ] **Step 5: Commit**
 
 ```bash
 git add src/lsm/cli/demo.py pyproject.toml
 git commit -m "feat(demo): sesion, carga de modelo y reproduccion desde dataset"
 ```
 
----
+\---
 
 ### Task 7: El criterio de la fase y la sesión en vivo
 
 **Files:**
-- Modify: `src/lsm/cli/demo.py`
-- Test: `tests/test_cli_demo.py`
+
+* Modify: `src/lsm/cli/demo.py`
+* Test: `tests/test\_cli\_demo.py`
 
 **Interfaces:**
-- Consumes: todo lo de la tarea 6; `Camera`, `MediaPipeHandDetector`, `draw_landmarks`, `draw_demo_hud`
-- Produces: `_sesion_en_vivo` funcional; `lsm-demo` completo
 
-- [ ] **Step 1: Escribe el test del criterio**
+* Consumes: todo lo de la tarea 6; `Camera`, `MediaPipeHandDetector`, `draw\_landmarks`, `draw\_demo\_hud`
+* Produces: `\_sesion\_en\_vivo` funcional; `lsm-demo` completo
+* \[ ] **Step 1: Escribe el test del criterio**
 
-Crea `tests/test_cli_demo.py`:
+Crea `tests/test\_cli\_demo.py`:
 
 ```python
 """El criterio de aceptacion de la Fase 3, sin camara.
 
 > Deletrear una palabra de cinco letras sin errores de segmentacion.
 
-Las secuencias son **sinteticas y deterministas** a proposito. Con el accuracy
+Las secuencias son \*\*sinteticas y deterministas\*\* a proposito. Con el accuracy
 de la Fase 2 (0.9261) una palabra de cinco letras sale entera el 68% de las
 veces, asi que un test sobre datos reales seria intermitente — y un test
 intermitente se acaba ignorando, que es exactamente como paso desapercibida la
@@ -1227,12 +1234,12 @@ maquina de estados no parta una seña en dos, no funda dos en una y no repita la
 que sigue sostenida. Eso si es determinista.
 """
 
-from __future__ import annotations
+from \_\_future\_\_ import annotations
 
-from lsm.cli.demo import Sesion, aplicar_evento
+from lsm.cli.demo import Sesion, aplicar\_evento
 from lsm.config import Config
-from lsm.segmentation import run_segmentation
-from lsm.spelling import render_text
+from lsm.segmentation import run\_segmentation
+from lsm.spelling import render\_text
 from lsm.types import InvalidFrame, InvalidReason
 from lsm.vocabulary import Label
 
@@ -1240,30 +1247,30 @@ CONFIG = Config()
 PALABRA = (Label.C, Label.A, Label.S, Label.A, Label.S)
 ```
 
-Los ayudantes salen de `tests/test_segmentation.py`, que ya los tiene resueltos.
-Cópialos tal cual —`still_frames`, `moving_frames`, `responses`— en vez de
+Los ayudantes salen de `tests/test\_segmentation.py`, que ya los tiene resueltos.
+Cópialos tal cual —`still\_frames`, `moving\_frames`, `responses`— en vez de
 inventar otros:
 
 ```python
 from collections.abc import Callable
 
 from lsm.segmentation import Classify
-from lsm.synthetic import canonical_hand, to_frame, translated
+from lsm.synthetic import canonical\_hand, to\_frame, translated
 from lsm.types import FrameSlot, Prediction, Sequence
 from lsm.vocabulary import Label
 
 
-def still_frames(count: int, *, at: tuple[float, float] = (640.0, 400.0)) -> list[FrameSlot]:
+def still\_frames(count: int, \*, at: tuple\[float, float] = (640.0, 400.0)) -> list\[FrameSlot]:
     """La mano quieta en el mismo sitio: velocidad cero, la ventana se estabiliza."""
-    frame = to_frame(translated(canonical_hand(), *at), width=1280, height=720)
-    return [frame for _ in range(count)]
+    frame = to\_frame(translated(canonical\_hand(), \*at), width=1280, height=720)
+    return \[frame for \_ in range(count)]
 
 
-def moving_frames(count: int, *, step: float = 25.0) -> list[FrameSlot]:
+def moving\_frames(count: int, \*, step: float = 25.0) -> list\[FrameSlot]:
     """La mano viajando: velocidad muy por encima del umbral. Es el rebote."""
-    return [
-        to_frame(
-            translated(canonical_hand(), 300.0 + step * index, 400.0),
+    return \[
+        to\_frame(
+            translated(canonical\_hand(), 300.0 + step \* index, 400.0),
             width=1280,
             height=720,
         )
@@ -1271,57 +1278,57 @@ def moving_frames(count: int, *, step: float = 25.0) -> list[FrameSlot]:
     ]
 
 
-def _clasificador(labels: tuple[Label, ...], confianza: float = 0.95) -> Classify:
+def \_clasificador(labels: tuple\[Label, ...], confianza: float = 0.95) -> Classify:
     """Devuelve `labels` en orden, una por ventana estable.
 
     Determinista a proposito: lo que se testea es la segmentacion, no el
     acierto del clasificador. Recibe las etiquetas en vez de leer una global
     para que el test de la letra doble pueda pedir la suya.
     """
-    pendientes = [Prediction(label=l.value, confidence=confianza) for l in labels]
+    pendientes = \[Prediction(label=l.value, confidence=confianza) for l in labels]
 
     def classify(sequence: Sequence) -> Prediction:  # noqa: ARG001 — doble de pruebas
-        return pendientes.pop(0) if len(pendientes) > 1 else pendientes[0]
+        return pendientes.pop(0) if len(pendientes) > 1 else pendientes\[0]
 
     return classify
 
 
-def _frames(labels: tuple[Label, ...]) -> list[FrameSlot]:
+def \_frames(labels: tuple\[Label, ...]) -> list\[FrameSlot]:
     """Una ventana estable por letra, con movimiento entre ellas.
 
     El movimiento intermedio no es adorno: sin el, la maquina se queda en STABLE
     sobre la misma ventana y el cerrojo de letras dobles bloquea la siguiente.
     """
-    flujo: list[FrameSlot] = []
-    for indice, _ in enumerate(labels):
+    flujo: list\[FrameSlot] = \[]
+    for indice, \_ in enumerate(labels):
         if indice:
-            flujo += moving_frames(4)
-        flujo += still_frames(CONFIG.segmentation.buffer_size + 2)
+            flujo += moving\_frames(4)
+        flujo += still\_frames(CONFIG.segmentation.buffer\_size + 2)
     return flujo
 
 
-def _flujo(labels: tuple[Label, ...]) -> Iterator[FrameSlot]:
-    return iter(_frames(labels))
+def \_flujo(labels: tuple\[Label, ...]) -> Iterator\[FrameSlot]:
+    return iter(\_frames(labels))
 
 
-def _deletrear(labels: tuple[Label, ...], *, rebote: bool) -> SpellingState:
+def \_deletrear(labels: tuple\[Label, ...], \*, rebote: bool) -> SpellingState:
     """Corre la tuberia y devuelve el estado final."""
-    flujo: list[FrameSlot] = []
-    for indice, _ in enumerate(labels):
+    flujo: list\[FrameSlot] = \[]
+    for indice, \_ in enumerate(labels):
         if indice and rebote:
-            flujo += moving_frames(4)
-        flujo += still_frames(CONFIG.segmentation.buffer_size + 2)
+            flujo += moving\_frames(4)
+        flujo += still\_frames(CONFIG.segmentation.buffer\_size + 2)
 
     sesion = Sesion(config=CONFIG)
-    for evento in run_segmentation(iter(flujo), CONFIG, _clasificador(labels)):
-        aplicar_evento(sesion, evento)
+    for evento in run\_segmentation(iter(flujo), CONFIG, \_clasificador(labels)):
+        aplicar\_evento(sesion, evento)
     return sesion.state
 
 
-def _con_sesion(frames: list[FrameSlot], sesion: Sesion) -> Iterator[FrameSlot]:
+def \_con\_sesion(frames: list\[FrameSlot], sesion: Sesion) -> Iterator\[FrameSlot]:
     """Cede los frames aplicando presencia y ausencia, como hace la demo real.
 
-    `run_segmentation` no emite un evento por frame, asi que la sesion no ve las
+    `run\_segmentation` no emite un evento por frame, asi que la sesion no ve las
     ausencias por esa via: en la demo se aplican dentro del generador del flujo,
     un frame por vuelta. Esto lo replica, y testearlo aqui es lo que impide que
     ese mecanismo se rompa sin avisar.
@@ -1336,119 +1343,119 @@ def _con_sesion(frames: list[FrameSlot], sesion: Sesion) -> Iterator[FrameSlot]:
 El test central:
 
 ```python
-def test_una_palabra_de_cinco_letras_produce_cinco_simbolos() -> None:
+def test\_una\_palabra\_de\_cinco\_letras\_produce\_cinco\_simbolos() -> None:
     """EL CRITERIO DE LA FASE."""
     sesion = Sesion(config=CONFIG)
 
-    for evento in run_segmentation(_flujo(PALABRA), CONFIG, _clasificador()):
-        aplicar_evento(sesion, evento)
+    for evento in run\_segmentation(\_flujo(PALABRA), CONFIG, \_clasificador()):
+        aplicar\_evento(sesion, evento)
 
     assert len(sesion.state.word) == 5
-    assert render_text(sesion.state) == "casas"
+    assert render\_text(sesion.state) == "casas"
 ```
 
 Y los tres que lo acompañan:
 
 ```python
-def test_la_letra_doble_exige_el_rebote() -> None:
+def test\_la\_letra\_doble\_exige\_el\_rebote() -> None:
     """`segmentation.py` no repite la misma letra sin que la mano se mueva por
-    encima de velocity_threshold. Sin rebote entre las dos N se emite una sola;
+    encima de velocity\_threshold. Sin rebote entre las dos N se emite una sola;
     con rebote, dos."""
-    sin_rebote = _deletrear((Label.N, Label.N), rebote=False)
-    con_rebote = _deletrear((Label.N, Label.N), rebote=True)
+    sin\_rebote = \_deletrear((Label.N, Label.N), rebote=False)
+    con\_rebote = \_deletrear((Label.N, Label.N), rebote=True)
 
-    assert render_text(sin_rebote) == "n"
-    assert render_text(con_rebote) == "nn"
+    assert render\_text(sin\_rebote) == "n"
+    assert render\_text(con\_rebote) == "nn"
 
 
-def test_nada_por_debajo_del_umbral_llega_al_buffer() -> None:
-    exigente = Config.model_validate({"segmentation": {"min_confidence": 0.99}})
+def test\_nada\_por\_debajo\_del\_umbral\_llega\_al\_buffer() -> None:
+    exigente = Config.model\_validate({"segmentation": {"min\_confidence": 0.99}})
     sesion = Sesion(config=exigente)
 
-    for evento in run_segmentation(_flujo(PALABRA), exigente, _clasificador(0.7)):
-        aplicar_evento(sesion, evento)
+    for evento in run\_segmentation(\_flujo(PALABRA), exigente, \_clasificador(0.7)):
+        aplicar\_evento(sesion, evento)
 
     assert sesion.state.word == ()
 
 
-def test_la_mano_abajo_entre_dos_palabras_pone_un_espacio_y_uno_solo() -> None:
+def test\_la\_mano\_abajo\_entre\_dos\_palabras\_pone\_un\_espacio\_y\_uno\_solo() -> None:
     sesion = Sesion(config=CONFIG)
     palabras = (Label.C, Label.A, Label.S, Label.A)
-    hueco: list[FrameSlot] = [
-        InvalidFrame(reason=InvalidReason.NO_HAND)
-    ] * (CONFIG.spelling.space_after_absent_frames * 2)
-    frames = [*_frames(palabras[:2]), *hueco, *_frames(palabras[2:])]
+    hueco: list\[FrameSlot] = \[
+        InvalidFrame(reason=InvalidReason.NO\_HAND)
+    ] \* (CONFIG.spelling.space\_after\_absent\_frames \* 2)
+    frames = \[\*\_frames(palabras\[:2]), \*hueco, \*\_frames(palabras\[2:])]
 
-    for evento in run_segmentation(
-        _con_sesion(frames, sesion), CONFIG, _clasificador(palabras)
+    for evento in run\_segmentation(
+        \_con\_sesion(frames, sesion), CONFIG, \_clasificador(palabras)
     ):
-        aplicar_evento(sesion, evento)
+        aplicar\_evento(sesion, evento)
 
-    assert render_text(sesion.state) == "ca sa"
+    assert render\_text(sesion.state) == "ca sa"
 ```
 
-- [ ] **Step 2: Corre los tests y comprueba que fallan**
+* \[ ] **Step 2: Corre los tests y comprueba que fallan**
 
 ```bash
-uv run pytest tests/test_cli_demo.py -v
+uv run pytest tests/test\_cli\_demo.py -v
 ```
 
-Esperado: FAIL. Los ayudantes `_flujo`, `_frames`, `_clasificador` y `_deletrear`
+Esperado: FAIL. Los ayudantes `\_flujo`, `\_frames`, `\_clasificador` y `\_deletrear`
 no existen todavía: escríbelos en el propio archivo de test.
 
-- [ ] **Step 3: Haz que pasen**
+* \[ ] **Step 3: Haz que pasen**
 
 Los ayudantes son de test, no de producción. Si al escribirlos descubres que
-`aplicar_evento` o `Sesion` necesitan un cambio, hazlo — pero **no toques
+`aplicar\_evento` o `Sesion` necesitan un cambio, hazlo — pero **no toques
 `segmentation.py`**: si la máquina de estados no permitiera cumplir el criterio,
 para y díselo a tu interlocutor humano, que es lo que manda `CLAUDE.md`.
 
-- [ ] **Step 4: Corre los tests y comprueba que pasan**
+* \[ ] **Step 4: Corre los tests y comprueba que pasan**
 
 ```bash
-uv run pytest tests/test_cli_demo.py -v
+uv run pytest tests/test\_cli\_demo.py -v
 ```
 
-- [ ] **Step 5: Implementa la sesión en vivo**
+* \[ ] **Step 5: Implementa la sesión en vivo**
 
-Sustituye el `_sesion_en_vivo` provisional. OpenCV se importa **dentro** de la
+Sustituye el `\_sesion\_en\_vivo` provisional. OpenCV se importa **dentro** de la
 función, como en `cli/capture.py`:
 
 ```python
-def _sesion_en_vivo(
+def \_sesion\_en\_vivo(
     config: Config, classifier: StaticKnnClassifier, sesion: Sesion
 ) -> int:
     """Abre la cámara y deletrea.
 
     El generador de frames es quien mueve el bucle: en cada `next()` captura,
-    dibuja y lee el teclado. `run_segmentation` lo consume y sus eventos
+    dibuja y lee el teclado. `run\_segmentation` lo consume y sus eventos
     actualizan el estado que el siguiente frame dibujará.
     """
     import cv2
 
     from lsm.io.camera import Camera
-    from lsm.io.preview import draw_demo_hud, draw_landmarks
+    from lsm.io.preview import draw\_demo\_hud, draw\_landmarks
 
-    from lsm.io.hands import build_detector
+    from lsm.io.hands import build\_detector
 
     ventana = "demo LSM — deletreo manual"
     salir = False
 
-    def flujo(camera: Camera, detector: Any) -> Iterator[Any]:
+    def flujo(camera: Camera, detector: Any) -> Iterator\[Any]:
         nonlocal salir
         while not salir:
             frame = camera.read()
             slot = detector.detect(frame.rgb)
 
             imagen = frame.bgr
-            if config.capture.preview_mirror:
+            if config.capture.preview\_mirror:
                 imagen = cv2.flip(imagen, 1)
             if not isinstance(slot, InvalidFrame):
-                draw_landmarks(imagen, slot, mirrored=config.capture.preview_mirror)
-            draw_demo_hud(imagen, sesion.hud())
+                draw\_landmarks(imagen, slot, mirrored=config.capture.preview\_mirror)
+            draw\_demo\_hud(imagen, sesion.hud())
             cv2.imshow(ventana, imagen)
 
-            tecla = cv2.waitKey(1) & 0xFF
+            tecla = cv2.waitKey(1) \& 0xFF
             if tecla == ord("q"):
                 salir = True
                 return
@@ -1462,55 +1469,56 @@ def _sesion_en_vivo(
             )
             yield slot
 
-    with Camera.from_config(config.capture).open() as camera:
-        detector = build_detector(config)
+    with Camera.from\_config(config.capture).open() as camera:
+        detector = build\_detector(config)
         try:
-            for evento in run_segmentation(flujo(camera, detector), config, classifier.predict):
-                aplicar_evento(sesion, evento)
+            for evento in run\_segmentation(flujo(camera, detector), config, classifier.predict):
+                aplicar\_evento(sesion, evento)
         finally:
             detector.close()
             cv2.destroyAllWindows()
 
-    texto = render_text(sesion.state)
+    texto = render\_text(sesion.state)
     if texto:
         print(texto)
     return 0
 ```
 
-> **Antes de escribir esto**, mueve `_construir_detector` de `src/lsm/cli/capture.py`
-> a `src/lsm/io/hands.py` como `build_detector(config: Config) -> HandDetector`,
+> \*\*Antes de escribir esto\*\*, mueve `\_construir\_detector` de `src/lsm/cli/capture.py`
+> a `src/lsm/io/hands.py` como `build\_detector(config: Config) -> HandDetector`,
 > y haz que `cli/capture.py` la importe de ahí. Importar un privado de otro CLI es
 > exactamente lo que el revisor va a marcar, y el detector le corresponde a `io/`:
 > es la frontera con MediaPipe. El cuerpo de la función no cambia.
 
-- [ ] **Step 6: Corre todo**
+* \[ ] **Step 6: Corre todo**
 
 ```bash
-uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -q
+uv run ruff check . \&\& uv run ruff format --check . \&\& uv run mypy \&\& uv run pytest -q
 ```
 
 Esperado: todo verde. La suite completa debe pasar **sin cámara y sin MediaPipe**.
 
-- [ ] **Step 7: Commit**
+* \[ ] **Step 7: Commit**
 
 ```bash
-git add src/lsm/cli/demo.py tests/test_cli_demo.py
+git add src/lsm/cli/demo.py tests/test\_cli\_demo.py
 git commit -m "feat(demo): sesion en vivo y el criterio de cinco letras en CI"
 ```
 
----
+\---
 
 ### Task 8: Cerrar la fase
 
 **Files:**
-- Modify: `Makefile`, `docs/COMO-PROBAR.md`, `README.md`
-- Create: `docs/adr/0012-controles-del-deletreo.md`
+
+* Modify: `Makefile`, `docs/COMO-PROBAR.md`, `README.md`
+* Create: `docs/adr/0012-controles-del-deletreo.md`
 
 **Interfaces:**
-- Consumes: todo lo anterior
-- Produces: nada de código
 
-- [ ] **Step 1: `make demo` deja de ser un `exit 1`**
+* Consumes: todo lo anterior
+* Produces: nada de código
+* \[ ] **Step 1: `make demo` deja de ser un `exit 1`**
 
 En `Makefile`, sustituye la receta actual:
 
@@ -1522,7 +1530,7 @@ demo:
 	$(UV) run lsm-demo $(ARGS)
 ```
 
-- [ ] **Step 2: Escribe el ADR de los controles**
+* \[ ] **Step 2: Escribe el ADR de los controles**
 
 `CLAUDE.md` lo pide para decisiones reversibles con costo, y esta lo es: los
 gestos de control son una interfaz que quien use la app tiene que aprender.
@@ -1536,31 +1544,31 @@ consecuencia (la demo no es señable de extremo a extremo, y eso hay que decirlo
 
 Copia el formato de cabecera de `docs/adr/0011-calibracion-de-la-fase-2.md`.
 
-- [ ] **Step 3: Completa la sección 6 de `docs/COMO-PROBAR.md`**
+* \[ ] **Step 3: Completa la sección 6 de `docs/COMO-PROBAR.md`**
 
 Quita el aviso de «Fase 3, en construcción» y escribe los comandos reales, las
 teclas (`BACKSPACE`, `ENTER`, `q`), el gesto del espacio, y que las ocho letras
 dinámicas no se reconocen todavía.
 
-- [ ] **Step 4: Actualiza el estado en `README.md`**
+* \[ ] **Step 4: Actualiza el estado en `README.md`**
 
 La Fase 3 pasa a cerrada, con el criterio y cómo se comprueba. Menciona que la
 demo avisa en pantalla de las dinámicas pendientes.
 
-- [ ] **Step 5: Corre todo por última vez**
+* \[ ] **Step 5: Corre todo por última vez**
 
 ```bash
-uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -q
+uv run ruff check . \&\& uv run ruff format --check . \&\& uv run mypy \&\& uv run pytest -q
 ```
 
-- [ ] **Step 6: Commit**
+* \[ ] **Step 6: Commit**
 
 ```bash
 git add Makefile docs/ README.md
 git commit -m "docs: cierra la Fase 3 y documenta los controles del deletreo"
 ```
 
----
+\---
 
 ## Notas para quien ejecute esto
 
@@ -1574,5 +1582,6 @@ esquivar la máquina de estados es exactamente esa excepción local.
 la latencia sea tolerable. Ningún test lo dice.
 
 **Las ocho letras dinámicas no se reconocen.** No es un fallo de esta fase: llegan
-en la Fase 5 con `dynamic_dtw`. El HUD lo avisa para que nadie lo confunda con un
+en la Fase 5 con `dynamic\_dtw`. El HUD lo avisa para que nadie lo confunda con un
 error.
+

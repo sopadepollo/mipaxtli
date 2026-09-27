@@ -203,6 +203,63 @@ Bloque 4.
 - La cámara de referencia llega por **MSMF nativo en Windows** (cabecera de los
   dos reportes), no por WSL/usbipd, así que esa comparación no aplica.
 
+### Lo que midió `medir-camara` (2026-09-26)
+
+Doce configuraciones, con y sin MediaPipe en el bucle
+(`data/diagnostico/camara-2026-09-26-*.md`):
+
+| configuración | fps entregados | fps nuevos |
+|---|---|---|
+| MSMF / auto, formato del driver o MJPG, 1280x720 o 640x480 | 28.5–30.1 | **16.0–16.7** |
+| DSHOW 640x480 (pedido MJPG, aceptado YUY2) | 16.6 | **16.6** (0% repetidos) |
+| DSHOW 1280x720 (pedido MJPG, aceptado YUY2) | 10.0 | 10.0 |
+
+**Ninguna combinación pasa de ~16.6 fps reales**, y MediaPipe en el bucle no
+cambia nada: no es la tubería, y tampoco el formato ni el transporte —DSHOW no
+acepta MJPG y cae a YUY2; MSMF no informa el formato, y con MJPG pedido da lo
+mismo—. El intervalo entre cuadros nuevos es ~60 ms constante (≈ 1/16.6 s), que
+es la firma de una exposición automática larga o de un límite del sensor, no de
+un formato. Lo que no se probó es fijar la exposición a mano
+(`CAP_PROP_AUTO_EXPOSURE` / `CAP_PROP_EXPOSURE`): es la palanca que queda.
+
+**Configuración fijada**: la de siempre —`backend: auto`, `fourcc: null`,
+1280x720— con los repetidos descartados. Da los mismos fps nuevos que cualquier
+otra y más resolución que DSHOW 640x480, que es la única sin repetidos de origen.
+
+### El diagnóstico repetido (2026-09-27), con mano declarada y sin repetidos
+
+| | 26 habitual | 26 lámpara | 27 habitual | 27 lámpara |
+|---|---|---|---|---|
+| picos `v_t > 2` (cambios de etiqueta) | 217 | 192 | **0** | **0** |
+| trazos entregados | 13 | 17 | **36** | 8 |
+| interrumpidos por hueco | 49 | 47 | **70** | **70** |
+| mediana de hueco dentro de trazo | 2 cuadros | 5 cuadros | **15** | **16** |
+| pérdida en el cuartil más rápido de `v_t` | 2.7% | 2.2% | **8.7%** | **8.3%** |
+
+**La mano declarada funcionó**: MediaPipe sigue cambiando de etiqueta (34 y 78
+veces) pero ya no espeja nada, y los picos desaparecieron. **Los huecos
+empeoraron, y la causa probable la introdujo el Bloque 1**: con los repetidos
+descartados el intervalo real entre cuadros pasó a ~65-68 ms, pero MediaPipe
+seguía recibiendo marcas nominales de 33 ms («intervalo que recibe MediaPipe
+33.0 ms» en los dos reportes). Su rastreador en modo VIDEO esperaba la mitad del
+movimiento que ocurría y perdía la mano en los trazos rápidos. La hipótesis del
+reloj que este ADR daba por descartada lo estaba solo mientras la cámara
+entregaba 30 cuadros por segundo, repetidos incluidos.
+
+**Corregido**: `hands.real_timestamps` (activado) pasa a MediaPipe el reloj real
+(`time.monotonic`), estrictamente creciente. El contador nominal sigue
+disponible con `false`, porque es reproducible. Hay que **repetir el diagnóstico**
+con la corrección antes de calibrar el Bloque 2: sus números son los que
+cuentan.
+
+**Una segunda consecuencia del Bloque 1, que no se corrige aquí.** `v_t` es por
+cuadro (§6.5, deuda anotada desde el ADR 0013). Sin repetidos, cada par de
+cuadros está el doble de separado en el tiempo y la misma mano da una `v_t` del
+doble: los cuadros de «mano quieta» cayeron de 1074 a 195. `velocity_threshold`
+y `motion_threshold` quedaron efectivamente el doble de estrictos. Pasarlos a
+unidades por segundo es el arreglo, y es un recalibrado de umbrales de las Fases
+2, 3 y 5: se propone, con esta evidencia, pero no se hace sin decisión.
+
 Queda para después de medir: si con los cuadros ya deduplicados vuelve a
 funcionar el criterio de frames **consecutivos** en movimiento (ADR 0015, punto
 3), y si conviene bajar `hands.min_tracking_confidence`.

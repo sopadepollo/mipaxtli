@@ -373,6 +373,13 @@ class HandsConfig(_Section):
     #: propósito: los parpadeos de un trazo duran cuadros, no segundos.
     mismatch_ms: float = Field(default=1500.0, gt=0.0, le=60000.0)
 
+    #: Marcas de tiempo reales para el modo VIDEO de MediaPipe en vez del
+    #: contador nominal (`1000 / camera_fps` por cuadro). Tras descartar los
+    #: cuadros repetidos (Bloque 1) el intervalo real fue ~65 ms contra 33 ms
+    #: nominales, y los huecos dentro de un trazo pasaron de mediana 2 cuadros a
+    #: 15 (ADR 0017). `false` recupera el contador, que es reproducible.
+    real_timestamps: bool = Field(default=True)
+
 
 class SpellingConfig(_Section):
     """Acumulación de letras en palabras (`ARQUITECTURA.md` §4.2)."""
