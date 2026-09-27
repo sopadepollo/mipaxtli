@@ -280,7 +280,11 @@ del diagnóstico de la Fase 2 y el barrido del detector de movimiento del ADR
 Los campos cambian de nombre a propósito: un `config.yaml` viejo con `0.02` falla
 al cargar en vez de leerse como 0.02 manos por segundo. Sobre el dataset, que se
 reproduce a la tasa nominal de 30 fps, los umbrales por cuadro son exactamente
-los de antes: el eval de Fase 2 () dio lo mismo —accuracy 0.9261, macro 0.9201, UNKNOWN 0.0573— y el replay de Fase 5 () dio resultados idénticos a los previos en todo salvo la versión y el commit: 621 de 622 trazos enteros, J 100/100, accuracy 0.7926. En vivo, a 16.6 fps nuevos, el umbral por
+los de antes. El eval de Fase 2 (`lsm-eval --sin-sintetico`) dio lo mismo
+—accuracy 0.9261, macro 0.9201, UNKNOWN 0.0573— y el replay de Fase 5
+(`lsm-eval-dinamico --sin-sintetico --rejilla rapido`) dio resultados idénticos
+salvo la versión y el commit: 621 de 622 trazos enteros, J 100/100, accuracy
+0.7926. En vivo, a 16.6 fps nuevos, el umbral por
 cuadro sube a 0.036 y 0.045, que es lo que compensa el doble de separación entre
 cuadros que dejó el descarte de repetidos.
 
