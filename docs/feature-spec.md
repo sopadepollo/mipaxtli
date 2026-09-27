@@ -486,7 +486,15 @@ porque los tres casos se comportan distinto y no basta con probar uno:
 
 ## 6. Velocidad y estabilidad — contrato de segmentación
 
-**`SEGMENTATION_SPEC_VERSION = 3`** (`src/lsm/segmentation.py`).
+**`SEGMENTATION_SPEC_VERSION = 4`** (`src/lsm/segmentation.py`).
+
+> **v4** — `docs/adr/0017-diagnostico-de-tracking.md`. Los dos umbrales de
+> velocidad pasan a unidades de mano **por segundo** (`velocity_threshold_per_s`,
+> `motion_threshold_per_s`) y se convierten a por cuadro con la tasa congelada
+> de la sesión (§6.5): `umbral_cuadro = umbral_por_s / fps`. `v_t` (§6.1) no
+> cambia: sigue midiéndose por par de cuadros, sin tiempo. Los valores v3 se
+> convirtieron con la tasa a la que se midieron, 30 fps: 0.02 → 0.6 y
+> 0.025 → 0.75.
 
 > **v2** — `docs/adr/0013-la-ventana-mezclada.md`. Se añaden §6.4 (qué ventana se
 > clasifica), §6.5 (los umbrales temporales en milisegundos) y §6.6 (emisión
@@ -647,9 +655,12 @@ suponiendo 30 fps; la medición de `lsm-demo --medir-fps` en la máquina de
 referencia dio **17.8 fps sostenidos**, de modo que cada umbral duraba 1.7 veces
 lo que su comentario afirmaba: los 24 frames de buffer eran 1348 ms y no 800.
 
-**Excepción anotada:** `velocity_threshold` —y desde la v3 `motion_threshold`, que
-comparte métrica y unidad— sigue en unidades de mano **por
-frame** y por tanto sigue dependiendo de la tasa — a menor tasa, dos frames
+**Resuelto en la v4:** los umbrales de velocidad también se expresan por
+segundo y se convierten con la tasa (`umbral / fps`), así que dejaron de
+depender de ella. Lo que sigue es la excepción tal como estaba anotada hasta la
+v3: `velocity_threshold` —y `motion_threshold`, que comparte métrica y
+unidad— seguía en unidades de mano **por
+frame** y por tanto dependía de la tasa — a menor tasa, dos frames
 consecutivos están más separados en el tiempo y la misma mano física da un `v_t`
 mayor. Expresarla por segundo es el arreglo pendiente; no se hizo con lo demás
 porque es un eje del barrido de calibración de la Fase 2 y cambiarle la unidad

@@ -142,7 +142,11 @@ from lsm.types import FrameSlot, Prediction, RawFrame, Sequence, WindowOrigin
 #: mientras dura un trazo, y el origen de la ventana como argumento del
 #: clasificador. Tampoco cambia `FEATURE_SPEC_VERSION`: el trazo se extrae con
 #: las mismas §1 a §3 que ya existían.
-SEGMENTATION_SPEC_VERSION: Final = 3
+#:
+#: **v4** (ADR 0017): `velocity_threshold_per_s` y `motion_threshold_per_s` están
+#: en unidades de mano **por segundo** y se convierten a por cuadro con la tasa
+#: congelada de la sesión. `v_t` sigue siendo la del §6.1.
+SEGMENTATION_SPEC_VERSION: Final = 4
 
 
 def frames_from_ms(ms: float, fps: float) -> int:
@@ -192,6 +196,11 @@ class FrameThresholds:
     motion_min_frames: int
     motion_confirm_low_frames: int
     motion_max_frames: int
+    #: Los dos umbrales de velocidad, de unidades de mano por segundo a por
+    #: cuadro con esta tasa (v4): `v_t` del §6.1 se sigue midiendo por par de
+    #: cuadros, y lo que se convierte es el umbral.
+    velocity_threshold: float
+    motion_threshold: float
 
     @classmethod
     def from_config(cls, config: Config, fps: float) -> FrameThresholds:
@@ -211,6 +220,8 @@ class FrameThresholds:
                 settings.motion_confirm_low_ms, fps
             ),
             motion_max_frames=frames_from_ms(settings.motion_max_ms, fps),
+            velocity_threshold=settings.velocity_threshold_per_s / fps,
+            motion_threshold=settings.motion_threshold_per_s / fps,
         )
 
 
@@ -533,8 +544,8 @@ def run_segmentation(
         # cooldown y no se mirara, el cerrojo de repetición no se liberaría y la
         # segunda letra quedaría bloqueada sin que quien firma pueda hacer nada.
         velocity = features.velocities[-1] if features.velocities else None
-        moving = velocity is not None and velocity >= settings.velocity_threshold
-        motion = velocity is not None and velocity >= settings.motion_threshold
+        moving = velocity is not None and velocity >= thresholds.velocity_threshold
+        motion = velocity is not None and velocity >= thresholds.motion_threshold
         if moving:
             pending_repeat = ""
             dynamic_lock = False

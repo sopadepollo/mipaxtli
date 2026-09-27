@@ -167,18 +167,17 @@ class SegmentationConfig(_Section):
     #: Por debajo de esto, el frame del detector se marca inválido.
     min_detection_score: float = Field(default=0.5, gt=0.0, le=1.0)
 
-    #: Velocidad por debajo de la cual se considera que la mano está quieta.
-    #: Unidades de mano **por frame**; definida en `docs/feature-spec.md` §6.
+    #: Velocidad por debajo de la cual se considera que la mano está quieta, en
+    #: unidades de mano **por segundo** (SEGMENTATION_SPEC_VERSION 4, ADR 0017).
+    #: La máquina la convierte a unidades por cuadro con la tasa congelada de la
+    #: sesión, igual que los umbrales en milisegundos (`FrameThresholds`).
     #:
-    #: **Sigue en unidades por frame y por tanto sigue dependiendo de la tasa**,
-    #: al revés que el resto de esta sección. Es una deuda conocida y anotada: a
-    #: menor tasa, dos frames consecutivos están más separados en el tiempo, así
-    #: que la misma mano física da un `v_t` mayor y cuesta más declararla quieta.
-    #: Expresarla por segundo es el arreglo, y no se hizo aquí porque
-    #: `segmentation.velocity_threshold` es un **eje del barrido de calibración de
-    #: la Fase 2** (`src/lsm/cli/evaluate.py`): cambiarle la unidad invalida esa
-    #: calibración y pide su propia medición. Ver el ADR 0013.
-    velocity_threshold: float = Field(default=0.02, gt=0.0, le=100.0)
+    #: Hasta la v3 era por cuadro (0.02) y dependía de la tasa. Se convirtió
+    #: multiplicando por la tasa con la que se midió —30 fps, la del dataset
+    #: grabado—: 0.02 × 30 = 0.6. Con el descarte de repetidos del Bloque 1 los
+    #: cuadros quedaron al doble de distancia y el umbral por cuadro se volvió,
+    #: en la práctica, el doble de estricto; por segundo, no depende de eso.
+    velocity_threshold_per_s: float = Field(default=0.6, gt=0.0, le=1000.0)
 
     #: Cuánta quietud continuada hace falta para pasar de TRACKING a STABLE, en
     #: milisegundos. Es además el **piso** de la ventana que se clasifica.
@@ -223,15 +222,13 @@ class SegmentationConfig(_Section):
 
     # -- Camino dinámico (feature-spec.md §6.7, ADR 0015) ------------------- #
 
-    #: Velocidad `v_t` del §6.1 por encima de la cual un frame **cuenta como
-    #: movimiento** para el camino dinámico. Es la misma métrica que
-    #: `velocity_threshold`, no una segunda: lo que cambia es el umbral.
-    #:
-    #: Unidades de mano **por frame**, con la misma deuda anotada que
-    #: `velocity_threshold`: depende de la tasa. Tiene que ser ≥ que
-    #: `velocity_threshold` —se valida— para que ningún frame pueda contar a la
-    #: vez como quietud para STABLE y como movimiento para el candidato.
-    motion_threshold: float = Field(default=0.025, gt=0.0, le=100.0)
+    #: Velocidad por encima de la cual un frame **cuenta como movimiento** para
+    #: el camino dinámico, en unidades de mano **por segundo** (v4). Misma métrica
+    #: que `velocity_threshold_per_s`, otro umbral; tiene que ser ≥ que él —se
+    #: valida— para que ningún frame cuente a la vez como quietud para STABLE y
+    #: como movimiento para el candidato. Era 0.025 por cuadro, medido sobre el
+    #: dataset a 30 fps: 0.025 × 30 = 0.75.
+    motion_threshold_per_s: float = Field(default=0.75, gt=0.0, le=1000.0)
 
     #: Frames de movimiento que tiene que acumular una racha para pasar de
     #: TRACKING a DYNAMIC_CANDIDATE, en milisegundos. Cuenta frames móviles,
@@ -255,10 +252,11 @@ class SegmentationConfig(_Section):
 
     @model_validator(mode="after")
     def _coherencia_del_camino_dinamico(self) -> SegmentationConfig:
-        if self.motion_threshold < self.velocity_threshold:
+        if self.motion_threshold_per_s < self.velocity_threshold_per_s:
             msg = (
-                f"motion_threshold ({self.motion_threshold}) es menor que "
-                f"velocity_threshold ({self.velocity_threshold}): un mismo frame "
+                f"motion_threshold_per_s ({self.motion_threshold_per_s}) es menor "
+                f"que velocity_threshold_per_s ({self.velocity_threshold_per_s}): "
+                "un mismo frame "
                 "contaría a la vez como quietud para STABLE y como movimiento "
                 "para el candidato dinámico, y los dos caminos dejarían de ser "
                 "excluyentes"
@@ -476,6 +474,13 @@ class CaptureConfig(_Section):
     #: al transporte y no a la exposición. Se fija tras medir con
     #: `lsm-demo medir-camara`.
     fourcc: str | None = Field(default=None, min_length=4, max_length=4)
+
+    #: Exposición manual de la cámara (`CAP_PROP_EXPOSURE`), o `None` para la
+    #: automática. El sondeo de `lsm-demo medir-camara` dio ~16.6 fps nuevos en
+    #: toda configuración con exposición automática, con un intervalo de ~60 ms
+    #: que apunta a exposición larga (ADR 0017). En Windows suele ser log2 de
+    #: segundos: -6 ≈ 1/64 s. Se fija tras `medir-camara --exposicion`.
+    exposure: float | None = Field(default=None, ge=-20.0, le=10000.0)
 
     #: API de captura de OpenCV: `auto`, `MSMF`, `DSHOW` (Windows) o `V4L2`.
     backend: Literal["auto", "MSMF", "DSHOW", "V4L2"] = "auto"

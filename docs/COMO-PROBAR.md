@@ -509,6 +509,20 @@ cámara. Escribe `data/diagnostico/camara-<fecha>.md` con una tabla ordenada de
 mejor a peor por **fps nuevos**; la de arriba es la candidata para `capture.backend`,
 `capture.fourcc`, `capture.frame_width` y `capture.frame_height` en `config.yaml`.
 
+**Exposición manual.** Con la exposición automática ninguna configuración pasó
+de ~16.6 fps nuevos (ADR 0017). Para barrer exposiciones fijas sobre la
+configuración de `config.yaml`:
+
+```bash
+uv run lsm-demo medir-camara --exposicion=-5,-6,-7,-8
+```
+
+Con `=`: sin él, `-5` se lee como otra opción. En Windows los valores suelen ser
+log2 de segundos (-6 ≈ 1/64 s). La tabla añade la luminancia media y la
+exposición que el driver dice haber aceptado: si un valor sube los fps pero deja
+la imagen demasiado oscura, no sirve sin más luz. El elegido va a
+`capture.exposure`.
+
 Las filas de `MSMF` y `DSHOW` solo funcionan en Windows. Desde Windows, como la demo:
 
 ```powershell

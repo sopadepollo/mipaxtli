@@ -83,6 +83,9 @@ class Negotiated:
     fps: float
     #: Código de cuatro letras del formato entregado, o `""` si no se sabe.
     fourcc: str
+    #: `CAP_PROP_EXPOSURE` y `CAP_PROP_AUTO_EXPOSURE` leídos de vuelta.
+    exposure: float = 0.0
+    auto_exposure: float = 0.0
 
 
 @dataclass
@@ -120,6 +123,10 @@ class Camera:
     #: Tope de duplicados seguidos que se descartan antes de entregar uno igual.
     #: Sin tope, una imagen congelada colgaría el bucle en vez de verse congelada.
     max_consecutive_duplicates: int = 10
+    #: Exposición manual (`CAP_PROP_EXPOSURE`), o `None` para la automática. En
+    #: Windows (MSMF, DSHOW) el valor suele ser log2 de segundos: -5 ≈ 1/32 s,
+    #: -6 ≈ 1/64 s. Qué acepta el driver se lee de vuelta en `negotiated()`.
+    exposure: float | None = None
 
     _capture: Any = field(default=None, init=False, repr=False)
     _last_thumbnail: bytes = field(default=b"", init=False, repr=False)
@@ -148,6 +155,7 @@ class Camera:
             backend=config.backend,
             drop_duplicates=config.drop_duplicate_frames,
             max_consecutive_duplicates=config.max_consecutive_duplicates,
+            exposure=config.exposure,
         )
 
     def open(self) -> Camera:
@@ -183,6 +191,11 @@ class Camera:
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         capture.set(cv2.CAP_PROP_FPS, self.fps)
+        if self.exposure is not None:
+            # 0.25 es «manual» en la convención de V4L2 que OpenCV traslada a
+            # MSMF y DSHOW; si el driver no la acepta, `negotiated()` lo dice.
+            capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+            capture.set(cv2.CAP_PROP_EXPOSURE, self.exposure)
         self._capture = capture
         if self.drop_duplicates and self.thumbnail_px is None:
             msg = "drop_duplicates necesita thumbnail_px para reconocer duplicados"
@@ -205,6 +218,8 @@ class Camera:
             height=int(self._capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             fps=float(self._capture.get(cv2.CAP_PROP_FPS)),
             fourcc=fourcc if fourcc.isprintable() else "",
+            exposure=float(self._capture.get(cv2.CAP_PROP_EXPOSURE)),
+            auto_exposure=float(self._capture.get(cv2.CAP_PROP_AUTO_EXPOSURE)),
         )
 
     def read(self) -> CameraFrame:

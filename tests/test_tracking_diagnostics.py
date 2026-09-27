@@ -554,3 +554,24 @@ def test_una_repeticion_rehecha_cuenta_como_dos_intentos() -> None:
         ("J", 2, 2),
         ("J", 1, 4),
     ]
+
+
+def test_sondeo_reporta_luminancia_media_y_la_muestra_en_la_tabla() -> None:
+    from lsm.tracking_diagnostics import render_probes, summarize_probe
+
+    probe = summarize_probe(
+        'auto 1280x720 exposición -6.0',
+        'auto 1280x720 @ 30',
+        [0.0, 33.0, 66.0, 99.0],
+        [b'a', b'b', b'b', b'c'],
+        [0.2, 0.4, 0.4, 0.6],
+    )
+    assert probe.mean_luminance == pytest.approx(0.4)
+    assert '0.40' in render_probes([probe], {})
+
+
+def test_sondeo_sin_luminancias_no_inventa_una() -> None:
+    from lsm.tracking_diagnostics import summarize_probe
+
+    probe = summarize_probe('x', 'y', [0.0, 33.0], [b'a', b'b'])
+    assert probe.mean_luminance is None

@@ -84,7 +84,7 @@ TOP_PAIRS: Final = 15
 # La rejilla de calibración
 # --------------------------------------------------------------------------- #
 #
-# `features.trajectory_weight` y `segmentation.velocity_threshold` se barren
+# `features.trajectory_weight` y `segmentation.velocity_threshold_per_s` se barren
 # aunque **no puedan** mover el accuracy del camino estático: el primero solo
 # pondera el canal de trayectoria, que `static_knn` no usa, y el segundo solo lo
 # consume la máquina de estados, que sobre muestras ya recortadas no interviene.
@@ -107,7 +107,7 @@ _FULL_GRID: Final[tuple[Axis, ...]] = (
     # Tope en 0.025 y no 0.05 desde el ADR 0015: velocity_threshold no puede
     # superar a segmentation.motion_threshold, y el eje es inerte por
     # construccion para este camino, asi que el valor alto no medía nada.
-    Axis(path="segmentation.velocity_threshold", values=(0.01, 0.02, 0.025)),
+    Axis(path="segmentation.velocity_threshold_per_s", values=(0.3, 0.6, 0.75)),
 )
 
 _SMALL_GRID: Final[tuple[Axis, ...]] = (
@@ -116,7 +116,7 @@ _SMALL_GRID: Final[tuple[Axis, ...]] = (
     Axis(path="static_knn.min_margin", values=(0.50, 0.80)),
     Axis(path="quality.max_dispersion", values=(0.02, 0.32)),
     Axis(path="features.trajectory_weight", values=(0.0, 20.0)),
-    Axis(path="segmentation.velocity_threshold", values=(0.01, 0.025)),
+    Axis(path="segmentation.velocity_threshold_per_s", values=(0.3, 0.75)),
 )
 
 GRIDS: Final[dict[str, tuple[Axis, ...]]] = {
@@ -455,7 +455,7 @@ def _seccion_barrido(result: SweepResult | None) -> str:
             "nada, porque no participan en el camino estático. "
             "`features.trajectory_weight` solo pondera el canal de trayectoria "
             "(`feature-spec.md` §3.3) y `static_knn` consume la agregación del §2; "
-            "`segmentation.velocity_threshold` lo usa la máquina de estados para "
+            "`segmentation.velocity_threshold_per_s` lo usa la máquina de estados para "
             "decidir cuándo una ventana está quieta, y aquí las ventanas llegan "
             "ya recortadas. Que salgan planos está **medido**, no supuesto: el "
             "barrido vuelve a extraer las features de verdad al cambiar "
@@ -556,8 +556,8 @@ def _seccion_diagnostico(dataset: Dataset, config: Config) -> str:
         ],
         [
             "velocidad máxima",
-            "`segmentation.velocity_threshold`",
-            f"{config.segmentation.velocity_threshold}",
+            "`segmentation.velocity_threshold_per_s`",
+            f"{config.segmentation.velocity_threshold_per_s}",
             f"{_percentil(velocidades, 0.5):.4f}",
             f"{_percentil(velocidades, 0.95):.4f}",
             f"{max(velocidades, default=0.0):.4f}",
@@ -591,7 +591,8 @@ def _seccion_diagnostico(dataset: Dataset, config: Config) -> str:
             "## Diagnóstico empírico de umbrales",
             "",
             "Esta sección es lo que de verdad calibra los umbrales que el accuracy "
-            "no mueve. `velocity_threshold` y `min_trajectory_arc` no deciden nada "
+            "no mueve. `velocity_threshold_per_s` y `min_trajectory_arc` no deciden "
+            "nada "
             "sobre muestras ya recortadas, pero sí sobre el video en vivo de la "
             "Fase 3 y sobre qué se acepta al grabar — y hasta ahora sus valores "
             "eran, literalmente, «un punto de partida razonado, no medido».",

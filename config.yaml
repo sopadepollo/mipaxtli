@@ -155,7 +155,11 @@ segmentation:
   # unidades de mano por frame (definida en `docs/feature-spec.md` §6). Es
   # invariante a la distancia a la cámara: 0.02 significa "cada landmark se movió
   # menos del 2% del largo muñeca-nudillo entre frame y frame".
-  velocity_threshold: 0.02
+  # (v4, ADR 0017) EN UNIDADES DE MANO POR SEGUNDO: la máquina lo convierte a
+  # por cuadro con la tasa de la sesión. Era 0.02 por cuadro medido a 30 fps:
+  # 0.02 × 30 = 0.6. Por cuadro, el descarte de repetidos del Bloque 1 lo había
+  # vuelto el doble de estricto sin que nadie lo tocara.
+  velocity_threshold_per_s: 0.6
 
   # Cuánta quietud continuada hace falta para pasar de TRACKING a STABLE.
   # Subirlo reduce emisiones espurias durante el viaje de una letra a otra;
@@ -236,7 +240,9 @@ segmentation:
   # la tasa. Debe ser >= velocity_threshold (se valida). El p90 de v_t en las
   # estáticas grabadas es 0.027: por debajo de 0.025 el temblor de una mano
   # quieta empieza a contar como trazo.
-  motion_threshold: 0.025
+  # (v4) Por segundo. Era 0.025 por cuadro medido sobre el dataset a 30 fps:
+  # 0.025 × 30 = 0.75.
+  motion_threshold_per_s: 0.75
 
   # Frames de movimiento que una racha tiene que acumular para volverse
   # candidato. Cuenta frames móviles, NO consecutivos: la cámara duplica
@@ -338,6 +344,12 @@ capture:
   # entrega 16.4 fps reales, con luz y sin ella (ADR 0017). Se fija tras medir
   # con `lsm-demo medir-camara`; hasta entonces, el de siempre.
   fourcc: null
+
+  # Exposición manual (CAP_PROP_EXPOSURE), o null para la automática. Con la
+  # automática la webcam de referencia no pasa de ~16.6 fps nuevos (ADR 0017).
+  # En Windows suele ser log2 de segundos: -6 ≈ 1/64 s. Se fija tras
+  # `lsm-demo medir-camara --exposicion`.
+  exposure: null
 
   # API de captura de OpenCV: auto, MSMF, DSHOW (Windows) o V4L2. En Windows
   # DSHOW suele ser la única que entrega MJPG a 30 fps.

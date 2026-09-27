@@ -243,11 +243,12 @@ def classify_contexts(
     - Un hueco (frames sin mano) hereda el contexto del último cuadro con mano
       antes de él, **salvo** que empezara en DYNAMIC_CANDIDATE, que es
       exactamente el caso que descarta el trazo.
-    - QUIETA: con mano y `v_t < velocity_threshold`.
+    - QUIETA: con mano y velocidad bajo `velocity_threshold_per_s`, en
+      unidades por segundo con el intervalo real entre los dos cuadros.
     - OTRO: el resto.
     """
     pre_ms = config.diagnostics.pre_candidate_ms
-    threshold = config.segmentation.velocity_threshold
+    threshold = config.segmentation.velocity_threshold_per_s
 
     entradas = [
         r.wall_ms
@@ -266,7 +267,13 @@ def classify_contexts(
         if r.detected:
             if dinamico:
                 contexto = Context.DYNAMIC
-            elif r.velocity is not None and r.velocity < threshold:
+            elif (
+                r.velocity is not None
+                and i > 0
+                and r.wall_ms > records[i - 1].wall_ms
+                and r.velocity * 1000.0 / (r.wall_ms - records[i - 1].wall_ms)
+                < threshold
+            ):
                 contexto = Context.QUIET
             else:
                 contexto = Context.OTHER
@@ -690,7 +697,7 @@ def render_report(report: TrackingReport, metadata: dict[str, Any]) -> str:
             "DINAMICO: en DYNAMIC_CANDIDATE, en los "
             f"{metadata.get('pre_candidate_ms', '?')} ms previos a entrar, o en "
             "un hueco que empezó ahí. QUIETA: mano con v_t bajo "
-            "velocity_threshold. Un hueco hereda el contexto del cuadro anterior."
+            "velocity_threshold_per_s. Un hueco hereda el contexto del cuadro anterior."
         ),
         "",
         "## 2. Huecos",
@@ -878,6 +885,9 @@ class CameraProbe:
     interval_p50_ms: float | None
     interval_p95_ms: float | None
     error: str | None = None
+    #: Luminancia media de los cuadros, en `[0, 1]`: con exposición manual es
+    #: lo que dice si la imagen sigue siendo utilizable.
+    mean_luminance: float | None = None
 
     @property
     def fps(self) -> float | None:
@@ -899,6 +909,7 @@ def summarize_probe(
     negotiated: str,
     wall_ms: Sequence[float],
     thumbnails: Sequence[bytes],
+    luminances: Sequence[float] = (),
 ) -> CameraProbe:
     """Tasa entregada y tasa de cuadros nuevos de una configuración.
 
@@ -914,6 +925,7 @@ def summarize_probe(
         duplicates=sum(1 for a, b in pairwise(thumbnails) if a and a == b),
         interval_p50_ms=percentile(intervalos, 0.5),
         interval_p95_ms=percentile(intervalos, 0.95),
+        mean_luminance=sum(luminances) / len(luminances) if luminances else None,
     )
 
 
@@ -934,9 +946,10 @@ def render_probes(probes: Sequence[CameraProbe], metadata: dict[str, Any]) -> st
                 "fps nuevos",
                 "% repetidos",
                 "intervalo p50 / p95 (ms)",
+                "luminancia",
             ],
             (
-                [p.requested, p.error or p.negotiated, "—", "—", "—", "—"]
+                [p.requested, p.error or p.negotiated, "—", "—", "—", "—", "—"]
                 if p.error is not None
                 else [
                     p.requested,
@@ -946,6 +959,7 @@ def render_probes(probes: Sequence[CameraProbe], metadata: dict[str, Any]) -> st
                     _fmt(100.0 * p.duplicates / max(p.frames - 1, 1), "{:.1f}"),
                     f"{_fmt(p.interval_p50_ms, '{:.1f}')} / "
                     f"{_fmt(p.interval_p95_ms, '{:.1f}')}",
+                    _fmt(p.mean_luminance, "{:.2f}"),
                 ]
                 for p in ordenados
             ),

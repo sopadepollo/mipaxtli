@@ -76,7 +76,8 @@ class HandMismatchWatcher:
             quieta = (
                 isinstance(features, SequenceFeatures)
                 and bool(features.velocities)
-                and features.velocities[0] < self.config.segmentation.velocity_threshold
+                and features.velocities[0]
+                < self.config.segmentation.velocity_threshold_per_s / self.fps
             )
         contradice = (
             slot.detected_handedness is not None

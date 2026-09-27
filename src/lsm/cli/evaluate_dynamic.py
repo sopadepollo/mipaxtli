@@ -449,8 +449,8 @@ def _cabecera(corpus: Corpus, config: Config, protocol: Protocol) -> str:
             f"max_distance = {config.dtw.max_distance:g}"
         ),
         (
-            f"- segmentación: motion_threshold = "
-            f"{config.segmentation.motion_threshold:g}, motion_min_ms = "
+            f"- segmentación: motion_threshold_per_s = "
+            f"{config.segmentation.motion_threshold_per_s:g}, motion_min_ms = "
             f"{config.segmentation.motion_min_ms:g}, motion_confirm_low_ms = "
             f"{config.segmentation.motion_confirm_low_ms:g}, motion_max_ms = "
             f"{config.segmentation.motion_max_ms:g}"

@@ -260,6 +260,56 @@ y `motion_threshold` quedaron efectivamente el doble de estrictos. Pasarlos a
 unidades por segundo es el arreglo, y es un recalibrado de umbrales de las Fases
 2, 3 y 5: se propone, con esta evidencia, pero no se hace sin decisión.
 
+### Velocidad por segundo (SEGMENTATION_SPEC_VERSION 4)
+
+Decidido el 2026-09-27. Los dos umbrales de velocidad pasan a unidades de mano
+por segundo y la máquina los convierte a por cuadro con la tasa congelada de la
+sesión, igual que los umbrales en milisegundos: `umbral_cuadro = umbral / fps`.
+La métrica `v_t` del §6.1 no cambia.
+
+**No se recalibró nada: se convirtió.** Cada umbral se multiplicó por la tasa a
+la que se midió. Los dos salieron del dataset grabado (la distribución de `v_t`
+del diagnóstico de la Fase 2 y el barrido del detector de movimiento del ADR
+0015), grabado a ~30 cuadros por segundo entregados:
+
+| campo v3 (por cuadro) | × 30 fps | campo v4 (por segundo) |
+|---|---|---|
+| `velocity_threshold` 0.02 | = | `velocity_threshold_per_s` 0.6 |
+| `motion_threshold` 0.025 | = | `motion_threshold_per_s` 0.75 |
+
+Los campos cambian de nombre a propósito: un `config.yaml` viejo con `0.02` falla
+al cargar en vez de leerse como 0.02 manos por segundo. Sobre el dataset, que se
+reproduce a la tasa nominal de 30 fps, los umbrales por cuadro son exactamente
+los de antes: el eval de Fase 2 () dio lo mismo —accuracy 0.9261, macro 0.9201, UNKNOWN 0.0573— y el replay de Fase 5 () dio resultados idénticos a los previos en todo salvo la versión y el commit: 621 de 622 trazos enteros, J 100/100, accuracy 0.7926. En vivo, a 16.6 fps nuevos, el umbral por
+cuadro sube a 0.036 y 0.045, que es lo que compensa el doble de separación entre
+cuadros que dejó el descarte de repetidos.
+
+`capture.exposure` (manual, `None` = automática) y
+`lsm-demo medir-camara --exposicion=...` quedan para medir si la exposición es lo
+que limita la cámara a 16.6 fps.
+
+## Alternativa anotada: ventana deslizante con spotting por DTW
+
+**No implementada.** Si tras velocidad por segundo, exposición fija y la
+tolerancia a huecos del Bloque 2 el camino dinámico sigue sin entregar los
+trazos, se evaluará reemplazar la detección de fin de trazo —DYNAMIC_CANDIDATE
+esperando reposo— por **spotting**: una ventana deslizante de duración fija que
+se compara con DTW contra las plantillas en cada paso, y emite cuando el costo
+cae bajo un umbral durante un mínimo de pasos, sin necesitar que la mano se
+detenga.
+
+**Criterio de activación.** En los dos diagnósticos guiados (luz habitual y
+lámpara) repetidos con esas tres correcciones, la fracción de repeticiones que
+entregan **exactamente un trazo completo** al clasificador (columna «trazos» = 1
+en la sección 5 del reporte, sobre las repeticiones no descartadas) queda por
+debajo de **~80%** en el conjunto de las letras dinámicas evaluables. Se mira
+además por letra: si la falta se concentra en una o dos letras, primero se
+revisa por qué antes de cambiar el mecanismo entero.
+
+Lo que costaría: una comparación DTW por paso de ventana contra todas las
+plantillas (hoy es una por trazo), una segunda puerta para no emitir dos veces
+el mismo trazo, y reescribir el §6.7 del contrato.
+
 Queda para después de medir: si con los cuadros ya deduplicados vuelve a
 funcionar el criterio de frames **consecutivos** en movimiento (ADR 0015, punto
 3), y si conviene bajar `hands.min_tracking_confidence`.

@@ -28,7 +28,7 @@ def test_config_por_defecto_cubre_los_umbrales_del_contrato() -> None:
 
     segmentation = config.segmentation
     assert segmentation.buffer_ms > 0
-    assert segmentation.velocity_threshold > 0.0
+    assert segmentation.velocity_threshold_per_s > 0.0
     assert segmentation.stable_ms > 0
     assert segmentation.min_confidence > 0.0
     assert segmentation.emit_cooldown_ms > 0
@@ -163,12 +163,22 @@ def test_motion_threshold_no_puede_quedar_bajo_velocity_threshold() -> None:
     """Si quedara por debajo, un mismo frame contaría como quietud para STABLE y
     como movimiento para el candidato: los dos caminos dejarían de excluirse."""
     Config.model_validate(
-        {"segmentation": {"velocity_threshold": 0.02, "motion_threshold": 0.02}}
+        {
+            "segmentation": {
+                "velocity_threshold_per_s": 0.6,
+                "motion_threshold_per_s": 0.6,
+            }
+        }
     )
 
     with pytest.raises(ValidationError, match="excluyentes"):
         Config.model_validate(
-            {"segmentation": {"velocity_threshold": 0.03, "motion_threshold": 0.025}}
+            {
+                "segmentation": {
+                    "velocity_threshold_per_s": 0.9,
+                    "motion_threshold_per_s": 0.75,
+                }
+            }
         )
 
 
@@ -194,13 +204,13 @@ def test_config_yaml_trae_los_umbrales_del_camino_dinamico() -> None:
     config = load_config(REPO_ROOT / "config.yaml")
 
     for campo in (
-        "motion_threshold",
+        "motion_threshold_per_s",
         "motion_min_ms",
         "motion_confirm_low_ms",
         "motion_max_ms",
         "max_distance",
     ):
         assert f"{campo}:" in texto
-    assert config.segmentation.motion_threshold >= (
-        config.segmentation.velocity_threshold
+    assert config.segmentation.motion_threshold_per_s >= (
+        config.segmentation.velocity_threshold_per_s
     )

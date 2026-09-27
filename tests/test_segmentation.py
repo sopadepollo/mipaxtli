@@ -73,7 +73,7 @@ CONFIG = Config.model_validate(
             "missing_to_idle_ms": _ms(2),
             "min_confidence": 0.6,
             "high_confidence": 0.9,
-            "velocity_threshold": 0.02,
+            "velocity_threshold_per_s": 0.02 * FPS,
             # El camino dinámico, apartado de estos tests: el tránsito más largo
             # que usan son 12 frames de viaje, y 20 frames móviles no los
             # alcanza ninguno. Los tests del camino dinámico llevan su propia
@@ -517,7 +517,7 @@ def test_la_ventana_clasificada_solo_contiene_frames_estables() -> None:
     stream = [*moving_frames(10), *still_frames(3)]
 
     for window in ventanas(run(stream)):
-        assert max(velocidades(window)) < CONFIG.segmentation.velocity_threshold
+        assert max(velocidades(window)) < UMBRALES.velocity_threshold
 
 
 def test_la_ventana_es_el_tramo_estable_y_no_el_buffer_entero() -> None:
@@ -550,7 +550,7 @@ def test_la_ventana_sigue_a_stable_run_y_no_a_un_numero_fijo() -> None:
 
     assert emitidas
     assert len(emitidas[0]) == 5
-    assert max(velocidades(emitidas[0])) < CONFIG.segmentation.velocity_threshold
+    assert max(velocidades(emitidas[0])) < UMBRALES.velocity_threshold
 
 
 def test_la_ventana_se_topa_un_frame_por_debajo_del_buffer() -> None:
@@ -763,8 +763,8 @@ DYNAMIC_CONFIG = Config.model_validate(
     {
         "segmentation": {
             **CONFIG.segmentation.model_dump(),
-            "velocity_threshold": 0.02,
-            "motion_threshold": 0.025,
+            "velocity_threshold_per_s": 0.02 * FPS,
+            "motion_threshold_per_s": 0.025 * FPS,
             "motion_min_ms": _ms(4),
             "motion_confirm_low_ms": _ms(4),
             "motion_max_ms": _ms(30),

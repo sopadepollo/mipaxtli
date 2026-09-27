@@ -117,7 +117,7 @@ def test_el_barrido_distingue_los_ejes_efectivos_de_los_inertes(reporte: Path) -
     datos = json.loads((reporte / "calibracion-fase2.json").read_text(encoding="utf-8"))
 
     assert "features.trajectory_weight" in datos["inert"]
-    assert "segmentation.velocity_threshold" in datos["inert"]
+    assert "segmentation.velocity_threshold_per_s" in datos["inert"]
     assert datos["effective"]
 
 

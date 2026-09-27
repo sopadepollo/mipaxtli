@@ -303,7 +303,9 @@ def escribir_diagnostico(
             for campo, valor in config.hands.model_dump(mode="json").items()
         },
         "segmentation.min_detection_score": config.segmentation.min_detection_score,
-        "segmentation.motion_threshold": config.segmentation.motion_threshold,
+        "segmentation.motion_threshold_per_s": (
+            config.segmentation.motion_threshold_per_s
+        ),
         "segmentation.motion_min_ms": config.segmentation.motion_min_ms,
         "segmentation.motion_confirm_low_ms": config.segmentation.motion_confirm_low_ms,
         "capture.camera_fps (pedidos)": config.capture.camera_fps,
@@ -551,6 +553,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "la cámara; con esto, si la tubería es la que limita"
         ),
     )
+    sondeo.add_argument(
+        "--exposicion",
+        default=None,
+        help=(
+            "barre exposiciones manuales en vez de formatos: valores separados "
+            "por comas (p. ej. -5,-6,-7,-8, log2 de segundos en Windows), sobre "
+            "la configuración de cámara de config.yaml. Incluye la automática "
+            "como referencia"
+        ),
+    )
     # También aquí, para que `diagnosticar --mano derecha` funcione además de
     # `--mano derecha diagnosticar`. SUPPRESS: si no se da, no pisa el de arriba.
     guiado.add_argument(
@@ -652,7 +664,31 @@ def _medir_camara(config: Config, args: argparse.Namespace) -> int:
         if detector is not None:
             detector.open()
         try:
-            for backend in _SONDEO_BACKENDS:
+            if args.exposicion is not None:
+                valores: list[float | None] = [None] + [
+                    float(v) for v in args.exposicion.split(",") if v.strip()
+                ]
+                for exposicion in valores:
+                    pedido = (
+                        f"{config.capture.backend} "
+                        f"{config.capture.frame_width}x{config.capture.frame_height} "
+                        f"exposición {'auto' if exposicion is None else exposicion}"
+                    )
+                    print(f"midiendo {pedido} ...", flush=True)
+                    sondeos.append(
+                        _sondear(
+                            config,
+                            pedido,
+                            backend=config.capture.backend,
+                            formato=config.capture.fourcc,
+                            ancho=config.capture.frame_width,
+                            alto=config.capture.frame_height,
+                            segundos=segundos,
+                            detector=detector,
+                            exposicion=exposicion,
+                        )
+                    )
+            for backend in _SONDEO_BACKENDS if args.exposicion is None else ():
                 for formato in _SONDEO_FORMATOS:
                     for ancho, alto in _SONDEO_RESOLUCIONES:
                         pedido = f"{backend} {formato or 'driver'} {ancho}x{alto}"
@@ -705,6 +741,7 @@ def _sondear(
     alto: int,
     segundos: float,
     detector: HandDetector | None,
+    exposicion: float | None = None,
 ) -> CameraProbe:
     camara = Camera(
         index=config.capture.camera_index,
@@ -715,6 +752,7 @@ def _sondear(
         fourcc=formato,
         backend=backend,
         drop_duplicates=False,
+        exposure=exposicion,
     )
     try:
         with camara:
@@ -723,6 +761,7 @@ def _sondear(
                 camara.read()
             tiempos: list[float] = []
             miniaturas: list[bytes] = []
+            luces: list[float] = []
             inicio = time.perf_counter()
             while time.perf_counter() - inicio < segundos:
                 frame = camara.read()
@@ -730,6 +769,7 @@ def _sondear(
                     detector.detect(frame.rgb)
                 tiempos.append(time.perf_counter() * 1000.0)
                 miniaturas.append(frame.thumbnail)
+                luces.append(frame.mean_luminance)
     except CameraError as error:
         return CameraProbe(
             requested=pedido,
@@ -745,10 +785,12 @@ def _sondear(
         pedido,
         (
             f"{aceptado.backend} {aceptado.fourcc or '?'} "
-            f"{aceptado.width}x{aceptado.height} @ {aceptado.fps:.0f}"
+            f"{aceptado.width}x{aceptado.height} @ {aceptado.fps:.0f} · "
+            f"exp {aceptado.exposure:g} (auto {aceptado.auto_exposure:g})"
         ),
         tiempos,
         miniaturas,
+        luces,
     )
 
 

@@ -619,7 +619,7 @@ class GridPoint:
 STRUCTURALLY_INERT: Final[frozenset[str]] = frozenset(
     {
         "features.trajectory_weight",
-        "segmentation.velocity_threshold",
+        "segmentation.velocity_threshold_per_s",
         "dtw.band_radius",
         "dtw.min_source_frames",
     }
