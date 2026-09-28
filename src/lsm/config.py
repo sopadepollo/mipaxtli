@@ -168,16 +168,24 @@ class SegmentationConfig(_Section):
     min_detection_score: float = Field(default=0.5, gt=0.0, le=1.0)
 
     #: Velocidad por debajo de la cual se considera que la mano está quieta, en
-    #: unidades de mano **por segundo** (SEGMENTATION_SPEC_VERSION 4, ADR 0017).
-    #: La máquina la convierte a unidades por cuadro con la tasa congelada de la
-    #: sesión, igual que los umbrales en milisegundos (`FrameThresholds`).
+    #: unidades de mano **por segundo**, medida contra el cuadro de hace
+    #: `velocity_window_ms` (§6.1, SEGMENTATION_SPEC_VERSION 5, ADR 0017).
     #:
-    #: Hasta la v3 era por cuadro (0.02) y dependía de la tasa. Se convirtió
-    #: multiplicando por la tasa con la que se midió —30 fps, la del dataset
-    #: grabado—: 0.02 × 30 = 0.6. Con el descarte de repetidos del Bloque 1 los
-    #: cuadros quedaron al doble de distancia y el umbral por cuadro se volvió,
-    #: en la práctica, el doble de estricto; por segundo, no depende de eso.
-    velocity_threshold_per_s: float = Field(default=0.6, gt=0.0, le=1000.0)
+    #: 0.55 (v5) sale de la prueba de reposo del 2026-09-28, no de convertir
+    #: unidades: el p95 de la mano quieta con la ventana de 100 ms fue 0.33 en la
+    #: posición inicial de la J y 0.52 en una estática; queda justo por encima del
+    #: mayor. En la v4 era 0.6 medido por pares de cuadros, y a 28 fps la J quieta
+    #: lo superaba en dos de cada tres cuadros: el temblor de MediaPipe es por
+    #: cuadro y, por segundo, crecía con la tasa.
+    velocity_threshold_per_s: float = Field(default=0.55, gt=0.0, le=1000.0)
+
+    #: Contra qué cuadro se mide la velocidad del §6.1, en milisegundos: el
+    #: actual contra el de hace esto, dividido entre el tiempo transcurrido
+    #: (v5). Con pares consecutivos el temblor por cuadro de MediaPipe pesaba
+    #: más cuanto más alta la tasa; contra una ventana fija pesa lo mismo a
+    #: cualquier tasa. Se convierte a cuadros con la tasa congelada, como los
+    #: demás umbrales en milisegundos, y no puede exceder `buffer_ms`.
+    velocity_window_ms: float = Field(default=100.0, gt=0.0, le=2000.0)
 
     #: Cuánta quietud continuada hace falta para pasar de TRACKING a STABLE, en
     #: milisegundos. Es además el **piso** de la ventana que se clasifica.
@@ -228,7 +236,14 @@ class SegmentationConfig(_Section):
     #: valida— para que ningún frame cuente a la vez como quietud para STABLE y
     #: como movimiento para el candidato. Era 0.025 por cuadro, medido sobre el
     #: dataset a 30 fps: 0.025 × 30 = 0.75.
-    motion_threshold_per_s: float = Field(default=0.75, gt=0.0, le=1000.0)
+    #:
+    #: **0.60, PROVISIONAL** (v5, ADR 0017): con la velocidad contra la ventana
+    #: el diente de sierra del dataset —grabado a ~16 fps con cuadros casi
+    #: repetidos— ya no sostiene los tramos lentos de la K y la Z, y con 0.75
+    #: el replay partía 68 trazos. 0.60 con `motion_confirm_low_ms` = 667 deja
+    #: 620 de 622 enteros. La referencia final es el diagnóstico en vivo y el
+    #: dataset regrabado, no este replay.
+    motion_threshold_per_s: float = Field(default=0.60, gt=0.0, le=1000.0)
 
     #: Frames de movimiento que tiene que acumular una racha para pasar de
     #: TRACKING a DYNAMIC_CANDIDATE, en milisegundos. Cuenta frames móviles,
@@ -242,7 +257,11 @@ class SegmentationConfig(_Section):
     #: dispara DYNAMIC_EMIT; en TRACKING es lo que mata una racha que no llegó a
     #: candidato. Tiene que ser más largo que el freno de un cambio de dirección
     #: de la Z o del gancho de la J, o esas letras se parten por la mitad.
-    motion_confirm_low_ms: float = Field(default=400.0, gt=0.0, le=60000.0)
+    #:
+    #: **667, PROVISIONAL** (v5, ADR 0017): era 400. Es también la latencia de
+    #: una letra dinámica y de la letra que llega tras un tránsito largo. Si en
+    #: vivo la K no se parte, se propone bajarlo hacia 400.
+    motion_confirm_low_ms: float = Field(default=667.0, gt=0.0, le=60000.0)
 
     #: Duración máxima de un candidato dinámico, en milisegundos, contada desde
     #: el primer frame del trazo. Por encima se descarta sin clasificar y se
@@ -282,6 +301,13 @@ class SegmentationConfig(_Section):
 
     @model_validator(mode="after")
     def _coherencia_entre_umbrales(self) -> SegmentationConfig:
+        if self.velocity_window_ms > self.buffer_ms:
+            msg = (
+                f"velocity_window_ms ({self.velocity_window_ms}) excede buffer_ms "
+                f"({self.buffer_ms}): el buffer no guarda el cuadro contra el que "
+                "se mide la velocidad"
+            )
+            raise ValueError(msg)
         if self.stable_ms > self.buffer_ms:
             msg = (
                 f"stable_ms ({self.stable_ms}) excede buffer_ms "
@@ -455,11 +481,9 @@ class DiagnosticsConfig(_Section):
     #: «se mueve» una mano que no se mueve, o sea el temblor de MediaPipe.
     rest_ms: float = Field(default=5000.0, gt=0.0, le=60000.0)
 
-    #: Ventana con la que la prueba de reposo mide además la velocidad entre el
-    #: cuadro actual y el de hace esta cantidad de milisegundos, dividida entre
-    #: el tiempo real transcurrido. Si el temblor es por cuadro, esta velocidad
-    #: no crece con la tasa y la de pares consecutivos sí (ADR 0017).
-    rest_velocity_window_ms: float = Field(default=100.0, gt=0.0, le=2000.0)
+    #: Lo que se descarta al principio de cada postura de reposo, en ms: la
+    #: mano todavía se está acomodando tras pulsar ESPACIO.
+    rest_settle_ms: float = Field(default=1000.0, ge=0.0, le=60000.0)
 
 
 class CaptureConfig(_Section):

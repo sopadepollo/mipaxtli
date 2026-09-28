@@ -19,12 +19,12 @@ argumento para convertir `hands.mismatch_ms` a cuadros.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 
 from lsm.config import Config
-from lsm.features import SequenceFeatures, extract_sequence_features
-from lsm.segmentation import frames_from_ms
-from lsm.types import FrameSlot, Handedness, RawFrame, Sequence
+from lsm.segmentation import frames_from_ms, window_velocity
+from lsm.types import FrameSlot, Handedness, RawFrame
 
 
 def input_looks_unmirrored(frame: RawFrame, raised: Handedness) -> bool:
@@ -56,7 +56,7 @@ class HandMismatchWatcher:
     declared: Handedness
     fps: float
     _run: int = field(default=0, init=False)
-    _previous: RawFrame | None = field(default=None, init=False, repr=False)
+    _recent: deque[RawFrame] = field(default_factory=deque, init=False, repr=False)
 
     @property
     def frames_needed(self) -> int:
@@ -65,25 +65,23 @@ class HandMismatchWatcher:
     def observe(self, slot: FrameSlot) -> bool:
         if not isinstance(slot, RawFrame):
             self._run = 0
-            self._previous = None
+            self._recent.clear()
             return False
 
-        quieta = False
-        if self._previous is not None:
-            features = extract_sequence_features(
-                Sequence(frames=(self._previous, slot)), self.config
-            )
-            quieta = (
-                isinstance(features, SequenceFeatures)
-                and bool(features.velocities)
-                and features.velocities[0]
-                < self.config.segmentation.velocity_threshold_per_s / self.fps
-            )
+        # La misma velocidad que la máquina de estados (§6.1, v5).
+        ventana = frames_from_ms(self.config.segmentation.velocity_window_ms, self.fps)
+        self._recent.append(slot)
+        while len(self._recent) > ventana + 1:
+            self._recent.popleft()
+        velocidad = window_velocity(self._recent, ventana, self.config)
+        quieta = (
+            velocidad is not None
+            and velocidad < self.config.segmentation.velocity_threshold_per_s / self.fps
+        )
         contradice = (
             slot.detected_handedness is not None
             and slot.detected_handedness is not self.declared
             and slot.handedness_score >= self.config.hands.mismatch_min_score
         )
         self._run = self._run + 1 if quieta and contradice else 0
-        self._previous = slot
         return self._run >= self.frames_needed

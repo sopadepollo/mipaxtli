@@ -310,6 +310,7 @@ def escribir_diagnostico(
         "segmentation.velocity_threshold_per_s": (
             config.segmentation.velocity_threshold_per_s
         ),
+        "segmentation.velocity_window_ms": config.segmentation.velocity_window_ms,
         "segmentation.motion_min_ms": config.segmentation.motion_min_ms,
         "segmentation.motion_confirm_low_ms": config.segmentation.motion_confirm_low_ms,
         "capture.camera_fps (pedidos)": config.capture.camera_fps,
@@ -323,9 +324,7 @@ def escribir_diagnostico(
         if diagnostico.guiada.rest_poses:
             metadata["posturas de reposo"] = " ".join(diagnostico.guiada.rest_poses)
             metadata["diagnostics.rest_ms"] = config.diagnostics.rest_ms
-            metadata["diagnostics.rest_velocity_window_ms"] = (
-                config.diagnostics.rest_velocity_window_ms
-            )
+            metadata["diagnostics.rest_settle_ms"] = config.diagnostics.rest_settle_ms
         metadata["repeticiones descartadas"] = (
             ", ".join(f"{letra}#{n}" for letra, n in diagnostico.guiada.discarded)
             or "ninguna"

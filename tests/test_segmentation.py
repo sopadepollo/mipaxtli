@@ -74,6 +74,9 @@ CONFIG = Config.model_validate(
             "min_confidence": 0.6,
             "high_confidence": 0.9,
             "velocity_threshold_per_s": 0.02 * FPS,
+            # Un cuadro: la velocidad del §6.1 entre pares consecutivos. Estos
+            # tests son de la lógica de la máquina; la ventana tiene los suyos.
+            "velocity_window_ms": _ms(1),
             # El camino dinámico, apartado de estos tests: el tránsito más largo
             # que usan son 12 frames de viaje, y 20 frames móviles no los
             # alcanza ninguno. Los tests del camino dinámico llevan su propia
@@ -764,6 +767,9 @@ DYNAMIC_CONFIG = Config.model_validate(
         "segmentation": {
             **CONFIG.segmentation.model_dump(),
             "velocity_threshold_per_s": 0.02 * FPS,
+            # Un cuadro: la velocidad del §6.1 entre pares consecutivos. Estos
+            # tests son de la lógica de la máquina; la ventana tiene los suyos.
+            "velocity_window_ms": _ms(1),
             "motion_threshold_per_s": 0.025 * FPS,
             "motion_min_ms": _ms(4),
             "motion_confirm_low_ms": _ms(4),
@@ -1067,5 +1073,5 @@ def test_los_umbrales_del_camino_dinamico_se_convierten_a_cuadros() -> None:
     umbrales = FrameThresholds.from_config(Config(), fps=30.0)
 
     assert umbrales.motion_min_frames == 10
-    assert umbrales.motion_confirm_low_frames == 12
+    assert umbrales.motion_confirm_low_frames == 20  # 667 ms, v5 provisional
     assert umbrales.motion_max_frames == 120

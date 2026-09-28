@@ -467,8 +467,12 @@ mano quieta: una estática (la A) y la posición inicial de la J, palma de lado.
 Cada una se arranca con **ESPACIO**, dura `diagnostics.rest_ms` (5 s) y avanza
 sola; **BACKSPACE** la reinicia. El reporte añade la sección 6: velocidad de la
 mano quieta en unidades por segundo (p50 / p95 / máx), por pares de cuadros y
-contra el cuadro de hace `diagnostics.rest_velocity_window_ms` (100 ms), y qué
-fracción supera `velocity_threshold_per_s` y `motion_threshold_per_s`. Para
+contra el cuadro de hace `segmentation.velocity_window_ms` (100 ms) —la que usa la
+máquina desde la v5—, y qué fracción supera `velocity_threshold_per_s` y
+`motion_threshold_per_s`. Cuenta el último intento de cada postura, sin sus
+primeros `diagnostics.rest_settle_ms` (1 s), en que la mano se acomoda. Si te
+mueves a mitad de una postura, reiníciala: el reporte no puede distinguir un
+ajuste de la mano de su temblor. Para
 hacer solo esa prueba, o solo las letras:
 
 ```bash
@@ -480,6 +484,10 @@ En pantalla, abajo, dice qué letra hacer y cuántas van. **ESPACIO** da la
 repetición por hecha, **BACKSPACE** la descarta y la vuelve a pedir, **q**
 termina (lo registrado hasta ese momento se escribe igual). Hacer cada letra
 como en un deletreo normal, con la mano quieta un momento antes y después.
+
+La sección 5.1 del reporte da, por letra, los intentos con el trazo entero,
+partido o perdido, y la latencia entre el último cuadro en movimiento y la
+entrega del trazo (p50 / p90 / máx, en ms).
 
 Al salir escribe en `data/diagnostico/<fecha>-<iluminacion>/`:
 

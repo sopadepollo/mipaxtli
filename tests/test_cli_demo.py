@@ -131,16 +131,20 @@ VIAJE = UMBRALES.buffer_size
 
 #: Un tránsito que se queda por debajo de `motion_min`: el viaje suma sus frames
 #: más el salto de llegada a la quietud, y con `motion_min` frames móviles se
-#: volvería candidato.
-VIAJE_CORTO = UMBRALES.motion_min_frames - 2
+#: volvería candidato. Desde la v5 la velocidad de un frame es la de los últimos
+#: `velocity_window_frames` (§6.1): tras una parada en seco la mano sigue
+#: «moviéndose» `ARRASTRE` frames más, que también suman.
+ARRASTRE = UMBRALES.velocity_window_frames - 1
+VIAJE_CORTO = UMBRALES.motion_min_frames - 2 - ARRASTRE
 
 #: Frames de mano quieta por letra, sumados término a término:
 #:
-#: - `motion_confirm_low_frames + 1`: el primer frame quieto gasta todavía la
-#:   velocidad del viaje; los siguientes son la espera hasta la primera
-#:   clasificación. Como `VIAJE` es un candidato dinámico, esa espera es el
-#:   reposo que lo cierra —`motion_confirm_low_frames`— y no `stable_frames`:
-#:   la letra sale en el frame siguiente al rechazo del trazo (ADR 0015).
+#: - `motion_confirm_low_frames + 1 + ARRASTRE`: los primeros frames quietos
+#:   gastan todavía la velocidad del viaje —uno, más los de la ventana—; los
+#:   siguientes son la espera hasta la primera clasificación. Como `VIAJE` es un
+#:   candidato dinámico, esa espera es el reposo que lo cierra
+#:   —`motion_confirm_low_frames`— y no `stable_frames`: la letra sale en el
+#:   frame siguiente al rechazo del trazo (ADR 0015).
 #: - `+ emit_cooldown_frames`: el cooldown de EMIT, durante el cual no se clasifica.
 #: - `+ stable_frames`: lo que tarda la ventana en volver a declararse estable al
 #:   salir del cooldown.
@@ -153,7 +157,7 @@ VIAJE_CORTO = UMBRALES.motion_min_frames - 2
 #: esa propiedad, que es la mitad del criterio. Uno más largo solo acumula más
 #: rechazos por `REPEATED_LETTER`, ninguna emisión de más.
 QUIETO = (
-    (UMBRALES.motion_confirm_low_frames + 1)
+    (UMBRALES.motion_confirm_low_frames + 1 + ARRASTRE)
     + UMBRALES.emit_cooldown_frames
     + UMBRALES.stable_frames
     + 1
@@ -286,13 +290,14 @@ def test_ninguna_sena_se_parte_en_dos_ni_se_funde_con_la_siguiente() -> None:
     dinamicos = [e for e in stream if isinstance(e, WindowDynamic)]
     assert len(dinamicos) == len(PALABRA) - 1
     assert set(rechazos_estaticos(stream)) == {RejectionReason.REPEATED_LETTER}
-    # Cuatro y no cinco: la `C` del corpus sintético se clasifica con 0.743,
-    # por debajo de `high_confidence`, así que acumula evidencia hasta agotar la
-    # ventana y emite en el frame 23 de su bloque en vez de en el 5. Se le acaba
-    # el bloque antes de la segunda oportunidad. Las otras cuatro señas emiten
-    # con la ventana mínima y sí la tienen. Ver la emisión progresiva en
-    # `lsm.segmentation` y `docs/adr/0013-la-ventana-mezclada.md`.
-    assert len(rechazos_estaticos(stream)) == 4
+    # Una por seña. La `C` del corpus sintético se clasifica con 0.743, por
+    # debajo de `high_confidence`, así que acumula evidencia hasta agotar la
+    # ventana y emite en el frame 23 de su bloque en vez de en el 5. Con
+    # `motion_confirm_low_ms` = 400 el bloque se le acababa antes de la segunda
+    # oportunidad y eran cuatro; con 667 (v5, ADR 0017) `QUIETO` es más largo y
+    # también la tiene. Ver la emisión progresiva en `lsm.segmentation` y
+    # `docs/adr/0013-la-ventana-mezclada.md`.
+    assert len(rechazos_estaticos(stream)) == len(PALABRA)
 
 
 def test_la_mano_que_viaja_no_escribe_nada() -> None:

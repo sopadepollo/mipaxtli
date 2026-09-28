@@ -114,7 +114,7 @@ class FrameRecord:
     #: (`capture.drop_duplicate_frames`, Bloque 1).
     skipped_duplicates: int = 0
     #: Velocidad entre este cuadro y el más reciente con al menos
-    #: `diagnostics.rest_velocity_window_ms` de antigüedad, sin huecos entre
+    #: `segmentation.velocity_window_ms` de antigüedad, sin huecos entre
     #: ellos, en unidades de mano **por segundo** de reloj real.
     velocity_window: float | None = None
 
@@ -220,7 +220,7 @@ class TrackingRecorder:
         if frame is None:
             self._recent.clear()
             return None
-        ventana = self.config.diagnostics.rest_velocity_window_ms
+        ventana = self.config.segmentation.velocity_window_ms
         # El más reciente que ya tenga la antigüedad pedida; los anteriores sobran.
         base: tuple[float, RawFrame] | None = None
         while self._recent and wall_ms - self._recent[0][0] >= ventana:
@@ -283,8 +283,9 @@ def classify_contexts(
     - Un hueco (frames sin mano) hereda el contexto del último cuadro con mano
       antes de él, **salvo** que empezara en DYNAMIC_CANDIDATE, que es
       exactamente el caso que descarta el trazo.
-    - QUIETA: con mano y velocidad bajo `velocity_threshold_per_s`, en
-      unidades por segundo con el intervalo real entre los dos cuadros.
+    - QUIETA: con mano y velocidad bajo `velocity_threshold_per_s`, medida
+      como la máquina desde la v5: contra el cuadro de hace `velocity_window_ms`,
+      por segundo de reloj real (`FrameRecord.velocity_window`).
     - OTRO: el resto.
     """
     pre_ms = config.diagnostics.pre_candidate_ms
@@ -307,13 +308,7 @@ def classify_contexts(
         if r.detected:
             if dinamico:
                 contexto = Context.DYNAMIC
-            elif (
-                r.velocity is not None
-                and i > 0
-                and r.wall_ms > records[i - 1].wall_ms
-                and r.velocity * 1000.0 / (r.wall_ms - records[i - 1].wall_ms)
-                < threshold
-            ):
+            elif r.velocity_window is not None and r.velocity_window < threshold:
                 contexto = Context.QUIET
             else:
                 contexto = Context.OTHER
@@ -470,6 +465,47 @@ class RepetitionSummary:
     interrupted: int
     too_long: int
     emitted: tuple[str, ...]
+    #: Por cada trazo entregado (`WindowDynamic`): ms de reloj real entre el
+    #: último cuadro con velocidad de ventana ≥ `motion_threshold_per_s` y la
+    #: entrega. Es la espera de `motion_confirm_low_ms` tal como se vivió.
+    stroke_latency_ms: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LetterSummary:
+    """Una letra de la sesión guiada, sumando sus intentos."""
+
+    letter: str
+    attempts: int
+    #: Intentos con exactamente un trazo entregado.
+    whole: int
+    #: Intentos con más de uno: la letra se partió.
+    split: int
+    #: Intentos sin ninguno.
+    lost: int
+    stroke_latency_ms: tuple[float, ...]
+
+
+def summarize_letters(
+    repetitions: Sequence[RepetitionSummary],
+) -> tuple[LetterSummary, ...]:
+    """Trazos enteros, partidos y perdidos por letra, en orden de aparición."""
+    filas: list[LetterSummary] = []
+    for letra in dict.fromkeys(r.prompt for r in repetitions):
+        propias = [r for r in repetitions if r.prompt == letra]
+        filas.append(
+            LetterSummary(
+                letter=letra,
+                attempts=len(propias),
+                whole=sum(1 for r in propias if r.strokes == 1),
+                split=sum(1 for r in propias if r.strokes > 1),
+                lost=sum(1 for r in propias if r.strokes == 0),
+                stroke_latency_ms=tuple(
+                    ms for r in propias for ms in r.stroke_latency_ms
+                ),
+            )
+        )
+    return tuple(filas)
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,7 +519,8 @@ class RestSummary:
     #: unidades de mano por segundo: lo que la máquina compara hoy con
     #: `velocity_threshold_per_s` (v4).
     pair_per_s: tuple[float, ...]
-    #: La misma velocidad contra el cuadro de hace `rest_velocity_window_ms`.
+    #: La misma velocidad contra el cuadro de hace `velocity_window_ms`: la
+    #: que usa la máquina desde la v5, con el reloj real.
     window_per_s: tuple[float, ...]
     #: Tasa real durante la postura, en cuadros por segundo.
     fps: float | None
@@ -596,24 +633,45 @@ def analyze(
             if intervalos_reales
             else None
         ),
-        repetitions=summarize_repetitions(records, contexts, events),
+        repetitions=summarize_repetitions(
+            records,
+            contexts,
+            events,
+            motion_threshold_per_s=config.segmentation.motion_threshold_per_s,
+        ),
         skipped_duplicates=sum(r.skipped_duplicates for r in records),
-        rest=summarize_rest(records),
+        rest=summarize_rest(records, config.diagnostics.rest_settle_ms),
     )
 
 
-def summarize_rest(records: Sequence[FrameRecord]) -> tuple[RestSummary, ...]:
-    """Las posturas de reposo, en el orden en que se hicieron."""
+def summarize_rest(
+    records: Sequence[FrameRecord], settle_ms: float = 0.0
+) -> tuple[RestSummary, ...]:
+    """Las posturas de reposo, en el orden en que se hicieron.
+
+    De cada postura cuenta solo el **último intento** —el tramo contiguo final;
+    uno reiniciado con BACKSPACE es el que salió mal— y sin sus primeros
+    `settle_ms`, en que la mano todavía se acomoda.
+    """
     filas: list[RestSummary] = []
     for pose in dict.fromkeys(
         r.prompt for r in records if r.prompt and r.prompt.startswith(REST_PREFIX)
     ):
-        propios = [i for i, r in enumerate(records) if r.prompt == pose]
+        todos = [i for i, r in enumerate(records) if r.prompt == pose]
+        inicio = todos[-1]
+        while inicio - 1 >= 0 and records[inicio - 1].prompt == pose:
+            inicio -= 1
+        origen = records[inicio].wall_ms
+        propios = [
+            i for i in todos if i >= inicio and records[i].wall_ms - origen >= settle_ms
+        ]
+        if not propios:
+            continue
         pares = [
             v * 1000.0 / (records[i].wall_ms - records[i - 1].wall_ms)
             for i in propios
             if i > 0
-            and records[i - 1].prompt == pose
+            and i - 1 >= propios[0]
             and (v := records[i].velocity) is not None
             and records[i].wall_ms > records[i - 1].wall_ms
         ]
@@ -638,6 +696,8 @@ def summarize_repetitions(
     records: Sequence[FrameRecord],
     contexts: Sequence[Context],
     events: Sequence[SessionEvent],
+    *,
+    motion_threshold_per_s: float | None = None,
 ) -> tuple[RepetitionSummary, ...]:
     """Una fila por **intento**: cada tramo contiguo de la misma repetición.
 
@@ -677,9 +737,41 @@ def summarize_repetitions(
                 emitted=tuple(
                     e.label or "" for e in propios if e.kind == "LetterEmitted"
                 ),
+                stroke_latency_ms=(
+                    ()
+                    if motion_threshold_per_s is None
+                    else _stroke_latencies(
+                        records, propios, inicio, motion_threshold_per_s
+                    )
+                ),
             )
         )
     return tuple(filas)
+
+
+def _stroke_latencies(
+    records: Sequence[FrameRecord],
+    events: Sequence[SessionEvent],
+    start: int,
+    motion_threshold_per_s: float,
+) -> tuple[float, ...]:
+    """Fin del trazo → entrega, en ms, por cada `WindowDynamic`."""
+    latencias: list[float] = []
+    for e in events:
+        if e.kind != "WindowDynamic" or e.frame_index >= len(records):
+            continue
+        fin = next(
+            (
+                i
+                for i in range(e.frame_index - 1, start - 1, -1)
+                if (v := records[i].velocity_window) is not None
+                and v >= motion_threshold_per_s
+            ),
+            None,
+        )
+        if fin is not None:
+            latencias.append(records[e.frame_index].wall_ms - records[fin].wall_ms)
+    return tuple(latencias)
 
 
 # --------------------------------------------------------------------------- #
@@ -939,10 +1031,48 @@ def render_report(report: TrackingReport, metadata: dict[str, Any]) -> str:
                     for r in report.repetitions
                 ),
             ),
+            "",
+            "### 5.1 Por letra",
+            "",
+            "**Enteros**: intentos con exactamente un trazo entregado; **partidos**: "
+            "más de uno; **perdidos**: ninguno. **Latencia**: ms de reloj real entre "
+            "el último cuadro en movimiento (velocidad de ventana ≥ "
+            "`motion_threshold_per_s`) y la entrega del trazo, p50 / p90 / máx.",
+            "",
+            _tabla(
+                [
+                    "letra",
+                    "intentos",
+                    "enteros",
+                    "partidos",
+                    "perdidos",
+                    "latencia (ms)",
+                ],
+                (
+                    [
+                        f.letter,
+                        str(f.attempts),
+                        str(f.whole),
+                        str(f.split),
+                        str(f.lost),
+                        _latencias(f.stroke_latency_ms),
+                    ]
+                    for f in summarize_letters(report.repetitions)
+                ),
+            ),
         ]
     if report.rest:
         partes += _render_rest(report.rest, metadata)
     return "\n".join(partes) + "\n"
+
+
+def _latencias(values: Sequence[float]) -> str:
+    if not values:
+        return "—"
+    return (
+        f"{_fmt(percentile(values, 0.5), '{:.0f}')} / "
+        f"{_fmt(percentile(values, 0.9), '{:.0f}')} / {max(values):.0f}"
+    )
 
 
 def _q3(values: Sequence[float]) -> str:
@@ -963,15 +1093,18 @@ def _sobre(values: Sequence[float], umbral: float) -> str:
 def _render_rest(rest: Sequence[RestSummary], metadata: dict[str, Any]) -> list[str]:
     quieto = float(metadata.get("segmentation.velocity_threshold_per_s", 0.0))
     movimiento = float(metadata.get("segmentation.motion_threshold_per_s", 0.0))
-    ventana = metadata.get("diagnostics.rest_velocity_window_ms", "?")
+    ventana = metadata.get("segmentation.velocity_window_ms", "?")
+    asiento = metadata.get("diagnostics.rest_settle_ms", "?")
     return [
         "",
         "## 6. Prueba de reposo",
         "",
         "Mano quieta. Velocidad en unidades de mano por segundo, p50 / p95 / máx. "
         "**Pares**: cada cuadro contra el anterior, entre su intervalo real —lo "
-        f"que la máquina compara hoy—. **Ventana**: contra el cuadro de hace "
-        f"{ventana} ms. «≥ reposo» y «≥ movimiento»: fracción de pares por encima "
+        f"que la máquina comparaba hasta la v4—. **Ventana**: contra el cuadro de "
+        f"hace {ventana} ms, la de la v5. Cuenta el último intento de cada postura "
+        f"sin sus primeros {asiento} ms. «≥ reposo» y «≥ movimiento»: fracción "
+        "de pares por encima "
         f"de `velocity_threshold_per_s` = {quieto:g} y `motion_threshold_per_s` "
         f"= {movimiento:g}.",
         "",
@@ -1030,6 +1163,17 @@ def report_to_json(
             "luminance_correlation": report.luminance_correlation,
             "detector_interval_ms": report.detector_interval_ms,
             "wall_interval_ms": report.wall_interval_ms,
+            "letters": [
+                {
+                    "letter": f.letter,
+                    "attempts": f.attempts,
+                    "whole": f.whole,
+                    "split": f.split,
+                    "lost": f.lost,
+                    "stroke_latency_ms": list(f.stroke_latency_ms),
+                }
+                for f in summarize_letters(report.repetitions)
+            ],
             "rest": [
                 {
                     "pose": r.pose,

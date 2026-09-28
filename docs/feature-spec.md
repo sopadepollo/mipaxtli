@@ -486,7 +486,17 @@ porque los tres casos se comportan distinto y no basta con probar uno:
 
 ## 6. Velocidad y estabilidad — contrato de segmentación
 
-**`SEGMENTATION_SPEC_VERSION = 4`** (`src/lsm/segmentation.py`).
+**`SEGMENTATION_SPEC_VERSION = 5`** (`src/lsm/segmentation.py`).
+
+> **v5** — `docs/adr/0017-diagnostico-de-tracking.md`. La velocidad con la que
+> **decide la máquina** deja de ser la del último par de cuadros y pasa a medirse
+> contra el cuadro de hace `velocity_window_ms` (§6.1.1). El temblor de MediaPipe
+> es por cuadro: por pares y por segundo crecía con la tasa, y a 28 fps la mano
+> quieta superaba el umbral de reposo. `velocity_threshold_per_s` pasa a 0.55,
+> fijado con la prueba de reposo y no por conversión. `motion_threshold_per_s`
+> (0.75 → 0.60) y `motion_confirm_low_ms` (400 → 667) cambian de forma
+> **provisional**, hasta medirlos en vivo. `v_t` del §6.1 y los `velocities` de
+> los golden vectors no cambian.
 
 > **v4** — `docs/adr/0017-diagnostico-de-tracking.md`. Los dos umbrales de
 > velocidad pasan a unidades de mano **por segundo** (`velocity_threshold_per_s`,
@@ -536,6 +546,42 @@ v_t   = d_t / s_par
   la del último par **para decidir si la mano se está moviendo ahora**. Cuál es la
   ventana que se **clasifica** es otra pregunta, y la contesta la §6.4.
 - `q_t` **no está trasladado ni escalado**: es el paso 2, no el 5.
+
+### 6.1.1 La velocidad con la que decide la máquina (v5)
+
+La máquina de estados no compara `v_t` del último par, sino la velocidad contra
+un cuadro más antiguo. Sea `B` el buffer de frames válidos (§6.4), `t` su último
+frame y
+
+```
+k   = frames_from_ms(velocity_window_ms, fps)      # §6.5; 3 a 30 fps con 100 ms
+k'  = min(k, |B| - 1)                              # si el buffer no llega tan atrás
+w_t = v(B[t - k'], B[t]) / k'                      # v = la fórmula del §6.1
+```
+
+donde `v(a, b)` es la fórmula del §6.1 aplicada a los frames `a` y `b` en vez de a
+dos consecutivos. `w_t` está en unidades de mano **por cuadro** y se compara con
+los umbrales ya convertidos (`umbral_por_s / fps`, §6.5). Con menos de dos frames
+en el buffer no hay `w_t`.
+
+- **Por qué.** El temblor de los landmarks es aproximadamente constante por
+  cuadro y no se acumula: entre dos cuadros separados por `k` pasos pesa lo mismo
+  que entre dos seguidos, mientras que el movimiento real sí se acumula. Por
+  pares y por segundo el ruido crecía con la tasa; contra una ventana fija en
+  milisegundos pesa lo mismo a cualquier tasa. Medido con la mano quieta a
+  28 fps: p50 0.70 u/s por pares, 0.18 u/s con la ventana (ADR 0017).
+- **El tiempo es el de la tasa congelada**, `k'/fps`, no el reloj de cada cuadro:
+  los frames no llevan marca de tiempo, y es la misma aproximación que convierte
+  a cuadros todos los umbrales en milisegundos. Con el descarte de repetidos
+  (ADR 0017) los cuadros son únicos y su intervalo medio es `1/fps`.
+- **Arrastre.** `w_t` mira `k'` cuadros atrás: tras una parada en seco la mano
+  sigue «moviéndose» hasta `k - 1` cuadros más, y un movimiento que arranca de
+  golpe tarda en superar el umbral. Los umbrales en milisegundos del §6.7 se
+  cuentan sobre esa señal.
+- Un hueco no rompe el buffer (§6.4): `B[t - k']` puede quedar al otro lado de
+  un frame inválido, igual que el par del §6.1.
+- `velocity_window_ms ≤ buffer_ms`, validado: el buffer tiene que guardar el
+  cuadro contra el que se mide.
 
 ### 6.2 Por qué la escala del par y no otra
 

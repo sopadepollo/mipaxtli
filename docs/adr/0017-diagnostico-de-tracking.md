@@ -1,7 +1,9 @@
 # ADR 0017 — Por qué fallan las dinámicas en vivo: diagnóstico de tracking
 
 - **Estado:** decisión 1 **aceptada e implementada** el 2026-09-26 (opción B, mano
-  declarada); decisión 2 pendiente del Bloque 1
+  declarada); decisión 2 pendiente del Bloque 1. Velocidad contra una ventana
+  (SEGMENTATION_SPEC_VERSION 5) **implementada el 2026-09-28**, con
+  `motion_threshold_per_s` y `motion_confirm_low_ms` **PROVISIONALES**
 - **Fecha:** 2026-09-26
 - **Fase:** 5.1, Bloque 0
 - **Datos:** `data/diagnostico/2026-09-26-005123-habitual/` y
@@ -333,17 +335,136 @@ inicial de la J, palma de lado, con p50 / p95 / máx de la velocidad por segundo
 por pares y contra el cuadro de hace `diagnostics.rest_velocity_window_ms`
 (100 ms), comparados con los dos umbrales (sección 6 del reporte).
 
-**Qué se hace con el resultado** (pendiente de la prueba):
+**Qué se haría con el resultado:** si el p95 por pares de la mano quieta
+supera `velocity_threshold_per_s` y el de la ventana queda claramente por
+debajo, la velocidad del §6 pasa a medirse contra el cuadro de hace Δ ms, y el
+umbral de reposo se fija justo por encima del p95 de la ventana, **no** por
+conversión de unidades como en la v4.
 
-1. Si el p95 por pares de la mano quieta supera `velocity_threshold_per_s` y
-   el de la ventana queda claramente por debajo, la hipótesis se confirma y
-   la velocidad del §6 pasa a ser el desplazamiento entre el cuadro actual y
-   el de hace Δ ms (Δ configurable, ~100 ms), dividido entre el tiempo real
-   transcurrido: el ruido pesa lo mismo a cualquier tasa. Sube
-   `SEGMENTATION_SPEC_VERSION` a 5, y el eval de Fase 2 y el replay de Fase 5
-   tienen que no cambiar.
-2. El umbral de reposo se fija justo por encima del p95 de la ventana en la
-   prueba de reposo, **no** por conversión de unidades como en la v4.
+### La prueba de reposo (2026-09-28) confirma la hipótesis
+
+`data/diagnostico/2026-09-28-103616-habitual/`, `--solo-reposo`, 27.7 fps,
+`capture.exposure = -5`. La tabla que escribió el reporte mezclaba dos cosas
+que no son temblor, y hubo que separarlas a mano:
+
+- En la estática, el primer segundo es la mano acomodándose tras pulsar ESPACIO,
+  y a 1.7–1.9 s hubo un ajuste: 2–5 u/s **en las dos medidas**, o sea
+  movimiento real.
+- En la J hubo dos intentos: el primero (0–3 s) se movía, con un cambio de
+  etiqueta y la mano perdida; tras BACKSPACE, el segundo (4.8 s) quedó limpio.
+  El resumen los sumaba: ahora cuenta solo el último intento de cada postura y
+  descarta sus primeros `diagnostics.rest_settle_ms` (1 s).
+
+Con la mano quieta de verdad —último intento de la J; estática desde los 2 s—:
+
+| postura | por pares p50 / p95 (u/s) | ventana 100 ms p50 / p95 / máx (u/s) | ≥ 0.6 por pares → ventana |
+|---|---|---|---|
+| inicio de la J, palma de lado | 0.70 / 1.40 | 0.18 / 0.33 / 0.48 | 65% → 0% |
+| estática (A) | 0.37 / 0.65 | 0.14 / 0.52 / 0.73 | 10% → 2% |
+
+Con la J perfectamente quieta, dos de cada tres cuadros contaban como
+movimiento: el candidato no encontraba el reposo que lo cierra y acababa en
+`DYNAMIC_TOO_LONG`. Contra el cuadro de hace 100 ms, ninguno.
+
+### Velocidad contra una ventana (SEGMENTATION_SPEC_VERSION 5)
+
+- **Definición** (`feature-spec.md` §6.1.1): la máquina compara la velocidad del
+  §6.1 entre el cuadro actual y el de `k = frames_from_ms(velocity_window_ms,
+  fps)` cuadros antes, dividida entre `k`. `velocity_window_ms = 100` (3 cuadros
+  a 30 fps). `v_t` por pares sigue siendo la del §6.1 y la de los golden
+  vectors; solo cambia con qué decide la máquina.
+- **El tiempo es el de la tasa congelada** (`k/fps`), no el reloj de cada
+  cuadro. La propuesta decía «tiempo real transcurrido», pero los frames no
+  llevan marca de tiempo: dársela sería cambiar el tipo base y el formato del
+  dataset, que es más de lo que este cambio necesita (la propuesta para
+  hacerlo antes de regrabar las dinámicas está en el ADR 0018). Con el descarte de
+  repetidos los cuadros son únicos y su intervalo medio es `1/fps`; la
+  diferencia es el jitter entre cuadros. La prueba de reposo, en cambio, mide
+  con el reloj real: los p95 que fijan el umbral no dependen de esa
+  aproximación.
+- **`velocity_threshold_per_s` = 0.55**, justo por encima del mayor p95 de la
+  ventana (0.52, la estática), fijado con la prueba de reposo.
+- **`motion_threshold_per_s` = 0.60 y `motion_confirm_low_ms` = 667,
+  PROVISIONALES** (eran 0.75 y 400). Ver «El replay de Fase 5 con la v5».
+- **Lo mismo en todas partes**: el aviso «¿cambiaste de mano?»
+  (`hand_check.py`) mira la quietud con la misma ventana, y el contexto QUIETA
+  del diagnóstico también (con el reloj real).
+- **Arrastre**: tras una parada en seco la ventana sigue viendo movimiento hasta
+  `k - 1` cuadros (~67 ms). Los tests sintéticos de la demo, que paran en seco
+  y estaban medidos al cuadro, se ajustaron por eso (`ARRASTRE` en
+  `tests/test_cli_demo.py`); los de la máquina de estados usan una ventana de un
+  cuadro —la velocidad por pares— porque prueban su lógica, no la métrica.
+
+**Verificación.** El eval de Fase 2 (`lsm-eval --sin-sintetico`) no cambió:
+accuracy 0.9261, macro 0.9201, UNKNOWN 0.0573, y el barrido sigue dando 0.9578
+con `velocity_threshold_per_s` inerte. Sus valores de barrido pasaron de
+(0.3, 0.6, 0.75) a (0.3, 0.45, 0.6): 0.75 ya no es válido con
+`motion_threshold_per_s` = 0.60. El replay de Fase 5 **sí cambió**.
+
+### El replay de Fase 5 con la v5
+
+Sección 4 de `lsm-eval-dinamico` (cada grabación por la máquina de estados, LOSO,
+seguida de reposo), con los mismos modelos. «Estáticas, 1.ª correcta»: fracción de
+las 2585 estáticas cuya primera letra emitida es la grabada.
+
+| variante | enteros | partidos | perdidos | acierto dinámico | estáticas, 1.ª correcta | estáticas con trazo |
+|---|---|---|---|---|---|---|
+| v4 | 621 | 1 | 0 | 260 | 0.815 | 153 |
+| v5, `motion` 0.75, `confirm_low` 400 | 553 | 68 | 1 | 227 | 0.913 | 91 |
+| v5, 0.65 / 400 | 574 | 48 | 0 | 240 | — | 115 |
+| v5, 0.60 / 400 | 583 | 39 | 0 | 243 | — | 128 |
+| v5, 0.55 / 400 | 592 | 30 | 0 | 246 | — | 147 |
+| v5, 0.75 / 533 | 596 | 25 | 1 | 244 | 0.921 | 91 |
+| v5, 0.75 / 667 | 612 | 9 | 1 | 248 | 0.928 | 91 |
+| v5, 0.60 / 533 | 612 | 10 | 0 | 252 | 0.920 | 128 |
+| **v5, 0.60 / 667 (elegida)** | **620** | **2** | **0** | **253** | **0.927** | 128 |
+
+Por letra (enteros / partidos / acierto):
+
+| letra | v4 | v5 0.75 / 400 | v5 0.60 / 667 |
+|---|---|---|---|
+| Ñ | 100 / 0 / 33 | 93 / 7 / 28 | 100 / 0 / 30 |
+| J | 100 / 0 / 100 | 100 / 0 / 89 | 100 / 0 / 93 |
+| K | 120 / 1 / 68 | 82 / 39 / 52 | 121 / 0 / 70 |
+| Q | 100 / 0 / 11 | 93 / 7 / 9 | 100 / 0 / 10 |
+| X | 101 / 0 / 2 | 96 / 5 / 2 | 101 / 0 / 2 |
+| Z | 100 / 0 / 46 | 89 / 10 / 47 | 98 / 2 / 48 |
+
+**Por qué se partían.** Las dinámicas del dataset se grabaron cuando la cámara
+entregaba ~16 cuadros nuevos por segundo con cuadros casi repetidos entre ellos,
+y el replay las pasa a 30 fps nominales. La velocidad por pares sale en diente
+de sierra (0.37, 1.00, 0.49, 0.90, 1.52, 0.59… u/s): cada dos pares uno salta
+dos cuadros reales. En el tramo central de la K la mano va de verdad a
+0.3–0.7 u/s; por pares, cada dos cuadros uno superaba 0.75 y el reposo que
+cierra el trazo nunca se completaba. Con la ventana el diente de sierra
+desaparece, ese tramo cuenta como reposo y a los 400 ms el trazo se cerraba a
+la mitad. `motion_threshold_per_s` no puede bajar de 0.55 —tiene que ser ≥ que
+el de reposo—, así que la otra palanca es `motion_confirm_low_ms`.
+
+**Por qué los valores son PROVISIONALES.** El replay mide contra grabaciones
+hechas a ~16 fps, con cuadros casi repetidos y trazos truncados, donde el ruido
+en diente de sierra sostenía los trazos lentos. Los 621 enteros de la v4
+dependían en parte de ese ruido, así que la regresión del replay **no es la
+referencia final**. La referencia es el diagnóstico en vivo y, después, el
+dataset regrabado (Bloque 4). 0.60 / 667 se eligió porque es la variante más
+cercana a la v4 en los trazos y no pierde lo que ganan las estáticas.
+
+**Lo que cuesta.** Una letra dinámica, y la letra estática que llega tras un
+tránsito que llegó a candidato, sale tras 667 ms de reposo en vez de 400. La J
+sigue entera pero baja de 100 a 93 aciertos: con la ventana su trazo empieza y
+termina unos cuadros distinto de las plantillas.
+
+**Lo que se gana en las estáticas.** Por pares, el temblor de la mano sostenida
+superaba el umbral de reposo, soltaba el cerrojo de repetición y la letra se
+escribía dos veces: con exactamente una emisión correcta, 1324 de 2585 en la v4
+contra 2258 en la v5 con 0.75 / 400 (esa cifra no se midió con la variante
+elegida). La primera letra correcta pasa de 0.815 a 0.927, y las estáticas que entran a candidato por temblor bajan de 153 a 128.
+
+**Qué decide los valores definitivos.** Los diagnósticos en vivo con
+`--sin-reposo` (sección 5.1 del reporte) dan por letra los trazos enteros,
+partidos y perdidos, y la latencia entre el último cuadro en movimiento y la
+entrega del trazo. Si en vivo la K no se parte, se propone bajar
+`motion_confirm_low_ms` hacia 400 con esos números.
 
 ## Alternativa anotada: ventana deslizante con spotting por DTW
 

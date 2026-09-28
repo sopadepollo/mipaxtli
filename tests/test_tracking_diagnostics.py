@@ -164,8 +164,11 @@ def test_los_cuadros_justo_antes_de_entrar_al_candidato_son_del_trazo() -> None:
 
 
 def test_un_hueco_con_la_mano_quieta_hereda_quieta() -> None:
+    # Tres cuadros quietos: QUIETA mide contra el de hace `velocity_window_ms`
+    # (100 ms, dos pasos de 50 ms), así que el segundo todavía no tiene con qué.
     recorder = grabar(
         [
+            (mano(400.0), "STABLE"),
             (mano(400.0), "STABLE"),
             (mano(400.0), "STABLE"),
             (SIN_MANO, "STABLE"),
@@ -670,11 +673,64 @@ def test_el_reporte_trae_la_prueba_de_reposo_y_no_la_cuenta_como_repeticion() ->
         {
             "segmentation.velocity_threshold_per_s": 0.6,
             "segmentation.motion_threshold_per_s": 0.75,
-            "diagnostics.rest_velocity_window_ms": 100.0,
+            "segmentation.velocity_window_ms": 100.0,
         },
     )
     assert "## 6. Prueba de reposo" in texto
     assert "REPOSO_ESTATICA" in texto
     assert reporte.repetitions == ()
     resumen = report_to_json(reporte, records, [], {})["summary"]
-    assert resumen["rest"][0]["frames"] == 60
+    # 60 cuadros en 2 s, sin el primer `rest_settle_ms` (1 s): quedan 30.
+    assert CONFIG.diagnostics.rest_settle_ms == 1000.0
+    assert resumen["rest"][0]["frames"] == 30
+
+
+def test_el_reposo_cuenta_solo_el_ultimo_intento_y_sin_el_acomodo() -> None:
+    from dataclasses import replace
+
+    from lsm.tracking_diagnostics import summarize_rest
+
+    primero = _grabar_reposo(1000.0 / 30, 3.0)
+    segundo = _grabar_reposo(1000.0 / 30, 3.0)
+    hueco = replace(primero[-1], prompt=None, repetition=None)
+    registros = [*primero, hueco, *segundo]
+
+    sin_acomodo = summarize_rest(registros)[0]
+    con_acomodo = summarize_rest(registros, settle_ms=500.0)[0]
+
+    assert sin_acomodo.frames == len(segundo)
+    assert con_acomodo.frames == len(segundo) - 15
+
+
+def test_por_letra_cuenta_enteros_partidos_y_la_latencia_del_fin_del_trazo() -> None:
+    from lsm.tracking_diagnostics import SessionEvent, summarize_letters
+
+    recorder = TrackingRecorder(CONFIG)
+    # K#1: se mueve 200 ms, se detiene y la máquina entrega a los 700 ms.
+    # K#2: dos entregas —partida—.
+    for i in range(40):
+        x = 400.0 + (min(i, 6) * 30.0)
+        recorder.observe(
+            mano(x),
+            wall_ms=i * 50.0,
+            detector_ms=i * 50.0,
+            luminance=0.3,
+            thumbnail=b"",
+            state="TRACKING",
+            prompt="K",
+            repetition=1 if i < 20 else 2,
+        )
+    eventos = [
+        SessionEvent(frame_index=19, kind="WindowDynamic", prompt="K", repetition=1),
+        SessionEvent(frame_index=25, kind="WindowDynamic", prompt="K", repetition=2),
+        SessionEvent(frame_index=30, kind="WindowDynamic", prompt="K", repetition=2),
+    ]
+
+    reporte = analyze(recorder.records, eventos, CONFIG)
+    (k,) = summarize_letters(reporte.repetitions)
+
+    assert (k.attempts, k.whole, k.split, k.lost) == (2, 1, 1, 0)
+    # El último cuadro con ventana en movimiento es el 7 (350 ms): llega a
+    # x = 580 en el 6 y la ventana de 100 ms todavía lo ve en el 7.
+    assert reporte.repetitions[0].stroke_latency_ms == (950.0 - 350.0,)
+    assert "### 5.1 Por letra" in render_report(reporte, {})

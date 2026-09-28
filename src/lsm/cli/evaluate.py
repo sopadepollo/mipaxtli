@@ -107,7 +107,7 @@ _FULL_GRID: Final[tuple[Axis, ...]] = (
     # Tope en 0.025 y no 0.05 desde el ADR 0015: velocity_threshold no puede
     # superar a segmentation.motion_threshold, y el eje es inerte por
     # construccion para este camino, asi que el valor alto no medía nada.
-    Axis(path="segmentation.velocity_threshold_per_s", values=(0.3, 0.6, 0.75)),
+    Axis(path="segmentation.velocity_threshold_per_s", values=(0.3, 0.45, 0.6)),
 )
 
 _SMALL_GRID: Final[tuple[Axis, ...]] = (
@@ -116,7 +116,7 @@ _SMALL_GRID: Final[tuple[Axis, ...]] = (
     Axis(path="static_knn.min_margin", values=(0.50, 0.80)),
     Axis(path="quality.max_dispersion", values=(0.02, 0.32)),
     Axis(path="features.trajectory_weight", values=(0.0, 20.0)),
-    Axis(path="segmentation.velocity_threshold_per_s", values=(0.3, 0.75)),
+    Axis(path="segmentation.velocity_threshold_per_s", values=(0.3, 0.6)),
 )
 
 GRIDS: Final[dict[str, tuple[Axis, ...]]] = {

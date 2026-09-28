@@ -114,7 +114,11 @@ from enum import StrEnum
 from typing import Final, TypeAlias
 
 from lsm.config import Config
-from lsm.features import ExtractionRejected, extract_sequence_features
+from lsm.features import (
+    ExtractionRejected,
+    SequenceFeatures,
+    extract_sequence_features,
+)
 from lsm.types import FrameSlot, Prediction, RawFrame, Sequence, WindowOrigin
 
 #: Versión del contrato de segmentación: la §6 de `docs/feature-spec.md` (cómo se
@@ -146,7 +150,35 @@ from lsm.types import FrameSlot, Prediction, RawFrame, Sequence, WindowOrigin
 #: **v4** (ADR 0017): `velocity_threshold_per_s` y `motion_threshold_per_s` están
 #: en unidades de mano **por segundo** y se convierten a por cuadro con la tasa
 #: congelada de la sesión. `v_t` sigue siendo la del §6.1.
-SEGMENTATION_SPEC_VERSION: Final = 4
+#:
+#: **v5** (ADR 0017): la velocidad con la que decide la máquina es la del §6.1
+#: entre el cuadro actual y el de hace `velocity_window_ms`, dividida entre los
+#: cuadros que los separan. El temblor de MediaPipe es por cuadro: entre pares
+#: consecutivos, por segundo, crecía con la tasa. `velocity_threshold_per_s`
+#: pasa a 0.55, fijado con la prueba de reposo.
+SEGMENTATION_SPEC_VERSION: Final = 5
+
+
+def window_velocity(
+    buffer: deque[RawFrame], window_frames: int, config: Config
+) -> float | None:
+    """La velocidad del §6.1 contra el cuadro de hace `window_frames`, por cuadro.
+
+    El desplazamiento `v` entre el último cuadro del buffer y el de
+    `window_frames` antes, dividido entre los cuadros que los separan: en
+    unidades de mano por cuadro, las mismas de los umbrales ya convertidos. Si
+    el buffer todavía no llega tan atrás se usa el más antiguo que tenga. `None`
+    con menos de dos cuadros.
+    """
+    if len(buffer) < 2:
+        return None
+    atras = min(window_frames, len(buffer) - 1)
+    features = extract_sequence_features(
+        Sequence(frames=(buffer[-1 - atras], buffer[-1])), config
+    )
+    if not isinstance(features, SequenceFeatures) or not features.velocities:
+        return None
+    return features.velocities[0] / atras
 
 
 def frames_from_ms(ms: float, fps: float) -> int:
@@ -197,10 +229,12 @@ class FrameThresholds:
     motion_confirm_low_frames: int
     motion_max_frames: int
     #: Los dos umbrales de velocidad, de unidades de mano por segundo a por
-    #: cuadro con esta tasa (v4): `v_t` del §6.1 se sigue midiendo por par de
-    #: cuadros, y lo que se convierte es el umbral.
+    #: cuadro con esta tasa (v4).
     velocity_threshold: float
     motion_threshold: float
+    #: Cuántos cuadros atrás está el cuadro contra el que se mide la velocidad
+    #: (v5, `velocity_window_ms`).
+    velocity_window_frames: int
 
     @classmethod
     def from_config(cls, config: Config, fps: float) -> FrameThresholds:
@@ -222,6 +256,7 @@ class FrameThresholds:
             motion_max_frames=frames_from_ms(settings.motion_max_ms, fps),
             velocity_threshold=settings.velocity_threshold_per_s / fps,
             motion_threshold=settings.motion_threshold_per_s / fps,
+            velocity_window_frames=frames_from_ms(settings.velocity_window_ms, fps),
         )
 
 
@@ -543,7 +578,7 @@ def run_segmentation(
         # de EMIT: si el rebote entre dos letras iguales cayera entero dentro del
         # cooldown y no se mirara, el cerrojo de repetición no se liberaría y la
         # segunda letra quedaría bloqueada sin que quien firma pueda hacer nada.
-        velocity = features.velocities[-1] if features.velocities else None
+        velocity = window_velocity(buffer, thresholds.velocity_window_frames, config)
         moving = velocity is not None and velocity >= thresholds.velocity_threshold
         motion = velocity is not None and velocity >= thresholds.motion_threshold
         if moving:

@@ -1,6 +1,6 @@
 {
   "feature_spec_version": 2,
-  "segmentation_spec_version": 4,
+  "segmentation_spec_version": 5,
   "tolerance": 1e-06,
   "generated_by": "lsm.cli.golden — Python es la referencia normativa",
   "config": {
