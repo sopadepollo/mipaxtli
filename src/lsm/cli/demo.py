@@ -88,6 +88,7 @@ from lsm.telemetry import (
     tasa_insuficiente,
 )
 from lsm.tracking_diagnostics import (
+    REST_POSES,
     CameraProbe,
     GuidedSession,
     TrackingRecorder,
@@ -306,15 +307,25 @@ def escribir_diagnostico(
         "segmentation.motion_threshold_per_s": (
             config.segmentation.motion_threshold_per_s
         ),
+        "segmentation.velocity_threshold_per_s": (
+            config.segmentation.velocity_threshold_per_s
+        ),
         "segmentation.motion_min_ms": config.segmentation.motion_min_ms,
         "segmentation.motion_confirm_low_ms": config.segmentation.motion_confirm_low_ms,
         "capture.camera_fps (pedidos)": config.capture.camera_fps,
         "pre_candidate_ms": config.diagnostics.pre_candidate_ms,
+        "capture.exposure": config.capture.exposure,
         **extra,
     }
     if diagnostico.guiada is not None:
         metadata["letras"] = " ".join(diagnostico.guiada.letters)
         metadata["repeticiones por letra"] = diagnostico.guiada.repetitions
+        if diagnostico.guiada.rest_poses:
+            metadata["posturas de reposo"] = " ".join(diagnostico.guiada.rest_poses)
+            metadata["diagnostics.rest_ms"] = config.diagnostics.rest_ms
+            metadata["diagnostics.rest_velocity_window_ms"] = (
+                config.diagnostics.rest_velocity_window_ms
+            )
         metadata["repeticiones descartadas"] = (
             ", ".join(f"{letra}#{n}" for letra, n in diagnostico.guiada.discarded)
             or "ninguna"
@@ -530,6 +541,21 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="repeticiones por letra (por defecto: diagnostics.repetitions_per_letter)",
+    )
+    guiado.add_argument(
+        "--sin-reposo",
+        action="store_true",
+        dest="sin_reposo",
+        help="solo las letras, sin la prueba de reposo del principio",
+    )
+    guiado.add_argument(
+        "--solo-reposo",
+        action="store_true",
+        dest="solo_reposo",
+        help=(
+            "solo la prueba de reposo (estática e inicio de la J, "
+            "diagnostics.rest_ms cada una), sin las letras"
+        ),
     )
     sondeo = subcomandos.add_parser(
         "medir-camara",
@@ -824,7 +850,12 @@ def _diagnostico_pedido(
         repeticiones = args.repeticiones or config.diagnostics.repetitions_per_letter
         if repeticiones < 1:
             return f"--repeticiones tiene que ser positivo, no {repeticiones}"
-        guiada = GuidedSession(letters=letras_dinamicas(), repetitions=repeticiones)
+        guiada = GuidedSession(
+            letters=() if args.solo_reposo else letras_dinamicas(),
+            repetitions=repeticiones,
+            rest_poses=() if args.sin_reposo else tuple(REST_POSES),
+            rest_ms=config.diagnostics.rest_ms,
+        )
     return Diagnostico(
         etiqueta=limpia,
         salida=args.diagnostico_salida,
@@ -940,8 +971,13 @@ def _sesion_en_vivo(
                     # Se registra ANTES de cederlo: `estado_maquina` es todavía
                     # el que dejó el cuadro anterior, o sea el estado en que
                     # este cuadro encuentra a la máquina.
+                    guiada_ahora = diagnostico.guiada
+                    if guiada_ahora is not None:
+                        guiada_ahora.tick(recibido_ms)
                     actual = (
-                        diagnostico.guiada.current() if diagnostico.guiada else None
+                        guiada_ahora.current()
+                        if guiada_ahora is not None and guiada_ahora.recording
+                        else None
                     )
                     diagnostico.recorder.observe(
                         slot,
@@ -976,7 +1012,7 @@ def _sesion_en_vivo(
                     return
                 guiada = diagnostico.guiada if diagnostico is not None else None
                 if guiada is not None and tecla == _SIGUIENTE:
-                    guiada.advance()
+                    guiada.press_next(recibido_ms)
                 elif guiada is not None and tecla in _BORRAR:
                     # En la sesión guiada BACKSPACE no borra una letra: descarta
                     # la repetición anterior, que se hizo mal, y la vuelve a pedir.

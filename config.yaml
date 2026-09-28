@@ -349,7 +349,10 @@ capture:
   # automática la webcam de referencia no pasa de ~16.6 fps nuevos (ADR 0017).
   # En Windows suele ser log2 de segundos: -6 ≈ 1/64 s. Se fija tras
   # `lsm-demo medir-camara --exposicion`.
-  exposure: null
+  # Fijada en -5 el 2026-09-28: con luz de día todas las exposiciones dieron
+  # ~28 fps nuevos y -5 es la más clara (luminancia 0.29). La lectura de vuelta
+  # del driver dijo -5 en todas las filas: no sirve para confirmarlo.
+  exposure: -5.0
 
   # API de captura de OpenCV: auto, MSMF, DSHOW (Windows) o V4L2. En Windows
   # DSHOW suele ser la única que entrega MJPG a 30 fps.
@@ -520,3 +523,10 @@ diagnostics:
 
   # Repeticiones por letra dinámica en la sesión guiada.
   repetitions_per_letter: 10
+
+  # Prueba de reposo: cada postura (estática, inicio de la J) dura esto, en ms.
+  rest_ms: 5000.0
+
+  # La prueba de reposo mide también la velocidad entre el cuadro actual y el de
+  # hace estos ms, entre el tiempo real transcurrido (ADR 0017).
+  rest_velocity_window_ms: 100.0

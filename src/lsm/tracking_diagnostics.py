@@ -57,6 +57,15 @@ from lsm.types import Sequence as FrameSequence
 #: no importar `segmentation` —el diagnóstico observa la máquina, no la usa—.
 CANDIDATE_STATE: Final = "DYNAMIC_CANDIDATE"
 
+#: Prefijo de las posturas de la prueba de reposo en `FrameRecord.prompt`.
+REST_PREFIX: Final = "REPOSO_"
+
+#: Las posturas de la prueba de reposo y lo que se le pide a quien firma.
+REST_POSES: Final[dict[str, str]] = {
+    "REPOSO_ESTATICA": "una estatica (la A) con la mano quieta",
+    "REPOSO_J": "la posicion inicial de la J, palma de lado, quieta",
+}
+
 #: Versión del formato de `diagnostico.json`.
 REPORT_SCHEMA_VERSION: Final = 1
 
@@ -104,6 +113,10 @@ class FrameRecord:
     #: Cuadros repetidos que la cámara descartó justo antes de éste
     #: (`capture.drop_duplicate_frames`, Bloque 1).
     skipped_duplicates: int = 0
+    #: Velocidad entre este cuadro y el más reciente con al menos
+    #: `diagnostics.rest_velocity_window_ms` de antigüedad, sin huecos entre
+    #: ellos, en unidades de mano **por segundo** de reloj real.
+    velocity_window: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +145,8 @@ class TrackingRecorder:
     _previous_frame: RawFrame | None = field(default=None, repr=False)
     _previous_thumbnail: bytes = field(default=b"", repr=False)
     _origin_ms: float | None = field(default=None, repr=False)
+    #: Cuadros con mano desde el último hueco, con su reloj, para la ventana.
+    _recent: list[tuple[float, RawFrame]] = field(default_factory=list, repr=False)
 
     def observe(
         self,
@@ -164,6 +179,8 @@ class TrackingRecorder:
             if isinstance(features, SequenceFeatures) and features.velocities:
                 velocity = features.velocities[0]
 
+        velocity_window = self._window_velocity(frame, wall_ms)
+
         duplicate = bool(thumbnail) and thumbnail == self._previous_thumbnail
         diff = _thumbnail_diff(self._previous_thumbnail, thumbnail)
 
@@ -191,11 +208,34 @@ class TrackingRecorder:
             prompt=prompt,
             repetition=repetition,
             skipped_duplicates=skipped_duplicates,
+            velocity_window=velocity_window,
         )
         self.records.append(record)
         self._previous_frame = frame
         self._previous_thumbnail = thumbnail
         return record
+
+    def _window_velocity(self, frame: RawFrame | None, wall_ms: float) -> float | None:
+        """Desplazamiento contra el cuadro de hace una ventana, por segundo."""
+        if frame is None:
+            self._recent.clear()
+            return None
+        ventana = self.config.diagnostics.rest_velocity_window_ms
+        # El más reciente que ya tenga la antigüedad pedida; los anteriores sobran.
+        base: tuple[float, RawFrame] | None = None
+        while self._recent and wall_ms - self._recent[0][0] >= ventana:
+            base = self._recent.pop(0)
+        if base is not None:
+            self._recent.insert(0, base)
+        self._recent.append((wall_ms, frame))
+        if base is None:
+            return None
+        features = extract_sequence_features(
+            FrameSequence(frames=(base[1], frame)), self.config
+        )
+        if not isinstance(features, SequenceFeatures) or not features.velocities:
+            return None
+        return features.velocities[0] * 1000.0 / (wall_ms - base[0])
 
     def note(
         self,
@@ -433,6 +473,23 @@ class RepetitionSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class RestSummary:
+    """Una postura de la prueba de reposo: cuánto se mueve la mano quieta."""
+
+    pose: str
+    frames: int
+    detected: int
+    #: `v_t` de cada par consecutivo con mano, entre su intervalo real, en
+    #: unidades de mano por segundo: lo que la máquina compara hoy con
+    #: `velocity_threshold_per_s` (v4).
+    pair_per_s: tuple[float, ...]
+    #: La misma velocidad contra el cuadro de hace `rest_velocity_window_ms`.
+    window_per_s: tuple[float, ...]
+    #: Tasa real durante la postura, en cuadros por segundo.
+    fps: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class TrackingReport:
     frames: int
     duration_ms: float
@@ -456,6 +513,7 @@ class TrackingReport:
     #: descarte activo, `duplicates` debería quedar cerca de cero y este número
     #: es el que dice cuántos había.
     skipped_duplicates: int = 0
+    rest: tuple[RestSummary, ...] = ()
 
     @property
     def fps(self) -> float | None:
@@ -540,7 +598,40 @@ def analyze(
         ),
         repetitions=summarize_repetitions(records, contexts, events),
         skipped_duplicates=sum(r.skipped_duplicates for r in records),
+        rest=summarize_rest(records),
     )
+
+
+def summarize_rest(records: Sequence[FrameRecord]) -> tuple[RestSummary, ...]:
+    """Las posturas de reposo, en el orden en que se hicieron."""
+    filas: list[RestSummary] = []
+    for pose in dict.fromkeys(
+        r.prompt for r in records if r.prompt and r.prompt.startswith(REST_PREFIX)
+    ):
+        propios = [i for i, r in enumerate(records) if r.prompt == pose]
+        pares = [
+            v * 1000.0 / (records[i].wall_ms - records[i - 1].wall_ms)
+            for i in propios
+            if i > 0
+            and records[i - 1].prompt == pose
+            and (v := records[i].velocity) is not None
+            and records[i].wall_ms > records[i - 1].wall_ms
+        ]
+        ventana = tuple(
+            v for i in propios if (v := records[i].velocity_window) is not None
+        )
+        duracion = records[propios[-1]].wall_ms - records[propios[0]].wall_ms
+        filas.append(
+            RestSummary(
+                pose=pose,
+                frames=len(propios),
+                detected=sum(1 for i in propios if records[i].detected),
+                pair_per_s=tuple(pares),
+                window_per_s=ventana,
+                fps=(len(propios) - 1) * 1000.0 / duracion if duracion > 0 else None,
+            )
+        )
+    return tuple(filas)
 
 
 def summarize_repetitions(
@@ -556,7 +647,7 @@ def summarize_repetitions(
     """
     tramos: list[tuple[str, int, int, int]] = []  # letra, rep, inicio, fin
     for i, r in enumerate(records):
-        if r.prompt is None or r.repetition is None:
+        if r.prompt is None or r.repetition is None or r.prompt.startswith(REST_PREFIX):
             continue
         if tramos and tramos[-1][:2] == (r.prompt, r.repetition) and tramos[-1][3] == i:
             letra, rep, inicio, _ = tramos[-1]
@@ -598,34 +689,82 @@ def summarize_repetitions(
 
 @dataclass
 class GuidedSession:
-    """Qué letra pedir y cuántas veces. `ESPACIO` avanza; `BACKSPACE` repite."""
+    """Qué letra pedir y cuántas veces. `ESPACIO` avanza; `BACKSPACE` repite.
+
+    Antes de las letras van las posturas de reposo, si las hay: cada una se
+    arranca con ESPACIO, dura `rest_ms` y avanza sola (`tick`). Mientras no se
+    arranca, sus cuadros no se atribuyen a la postura (`recording`).
+    """
 
     letters: tuple[str, ...]
     repetitions: int
     _position: int = 0
     #: Repeticiones descartadas con BACKSPACE, para el reporte.
     discarded: list[tuple[str, int]] = field(default_factory=list)
+    rest_poses: tuple[str, ...] = ()
+    rest_ms: float = 5000.0
+    _rest_started_ms: float | None = None
+
+    @property
+    def _total(self) -> int:
+        return len(self.rest_poses) + len(self.letters) * self.repetitions
 
     @property
     def finished(self) -> bool:
-        return self._position >= len(self.letters) * self.repetitions
+        return self._position >= self._total
+
+    @property
+    def in_rest(self) -> bool:
+        return self._position < len(self.rest_poses)
+
+    @property
+    def recording(self) -> bool:
+        """Si los cuadros de ahora cuentan para lo que se está pidiendo."""
+        return not self.in_rest or self._rest_started_ms is not None
 
     def current(self) -> tuple[str, int] | None:
-        """(letra, repetición desde 1), o `None` al terminar."""
+        """(letra o postura, repetición desde 1), o `None` al terminar."""
         if self.finished:
             return None
-        letra = self.letters[self._position // self.repetitions]
-        return letra, self._position % self.repetitions + 1
+        if self.in_rest:
+            return self.rest_poses[self._position], 1
+        posicion = self._position - len(self.rest_poses)
+        letra = self.letters[posicion // self.repetitions]
+        return letra, posicion % self.repetitions + 1
 
     def advance(self) -> None:
         if not self.finished:
             self._position += 1
+            self._rest_started_ms = None
+
+    def press_next(self, now_ms: float) -> None:
+        """ESPACIO: arranca la postura de reposo, o da por hecha la repetición."""
+        if self.in_rest:
+            if self._rest_started_ms is None:
+                self._rest_started_ms = now_ms
+            return
+        self.advance()
+
+    def tick(self, now_ms: float) -> None:
+        """Avanza sola la postura de reposo cuando cumple `rest_ms`."""
+        if (
+            self.in_rest
+            and self._rest_started_ms is not None
+            and now_ms - self._rest_started_ms >= self.rest_ms
+        ):
+            self.advance()
 
     def discard_last(self) -> None:
-        """Vuelve a pedir la repetición anterior y la anota como descartada."""
+        """Vuelve a pedir la repetición anterior y la anota como descartada.
+
+        En una postura de reposo en curso, la reinicia."""
+        if self.in_rest and self._rest_started_ms is not None:
+            self._rest_started_ms = None
+            return
         if self._position == 0:
             return
         self._position -= 1
+        self._rest_started_ms = None
         actual = self.current()
         if actual is not None:
             self.discarded.append(actual)
@@ -635,6 +774,12 @@ class GuidedSession:
         if actual is None:
             return "diagnostico terminado: pulsa q"
         letra, n = actual
+        if self.in_rest:
+            que = REST_POSES.get(letra, letra)
+            if self._rest_started_ms is None:
+                segundos = self.rest_ms / 1000
+                return f"REPOSO  pon {que}   ESPACIO: empezar ({segundos:g} s)"
+            return f"REPOSO  {que}: no te muevas...   BACKSPACE: reiniciar"
         return (
             f"DIAGNOSTICO  haz la {letra}  ({n}/{self.repetitions})   "
             "ESPACIO: hecha   BACKSPACE: repetir   q: terminar"
@@ -795,7 +940,72 @@ def render_report(report: TrackingReport, metadata: dict[str, Any]) -> str:
                 ),
             ),
         ]
+    if report.rest:
+        partes += _render_rest(report.rest, metadata)
     return "\n".join(partes) + "\n"
+
+
+def _q3(values: Sequence[float]) -> str:
+    if not values:
+        return "—"
+    return (
+        f"{_fmt(percentile(values, 0.5), '{:.2f}')} / "
+        f"{_fmt(percentile(values, 0.95), '{:.2f}')} / {max(values):.2f}"
+    )
+
+
+def _sobre(values: Sequence[float], umbral: float) -> str:
+    if not values:
+        return "—"
+    return f"{sum(1 for v in values if v >= umbral) / len(values):.2f}"
+
+
+def _render_rest(rest: Sequence[RestSummary], metadata: dict[str, Any]) -> list[str]:
+    quieto = float(metadata.get("segmentation.velocity_threshold_per_s", 0.0))
+    movimiento = float(metadata.get("segmentation.motion_threshold_per_s", 0.0))
+    ventana = metadata.get("diagnostics.rest_velocity_window_ms", "?")
+    return [
+        "",
+        "## 6. Prueba de reposo",
+        "",
+        "Mano quieta. Velocidad en unidades de mano por segundo, p50 / p95 / máx. "
+        "**Pares**: cada cuadro contra el anterior, entre su intervalo real —lo "
+        f"que la máquina compara hoy—. **Ventana**: contra el cuadro de hace "
+        f"{ventana} ms. «≥ reposo» y «≥ movimiento»: fracción de pares por encima "
+        f"de `velocity_threshold_per_s` = {quieto:g} y `motion_threshold_per_s` "
+        f"= {movimiento:g}.",
+        "",
+        _tabla(
+            [
+                "postura",
+                "cuadros",
+                "con mano",
+                "fps",
+                "pares",
+                "ventana",
+                "pares ≥ reposo",
+                "pares ≥ movimiento",
+                "ventana ≥ reposo",
+            ],
+            (
+                [
+                    r.pose,
+                    str(r.frames),
+                    str(r.detected),
+                    _fmt(r.fps, "{:.1f}"),
+                    _q3(r.pair_per_s),
+                    _q3(r.window_per_s),
+                    _sobre(r.pair_per_s, quieto),
+                    _sobre(r.pair_per_s, movimiento),
+                    _sobre(r.window_per_s, quieto),
+                ]
+                for r in rest
+            ),
+        ),
+        "",
+        "Si el temblor es por cuadro, «pares» queda muy por encima de «ventana»: "
+        "al medir por segundo, el ruido crece con la tasa.",
+    ]
 
 
 def report_to_json(
@@ -820,6 +1030,17 @@ def report_to_json(
             "luminance_correlation": report.luminance_correlation,
             "detector_interval_ms": report.detector_interval_ms,
             "wall_interval_ms": report.wall_interval_ms,
+            "rest": [
+                {
+                    "pose": r.pose,
+                    "frames": r.frames,
+                    "detected": r.detected,
+                    "fps": r.fps,
+                    "pair_per_s": list(r.pair_per_s),
+                    "window_per_s": list(r.window_per_s),
+                }
+                for r in report.rest
+            ],
         },
         "gaps": [
             {
@@ -849,6 +1070,7 @@ def report_to_json(
                 "prompt": r.prompt,
                 "repetition": r.repetition,
                 "skipped_duplicates": r.skipped_duplicates,
+                "velocity_window": r.velocity_window,
             }
             for r in records
         ],

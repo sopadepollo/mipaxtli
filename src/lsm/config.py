@@ -450,6 +450,17 @@ class DiagnosticsConfig(_Section):
     #: Repeticiones por letra dinámica en la sesión guiada.
     repetitions_per_letter: int = Field(default=10, ge=1, le=100)
 
+    #: Duración de cada postura de la prueba de reposo, en milisegundos. Mano
+    #: quieta en una estática y en la posición inicial de la J: mide cuánto
+    #: «se mueve» una mano que no se mueve, o sea el temblor de MediaPipe.
+    rest_ms: float = Field(default=5000.0, gt=0.0, le=60000.0)
+
+    #: Ventana con la que la prueba de reposo mide además la velocidad entre el
+    #: cuadro actual y el de hace esta cantidad de milisegundos, dividida entre
+    #: el tiempo real transcurrido. Si el temblor es por cuadro, esta velocidad
+    #: no crece con la tasa y la de pares consecutivos sí (ADR 0017).
+    rest_velocity_window_ms: float = Field(default=100.0, gt=0.0, le=2000.0)
+
 
 class CaptureConfig(_Section):
     """Recolección de dataset (`src/lsm/cli/capture.py`, `ARQUITECTURA.md` §4.7)."""
@@ -480,7 +491,13 @@ class CaptureConfig(_Section):
     #: toda configuración con exposición automática, con un intervalo de ~60 ms
     #: que apunta a exposición larga (ADR 0017). En Windows suele ser log2 de
     #: segundos: -6 ≈ 1/64 s. Se fija tras `medir-camara --exposicion`.
-    exposure: float | None = Field(default=None, ge=-20.0, le=10000.0)
+    #:
+    #: -5 (2026-09-28): con luz de día todas las exposiciones del barrido dieron
+    #: ~28 fps nuevos, la automática incluida; -5 es la que deja la imagen más
+    #: clara (luminancia 0.29) sin depender de la automática, que con poca luz
+    #: bajó la cámara a 16.6 fps. La lectura de vuelta del driver no sirve para
+    #: confirmarlo: dijo -5 en todas las filas.
+    exposure: float | None = Field(default=-5.0, ge=-20.0, le=10000.0)
 
     #: API de captura de OpenCV: `auto`, `MSMF`, `DSHOW` (Windows) o `V4L2`.
     backend: Literal["auto", "MSMF", "DSHOW", "V4L2"] = "auto"

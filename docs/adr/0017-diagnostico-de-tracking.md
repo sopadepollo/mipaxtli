@@ -292,6 +292,59 @@ cuadros que dejó el descarte de repetidos.
 `lsm-demo medir-camara --exposicion=...` quedan para medir si la exposición es lo
 que limita la cámara a 16.6 fps.
 
+### La exposición, medida (2026-09-28)
+
+Con luz de día todas las filas del barrido (-5, -6, -7, -8 y la automática)
+dieron ~28 fps nuevos: el barrido no discrimina de día, y los 16.6 fps de la
+noche del sábado eran la exposición automática alargándose con poca luz. La
+luminancia sí cambió con cada valor (0.44 automática; 0.29, 0.18, 0.10 y 0.06
+de -5 a -8), pero el driver leyó de vuelta `-5` en todas las filas: esa lectura
+no es confiable y no se usa para decidir. Se fija `capture.exposure = -5`, la
+más clara de las manuales, para que la tasa no dependa de la luz.
+
+### A 28 fps la J sigue sin cerrar: el temblor por cuadro
+
+Con cuadros únicos a 27.5–28.3 fps el diagnóstico siguió dando
+`DYNAMIC_TOO_LONG` en la J. Hipótesis: el temblor de MediaPipe es más o menos
+constante **por cuadro**, así que al medir la velocidad por segundo crece con la
+tasa, y a 28 fps la mano quieta puede quedar por encima de
+`velocity_threshold_per_s = 0.6`: el trazo nunca encuentra el reposo que lo
+cierra.
+
+Lo que ya dice la sesión del 2026-09-28 (`2026-09-28-095310-habitual`),
+reproducida sin cámara con la velocidad contra el cuadro de hace 100 ms:
+
+| estado | pares con mano | por pares, p10 / p50 (u/s) | ventana 100 ms, p10 / p50 (u/s) |
+|---|---|---|---|
+| STABLE | 41 | 0.29 / 0.38 | 0.08 / 0.13 |
+| DYNAMIC_CANDIDATE | 2709 | 0.68 / 1.78 | 0.30 / 1.43 |
+
+- La mano pasó 2709 de ~3700 cuadros con mano en DYNAMIC_CANDIDATE y solo 41 en
+  STABLE. El p10 por pares dentro del candidato (0.68) ya supera 0.6: nueve de
+  cada diez cuadros no cuentan como quietos.
+- En STABLE, donde la mano está quieta de verdad, la velocidad por pares es
+  ~3× la de la ventana: la mayor parte de lo que se mide entre dos cuadros
+  seguidos es ruido que no se acumula.
+
+Es consistente con la hipótesis pero no la prueba: esos cuadros no se pidieron
+quietos. Para eso la sesión guiada empieza ahora con una **prueba de reposo**:
+5 s (`diagnostics.rest_ms`) de mano quieta en una estática y en la posición
+inicial de la J, palma de lado, con p50 / p95 / máx de la velocidad por segundo
+por pares y contra el cuadro de hace `diagnostics.rest_velocity_window_ms`
+(100 ms), comparados con los dos umbrales (sección 6 del reporte).
+
+**Qué se hace con el resultado** (pendiente de la prueba):
+
+1. Si el p95 por pares de la mano quieta supera `velocity_threshold_per_s` y
+   el de la ventana queda claramente por debajo, la hipótesis se confirma y
+   la velocidad del §6 pasa a ser el desplazamiento entre el cuadro actual y
+   el de hace Δ ms (Δ configurable, ~100 ms), dividido entre el tiempo real
+   transcurrido: el ruido pesa lo mismo a cualquier tasa. Sube
+   `SEGMENTATION_SPEC_VERSION` a 5, y el eval de Fase 2 y el replay de Fase 5
+   tienen que no cambiar.
+2. El umbral de reposo se fija justo por encima del p95 de la ventana en la
+   prueba de reposo, **no** por conversión de unidades como en la v4.
+
 ## Alternativa anotada: ventana deslizante con spotting por DTW
 
 **No implementada.** Si tras velocidad por segundo, exposición fija y la

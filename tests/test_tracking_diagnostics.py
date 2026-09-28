@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from collections.abc import Sequence as AbcSequence
 from pathlib import Path
+from statistics import median
 
 import pytest
 
@@ -33,6 +35,7 @@ from lsm.segmentation import (
 from lsm.synthetic import canonical_hand, to_frame, translated
 from lsm.tracking_diagnostics import (
     Context,
+    FrameRecord,
     GuidedSession,
     TrackingRecorder,
     analyze,
@@ -504,6 +507,7 @@ def test_una_sesion_guiada_en_vivo_escribe_su_diagnostico(
             "habitual",
             "--repeticiones",
             "2",
+            "--sin-reposo",
         ),
         CONFIG,
     )
@@ -560,18 +564,117 @@ def test_sondeo_reporta_luminancia_media_y_la_muestra_en_la_tabla() -> None:
     from lsm.tracking_diagnostics import render_probes, summarize_probe
 
     probe = summarize_probe(
-        'auto 1280x720 exposición -6.0',
-        'auto 1280x720 @ 30',
+        "auto 1280x720 exposición -6.0",
+        "auto 1280x720 @ 30",
         [0.0, 33.0, 66.0, 99.0],
-        [b'a', b'b', b'b', b'c'],
+        [b"a", b"b", b"b", b"c"],
         [0.2, 0.4, 0.4, 0.6],
     )
     assert probe.mean_luminance == pytest.approx(0.4)
-    assert '0.40' in render_probes([probe], {})
+    assert "0.40" in render_probes([probe], {})
 
 
 def test_sondeo_sin_luminancias_no_inventa_una() -> None:
     from lsm.tracking_diagnostics import summarize_probe
 
-    probe = summarize_probe('x', 'y', [0.0, 33.0], [b'a', b'b'])
+    probe = summarize_probe("x", "y", [0.0, 33.0], [b"a", b"b"])
     assert probe.mean_luminance is None
+
+
+def test_diagnosticar_empieza_por_las_posturas_de_reposo() -> None:
+    diagnostico = _diagnostico_pedido(
+        _args("diagnosticar", "--iluminacion", "x"), CONFIG
+    )
+    assert isinstance(diagnostico, Diagnostico)
+    assert diagnostico.guiada is not None
+    assert diagnostico.guiada.current() == ("REPOSO_ESTATICA", 1)
+    solo = _diagnostico_pedido(
+        _args("diagnosticar", "--iluminacion", "x", "--solo-reposo"), CONFIG
+    )
+    assert isinstance(solo, Diagnostico)
+    assert solo.guiada is not None
+    assert solo.guiada.letters == ()
+
+
+def _graba(sesion: GuidedSession) -> bool:
+    """Sin estrechar el tipo: recording cambia entre llamadas."""
+    return sesion.recording
+
+
+def test_el_reposo_arranca_con_espacio_y_avanza_solo_al_cumplir_su_duracion() -> None:
+    from lsm.tracking_diagnostics import REST_POSES
+
+    sesion = GuidedSession(
+        letters=("J",), repetitions=1, rest_poses=tuple(REST_POSES), rest_ms=5000.0
+    )
+    assert not _graba(sesion)
+    sesion.tick(99999.0)
+    assert sesion.current() == ("REPOSO_ESTATICA", 1)
+    sesion.press_next(1000.0)
+    assert _graba(sesion)
+    sesion.press_next(2000.0)  # un segundo ESPACIO no la corta
+    sesion.tick(5999.0)
+    assert sesion.current() == ("REPOSO_ESTATICA", 1)
+    sesion.tick(6000.0)
+    assert sesion.current() == ("REPOSO_J", 1)
+    assert not _graba(sesion)
+    sesion.press_next(7000.0)
+    sesion.discard_last()  # BACKSPACE reinicia la postura en curso
+    assert sesion.current() == ("REPOSO_J", 1)
+    assert not _graba(sesion)
+    sesion.press_next(8000.0)
+    sesion.tick(13000.0)
+    assert sesion.current() == ("J", 1)
+    assert _graba(sesion)
+
+
+def _grabar_reposo(paso_ms: float, temblor: float) -> list[FrameRecord]:
+    """Mano quieta con un temblor POR CUADRO de amplitud fija, a la tasa dada."""
+    recorder = TrackingRecorder(CONFIG)
+    base = canonical_hand()
+    azar = random.Random(0)
+    for i in range(60):
+        dx = azar.uniform(-temblor, temblor)
+        recorder.observe(
+            to_frame(translated(base, 600.0 + dx, 400.0), width=1280, height=720),
+            wall_ms=i * paso_ms,
+            detector_ms=i * paso_ms,
+            luminance=0.3,
+            thumbnail=bytes([i % 256]),
+            state="IDLE",
+            prompt="REPOSO_ESTATICA",
+            repetition=1,
+        )
+    return recorder.records
+
+
+def test_el_temblor_por_cuadro_crece_con_la_tasa_en_pares_y_no_en_la_ventana() -> None:
+    from lsm.tracking_diagnostics import summarize_rest
+
+    lento = summarize_rest(_grabar_reposo(1000.0 / 15, 3.0))[0]
+    rapido = summarize_rest(_grabar_reposo(1000.0 / 30, 3.0))[0]
+    # Mismo temblor por cuadro: por segundo, los pares lo duplican al doble de
+    # tasa; contra el cuadro de hace ~100 ms, no.
+    pares = median(rapido.pair_per_s) / median(lento.pair_per_s)
+    ventana = median(rapido.window_per_s) / median(lento.window_per_s)
+    assert pares == pytest.approx(2.0, rel=0.05)
+    assert 0.6 < ventana < 1.5
+    assert rapido.fps == pytest.approx(30.0)
+
+
+def test_el_reporte_trae_la_prueba_de_reposo_y_no_la_cuenta_como_repeticion() -> None:
+    records = _grabar_reposo(1000.0 / 30, 3.0)
+    reporte = analyze(records, [], CONFIG)
+    texto = render_report(
+        reporte,
+        {
+            "segmentation.velocity_threshold_per_s": 0.6,
+            "segmentation.motion_threshold_per_s": 0.75,
+            "diagnostics.rest_velocity_window_ms": 100.0,
+        },
+    )
+    assert "## 6. Prueba de reposo" in texto
+    assert "REPOSO_ESTATICA" in texto
+    assert reporte.repetitions == ()
+    resumen = report_to_json(reporte, records, [], {})["summary"]
+    assert resumen["rest"][0]["frames"] == 60

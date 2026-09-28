@@ -462,6 +462,20 @@ uv run lsm-demo diagnosticar --mano derecha --iluminacion lampara
 # o: make diagnostico ARGS="--iluminacion habitual"
 ```
 
+**Prueba de reposo.** Antes de las letras la sesión pide dos posturas con la
+mano quieta: una estática (la A) y la posición inicial de la J, palma de lado.
+Cada una se arranca con **ESPACIO**, dura `diagnostics.rest_ms` (5 s) y avanza
+sola; **BACKSPACE** la reinicia. El reporte añade la sección 6: velocidad de la
+mano quieta en unidades por segundo (p50 / p95 / máx), por pares de cuadros y
+contra el cuadro de hace `diagnostics.rest_velocity_window_ms` (100 ms), y qué
+fracción supera `velocity_threshold_per_s` y `motion_threshold_per_s`. Para
+hacer solo esa prueba, o solo las letras:
+
+```bash
+uv run lsm-demo diagnosticar --mano derecha --iluminacion habitual --solo-reposo
+uv run lsm-demo diagnosticar --mano derecha --iluminacion habitual --sin-reposo
+```
+
 En pantalla, abajo, dice qué letra hacer y cuántas van. **ESPACIO** da la
 repetición por hecha, **BACKSPACE** la descarta y la vuelve a pedir, **q**
 termina (lo registrado hasta ese momento se escribe igual). Hacer cada letra
@@ -518,10 +532,20 @@ uv run lsm-demo medir-camara --exposicion=-5,-6,-7,-8
 ```
 
 Con `=`: sin él, `-5` se lee como otra opción. En Windows los valores suelen ser
-log2 de segundos (-6 ≈ 1/64 s). La tabla añade la luminancia media y la
-exposición que el driver dice haber aceptado: si un valor sube los fps pero deja
-la imagen demasiado oscura, no sirve sin más luz. El elegido va a
-`capture.exposure`.
+log2 de segundos (-6 ≈ 1/64 s). La tabla añade la luminancia media: si un valor
+sube los fps pero deja la imagen demasiado oscura, no sirve sin más luz. El
+elegido va a `capture.exposure` (hoy -5, ADR 0017).
+
+**La columna «aceptado por el driver» no es confiable para la exposición.** Con
+la webcam de referencia en MSMF dijo `exp -5 (auto 0)` en todas las filas
+mientras la luminancia bajaba de 0.44 a 0.06: el driver sí aplicaba cada valor,
+pero lee de vuelta otro. No la uses para decidir; la luminancia y los fps son
+lo que se mide de verdad.
+
+Barre de día **y** con la luz con la que vas a usar la demo: con luz de día todas
+las exposiciones, la automática incluida, dieron ~28 fps nuevos, así que de día
+el barrido no discrimina. Los 16.6 fps de la primera medición eran la exposición
+automática alargándose con poca luz.
 
 Las filas de `MSMF` y `DSHOW` solo funcionan en Windows. Desde Windows, como la demo:
 
