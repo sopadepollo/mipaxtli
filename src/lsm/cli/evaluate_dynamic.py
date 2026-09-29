@@ -526,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
             # Bloque 2: las dinámicas con huecos cortos se reconstruyen a la
             # tasa nominal, la de la grabación (ADR 0021).
             gaps=GapPolicy.from_config(config, config.capture.camera_fps),
+            exclude_before=config.corpus.exclude_before,
             dynamic_labels=PHASE5_LABELS,
         )
     except CorpusError as error:

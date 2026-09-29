@@ -14,6 +14,7 @@ incrementar `FEATURE_SPEC_VERSION`. Ver `docs/adr/0002-formato-de-features.md`.
 
 from __future__ import annotations
 
+from datetime import date
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -680,6 +681,22 @@ class CaptureConfig(_Section):
         return self
 
 
+class CorpusConfig(_Section):
+    """Qué muestras grabadas entran al entrenamiento y a la evaluación."""
+
+    #: Letra → fecha desde la que valen sus muestras. Las de esa letra grabadas
+    #: **antes** —por la fecha local de su `timestamp`— se dejan fuera al cargar
+    #: el corpus, sin borrarlas. Es para cuando la definición de una letra
+    #: cambia: lo grabado con la anterior es otra seña con la misma etiqueta.
+    #:
+    #: X desde el 2026-09-29: su definición final es la mano de frente con un
+    #: desplazamiento hacia la cámara y de regreso (glosario). Todo lo grabado
+    #: antes se hizo con otra ejecución.
+    exclude_before: dict[str, date] = Field(
+        default_factory=lambda: {"X": date(2026, 9, 29)}
+    )
+
+
 class SignsConfig(_Section):
     """Dirección texto → señas (`src/lsm/signs.py`, `ARQUITECTURA.md` §4.10).
 
@@ -749,6 +766,7 @@ class Config(_Section):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     signs: SignsConfig = Field(default_factory=SignsConfig)
     diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
+    corpus: CorpusConfig = Field(default_factory=CorpusConfig)
 
     @model_validator(mode="after")
     def _la_captura_alcanza_para_el_canal_dinamico(self) -> Config:

@@ -33,7 +33,9 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Final
 
@@ -81,6 +83,9 @@ class Provenance:
     git_commit: str | None
     #: Dinámicas truncadas que se dejaron fuera por el manifiesto (Bloque 4).
     excluded_truncated: int = 0
+    #: Muestras de una letra grabadas antes de la fecha desde la que vale su
+    #: definición (`corpus.exclude_before`).
+    excluded_by_date: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -93,6 +98,7 @@ class Provenance:
             "labels": list(self.labels),
             "git_commit": self.git_commit,
             "excluded_truncated": self.excluded_truncated,
+            "excluded_by_date": self.excluded_by_date,
             "feature_spec_version": FEATURE_SPEC_VERSION,
             "segmentation_spec_version": SEGMENTATION_SPEC_VERSION,
             "capture_spec_version": CAPTURE_SPEC_VERSION,
@@ -173,9 +179,11 @@ def _describe(
     fingerprint: str,
     repo: Path,
     excluded_truncated: int = 0,
+    excluded_by_date: int = 0,
 ) -> Provenance:
     return Provenance(
         excluded_truncated=excluded_truncated,
+        excluded_by_date=excluded_by_date,
         source=source,
         synthetic=synthetic,
         fingerprint=fingerprint,
@@ -197,6 +205,7 @@ def load_corpus(
     repo: Path | None = None,
     dynamic_labels: tuple[str, ...] = (),
     gaps: GapPolicy | None = None,
+    exclude_before: Mapping[str, date] | None = None,
 ) -> Corpus:
     """Lee `data/raw`; si está vacío y se permite, genera el corpus sintético.
 
@@ -208,26 +217,41 @@ def load_corpus(
     de esas letras (Fase 5). Con grabaciones reales se lee todo lo que haya, y
     quien consume filtra. Vacío por defecto para que el corpus sintético de la
     Fase 2 —y su huella— sigan siendo exactamente los de antes.
+
+    `exclude_before` (`config.corpus.exclude_before`): letra → fecha desde la
+    que valen sus muestras. Las grabadas antes, por la fecha local de su
+    `timestamp`, quedan fuera sin borrarse.
     """
     repo = repo or Path.cwd()
     # Bloque 4: las dinámicas truncadas del manifiesto quedan fuera, sin borrarse.
     # La huella se calcula sobre lo que sí entra: es otro corpus.
     truncadas = read_truncated_manifest(root)
     todas = list(iter_sample_paths(root))
-    paths = [p for p in todas if p.relative_to(root).as_posix() not in truncadas]
+    no_truncadas = [p for p in todas if p.relative_to(root).as_posix() not in truncadas]
+    leidas = [(path, read_sample(path)) for path in no_truncadas]
+    limites = exclude_before or {}
+    vigentes = [
+        (path, almacenada)
+        for path, almacenada in leidas
+        if (limite := limites.get(almacenada.metadata.label)) is None
+        or almacenada.metadata.timestamp.date() >= limite
+    ]
 
-    if paths:
+    # Con grabaciones reales nunca se cae al sintético, aunque las exclusiones
+    # dejen el corpus vacío: eso tiene que verse, no taparse con manos de mentira.
+    if leidas:
         # `gaps`: las dinámicas con huecos cortos se reconstruyen (Bloque 2).
-        samples = tuple(read_sample(path).to_sample(gaps) for path in paths)
+        samples = tuple(almacenada.to_sample(gaps) for _, almacenada in vigentes)
         return Corpus(
             samples=samples,
             provenance=_describe(
                 samples,
                 source=root.as_posix(),
                 synthetic=False,
-                fingerprint=_fingerprint_of_files(paths, root),
+                fingerprint=_fingerprint_of_files([p for p, _ in vigentes], root),
                 repo=repo,
-                excluded_truncated=len(todas) - len(paths),
+                excluded_truncated=len(todas) - len(no_truncadas),
+                excluded_by_date=len(leidas) - len(vigentes),
             ),
         )
 

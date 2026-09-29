@@ -178,6 +178,14 @@ criterio. No es una muestra —vive en la raíz, fuera de
 las listadas y lo anota en la procedencia (`excluded_truncated`). Lo escribe
 `lsm-capture marcar-truncadas`.
 
+#### Letras grabadas antes de su definición final
+
+`config.corpus.exclude_before` (letra → fecha) deja fuera, al cargar el corpus,
+las muestras de esa letra cuyo `timestamp` cae en una fecha local anterior. Es
+para cuando cambia cómo se ejecuta una letra: lo grabado con la definición vieja
+es otra seña con la misma etiqueta. No borra nada, y la procedencia del corpus lo
+cuenta en `excluded_by_date`. Hoy: **X antes del 2026-09-29**.
+
 #### Los intentos dinámicos rechazados
 
 `data/raw/<firmante>/<sesión>/<LETRA>/rechazados/003.json` (Paso 0, ADR 0024).

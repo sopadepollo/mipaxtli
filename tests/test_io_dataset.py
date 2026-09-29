@@ -424,3 +424,47 @@ def test_el_manifiesto_de_truncadas_las_deja_fuera_del_corpus(tmp_path: Path) ->
     assert len(corpus.samples) == 2
     assert corpus.provenance.excluded_truncated == 1
     assert rutas[1].exists()  # no se borra
+
+
+def test_las_muestras_anteriores_a_la_definicion_de_su_letra_quedan_fuera(
+    tmp_path: Path,
+) -> None:
+    """`corpus.exclude_before`: la X grabada antes de su definición final es otra
+    seña con la misma etiqueta. Se deja fuera sin borrarla; las otras letras y
+    las X nuevas entran."""
+    from datetime import date, datetime, timedelta, timezone
+
+    from lsm.io.corpus import load_corpus
+
+    mexico = timezone(timedelta(hours=-6))
+    vieja = datetime(2026, 9, 28, 23, 30, tzinfo=mexico)
+    nueva = datetime(2026, 9, 29, 0, 5, tzinfo=mexico)
+    rutas = [
+        write_sample(tmp_path, muestra(label="X", timestamp=vieja)),
+        write_sample(tmp_path, muestra(label="X", timestamp=nueva)),
+        write_sample(tmp_path, muestra(label="A", timestamp=vieja)),
+    ]
+
+    corpus = load_corpus(
+        tmp_path,
+        ("A", "X"),
+        allow_synthetic=False,
+        repo=tmp_path,
+        exclude_before={"X": date(2026, 9, 29)},
+    )
+
+    assert sorted((s.label, s.timestamp) for s in corpus.samples) == [
+        ("A", vieja),
+        ("X", nueva),
+    ]
+    assert corpus.provenance.excluded_by_date == 1
+    assert all(ruta.exists() for ruta in rutas)
+
+
+def test_la_x_de_antes_de_hoy_queda_fuera_por_defecto() -> None:
+    from datetime import date
+
+    from lsm.config import Config, load_config
+
+    assert Config().corpus.exclude_before == {"X": date(2026, 9, 29)}
+    assert load_config("config.yaml").corpus == Config().corpus

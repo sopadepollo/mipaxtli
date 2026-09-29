@@ -553,6 +553,19 @@ signs:
   # reproductor —ese se mide con el reloj—, solo cada cuánto se lee el teclado.
   tick_ms: 33
 
+# Qué muestras grabadas entran al entrenamiento y a la evaluación (io/corpus.py).
+corpus:
+  # Letra → fecha desde la que valen sus muestras. Las de esa letra grabadas
+  # antes (fecha local de su timestamp) quedan fuera al cargar, sin borrarse, y
+  # la procedencia lo cuenta en excluded_by_date. Es para cuando cambia la
+  # definición de una letra: lo grabado con la anterior es otra seña.
+  #
+  # X: definición final el 2026-09-29 (glosario): mano de frente, desplazamiento
+  # hacia la cámara y de regreso. Su movimiento solo se ve como cambio de
+  # escala, así que hasta el canal δ (feature-spec) el DTW apenas lo distingue.
+  exclude_before:
+    X: 2026-09-29
+
 # Diagnóstico de pérdidas de tracking (src/lsm/tracking_diagnostics.py, Fase 5.1).
 #
 # No cambia nada de la tubería: solo cómo se mide una sesión de
