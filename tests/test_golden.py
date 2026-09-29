@@ -374,3 +374,44 @@ def test_hay_una_velocidad_por_cada_par_de_frames(document: dict[str, Any]) -> N
         for run in case["expected"]["runs"]:
             assert len(run["scales"]) == run["length"], case["id"]
             assert len(run["velocities"]) == run["length"] - 1, case["id"]
+
+
+def test_cada_caso_de_hueco_reproduce_su_reconstruccion(
+    document: dict[str, Any],
+) -> None:
+    """Bloque 2: `lsm.gaps.fill_gaps` sobre la entrada da lo que dice el archivo."""
+    from lsm.gaps import GapPolicy, GapRejected, fill_gaps
+
+    tolerance = document["tolerance"]
+    casos = document["gap_cases"]
+    assert {c["id"] for c in casos} == {
+        "gap_short_middle",
+        "gap_too_long",
+        "gap_at_edges",
+        "gap_hand_changed",
+        "gap_too_much_interpolated",
+    }
+    for case in casos:
+        entrada = case["input"]
+        salida = fill_gaps(
+            tuple(slot_from_input(entry) for entry in entrada["frames"]),
+            GapPolicy(entrada["max_gap_frames"], entrada["max_fraction"]),
+        )
+        esperado = case["expected"]
+        if esperado["outcome"] == "rejected":
+            assert isinstance(salida, GapRejected), case["id"]
+            assert str(salida.reason) == esperado["reason"]
+            assert salida.frame_index == esperado["frame_index"]
+            continue
+        assert not isinstance(salida, GapRejected), case["id"]
+        assert salida.interpolated == esperado["interpolated"]
+        assert salida.trimmed_start == esperado["trimmed_start"]
+        assert salida.trimmed_end == esperado["trimmed_end"]
+        frames = [frame_from_input(entry) for entry in esperado["frames"]]
+        assert len(frames) == len(salida.sequence.frames)
+        for a, b in zip(frames, salida.sequence.frames, strict=True):
+            assert a.handedness is b.handedness
+            for la, lb in zip(a.landmarks, b.landmarks, strict=True):
+                assert abs(la.x - lb.x) <= tolerance
+                assert abs(la.y - lb.y) <= tolerance
+                assert abs(la.z - lb.z) <= tolerance

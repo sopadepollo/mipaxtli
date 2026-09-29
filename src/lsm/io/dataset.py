@@ -30,6 +30,7 @@ from typing import Any, Final
 
 from lsm.capture import CAPTURE_SPEC_VERSION
 from lsm.features import split_valid_runs
+from lsm.gaps import GapPolicy, GapRejected, fill_gaps
 from lsm.io.hands import frames_from_json, frames_to_json
 from lsm.types import (
     HANDEDNESS_CONVENTION,
@@ -170,7 +171,7 @@ class StoredSample:
     metadata: SampleMetadata
     frames: FrameStream
 
-    def to_sample(self) -> Sample:
+    def to_sample(self, gaps: GapPolicy | None = None) -> Sample:
         """Convierte a `types.Sample`, que es lo que consume el entrenamiento.
 
         Exige que el flujo sea **una sola secuencia válida sin huecos**. No es
@@ -179,9 +180,29 @@ class StoredSample:
         trozo más largo entregaría una seña recortada con la etiqueta de la
         completa. Las dos cosas envenenan el entrenamiento en silencio, así que se
         prefiere fallar aquí, al cargar, donde todavía se puede regrabar.
+
+        **La excepción del Bloque 2** (ADR 0021): una muestra **dinámica** con
+        huecos cortos se reconstruye con `lsm.gaps.fill_gaps` si se pasa
+        `gaps`. Sin política, o en una estática, cualquier hueco sigue siendo un
+        error.
         """
         runs = split_valid_runs(self.frames)
-        if len(runs) != 1 or len(runs[0]) != len(self.frames):
+        interpolados = 0
+        if len(runs) == 1 and len(runs[0]) == len(self.frames):
+            secuencia = runs[0]
+        elif gaps is not None and self.metadata.kind is SampleKind.DYNAMIC:
+            reconstruida = fill_gaps(self.frames, gaps)
+            if isinstance(reconstruida, GapRejected):
+                msg = (
+                    f"la muestra dinámica {self.metadata.label} de "
+                    f"{self.metadata.signer_id} tiene huecos que no se pueden "
+                    f"rellenar ({reconstruida.reason} en el frame "
+                    f"{reconstruida.frame_index}); hay que regrabarla."
+                )
+                raise DatasetError(msg)
+            secuencia = reconstruida.sequence
+            interpolados = reconstruida.interpolated
+        else:
             msg = (
                 f"la muestra {self.metadata.label} de {self.metadata.signer_id} "
                 f"tiene huecos: {len(self.frames)} frames en {len(runs)} secuencias "
@@ -201,7 +222,7 @@ class StoredSample:
                     handedness=meta.handedness,
                     detected_handedness=frame.detected_handedness or frame.handedness,
                 )
-                for frame in runs[0].frames
+                for frame in secuencia.frames
             )
         )
         return Sample(
@@ -217,6 +238,7 @@ class StoredSample:
             mean_luminance=meta.mean_luminance,
             mean_scale_px=meta.mean_scale_px,
             kind=meta.kind,
+            interpolated_frames=interpolados,
         )
 
 

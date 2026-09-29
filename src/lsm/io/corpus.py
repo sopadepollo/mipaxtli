@@ -39,6 +39,7 @@ from typing import Any, Final
 
 from lsm.capture import CAPTURE_SPEC_VERSION
 from lsm.features import FEATURE_SPEC_VERSION
+from lsm.gaps import GapPolicy
 from lsm.io.dataset import iter_sample_paths, read_sample
 from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.synthetic import synthetic_dynamic_samples, synthetic_samples
@@ -190,6 +191,7 @@ def load_corpus(
     signers: int = SYNTHETIC_SIGNERS,
     repo: Path | None = None,
     dynamic_labels: tuple[str, ...] = (),
+    gaps: GapPolicy | None = None,
 ) -> Corpus:
     """Lee `data/raw`; si está vacío y se permite, genera el corpus sintético.
 
@@ -206,7 +208,8 @@ def load_corpus(
     paths = list(iter_sample_paths(root))
 
     if paths:
-        samples = tuple(read_sample(path).to_sample() for path in paths)
+        # `gaps`: las dinámicas con huecos cortos se reconstruyen (Bloque 2).
+        samples = tuple(read_sample(path).to_sample(gaps) for path in paths)
         return Corpus(
             samples=samples,
             provenance=_describe(

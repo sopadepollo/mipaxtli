@@ -278,6 +278,17 @@ class SegmentationConfig(_Section):
     #: iban separados 2.5–3.5 s.
     motion_exhausted_ms: float = Field(default=1000.0, gt=0.0, le=60000.0)
 
+    #: Hueco más largo que se rellena por interpolación dentro de un trazo
+    #: dinámico, en ms (Bloque 2, ADR 0021). En los diagnósticos en vivo los
+    #: huecos dentro de un trazo son bimodales: el 48% dura ≤ 100 ms (1–3
+    #: cuadros) y el resto se va a cientos de ms (p75 770 ms). 150 cubre 3
+    #: cuadros aun a 22 fps; más largo inventaría trayectoria. PROVISIONAL.
+    dynamic_max_gap_ms: float = Field(default=150.0, gt=0.0, le=2000.0)
+
+    #: Fracción máxima de frames interpolados en un trazo o una muestra
+    #: dinámica; por encima se rechaza (Bloque 2). PROVISIONAL.
+    dynamic_max_interpolated_fraction: float = Field(default=0.25, ge=0.0, lt=1.0)
+
     #: Duración máxima de un candidato dinámico, en milisegundos, contada desde
     #: el primer frame del trazo. Por encima se descarta sin clasificar y se
     #: vuelve a TRACKING: nadie tarda eso en trazar una letra, y lo que sí dura

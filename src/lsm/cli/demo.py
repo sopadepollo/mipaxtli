@@ -256,9 +256,11 @@ def anotar_evento(diagnostico: Diagnostico, evento: SegmentationEvent) -> None:
     """Lo que el reporte necesita de la segmentación, por repetición."""
     tipo: str | None = None
     etiqueta: str | None = None
+    interpolados = 0
     match evento:
-        case WindowDynamic():
+        case WindowDynamic(interpolated_frames=n):
             tipo = "WindowDynamic"
+            interpolados = n
         case WindowRejected(reason=reason) if reason in (
             RejectionReason.DYNAMIC_INTERRUPTED,
             RejectionReason.DYNAMIC_TOO_LONG,
@@ -279,6 +281,7 @@ def anotar_evento(diagnostico: Diagnostico, evento: SegmentationEvent) -> None:
         label=etiqueta,
         prompt=registro.prompt if registro else None,
         repetition=registro.repetition if registro else None,
+        interpolated=interpolados,
     )
 
 

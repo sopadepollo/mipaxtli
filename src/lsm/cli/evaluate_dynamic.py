@@ -61,6 +61,7 @@ from lsm.evaluation import (
     sweep_dynamic,
     without_dynamic_path,
 )
+from lsm.gaps import GapPolicy
 from lsm.io.corpus import (
     SYNTHETIC_WARNING,
     Corpus,
@@ -522,6 +523,9 @@ def main(argv: list[str] | None = None) -> int:
             args.raiz,
             PHASE2_LABELS,
             allow_synthetic=not args.sin_sintetico,
+            # Bloque 2: las dinámicas con huecos cortos se reconstruyen a la
+            # tasa nominal, la de la grabación (ADR 0021).
+            gaps=GapPolicy.from_config(config, config.capture.camera_fps),
             dynamic_labels=PHASE5_LABELS,
         )
     except CorpusError as error:

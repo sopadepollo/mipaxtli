@@ -194,6 +194,12 @@ opuestas según el modo:
 
 Guardar con la barra en rojo no se puede.
 
+Si se pierde la mano: en modo estático cualquier hueco impide guardar. En modo
+dinámico, desde el Bloque 2 (ADR 0021), un hueco corto —como mucho
+`segmentation.dynamic_max_gap_ms`, 150 ms— no lo impide: la muestra se guarda
+con el hueco tal como ocurrió, y al entrenar se rellena interpolando. Uno más
+largo, o demasiados frames rellenados, sí.
+
 La clase `NONE` **no es opcional** y es la que todo el mundo olvida: mano
 relajada, transiciones entre letras y gestos cotidianos. Sin ella el clasificador
 asigna una letra aunque la persona se esté rascando la nariz. Grábala sobre todo
@@ -489,8 +495,9 @@ termina (lo registrado hasta ese momento se escribe igual). Hacer cada letra
 como en un deletreo normal, con la mano quieta un momento antes y después.
 
 La sección 5.1 del reporte da, por letra, los intentos con el trazo entero,
-partido o perdido, y la latencia entre el último cuadro en movimiento y la
-entrega del trazo (p50 / p90 / máx, en ms).
+partido o perdido, la latencia entre el último cuadro en movimiento y la
+entrega del trazo (p50 / p90 / máx, en ms), y cuántos trazos llegaron con algún
+hueco rellenado por interpolación (Bloque 2, ADR 0021).
 
 Al salir escribe en `data/diagnostico/<fecha>-<iluminacion>/`:
 

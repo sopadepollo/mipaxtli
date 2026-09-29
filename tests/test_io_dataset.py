@@ -365,3 +365,35 @@ def test_un_registro_de_otra_version_se_rechaza(tmp_path: Path) -> None:
 
     with pytest.raises(DatasetError, match="schema_version"):
         load_consents(tmp_path)
+
+
+def _con_un_hueco() -> FrameStream:
+    frames = still_sequence(canonical_hand(), length=24).frames
+    return (*frames[:10], InvalidFrame(reason=InvalidReason.NO_HAND), *frames[11:])
+
+
+def test_una_dinamica_con_un_hueco_corto_se_reconstruye_con_politica() -> None:
+    """Bloque 2 (ADR 0021): con política, la dinámica se rellena y dice cuánto."""
+    from lsm.gaps import GapPolicy
+
+    convertida = muestra(frames=_con_un_hueco(), kind=SampleKind.DYNAMIC).to_sample(
+        GapPolicy(max_gap_frames=5, max_fraction=0.25)
+    )
+
+    assert convertida.interpolated_frames == 1
+    assert len(convertida.sequence.frames) == 24
+
+
+def test_una_estatica_con_hueco_sigue_siendo_un_error_con_politica() -> None:
+    """El camino estático no cambia (Bloque 2, punto 9)."""
+    from lsm.gaps import GapPolicy
+
+    with pytest.raises(DatasetError, match="huecos"):
+        muestra(frames=_con_un_hueco()).to_sample(
+            GapPolicy(max_gap_frames=5, max_fraction=0.25)
+        )
+
+
+def test_sin_politica_una_dinamica_con_hueco_sigue_siendo_un_error() -> None:
+    with pytest.raises(DatasetError, match="huecos"):
+        muestra(frames=_con_un_hueco(), kind=SampleKind.DYNAMIC).to_sample()

@@ -31,6 +31,7 @@ from lsm.features import (
     scale_to_pixels,
     split_valid_runs,
 )
+from lsm.gaps import GapPolicy, GapRejected, fill_gaps
 from lsm.types import (
     FrameSlot,
     FrameStream,
@@ -286,10 +287,21 @@ def evaluate_window(
 
     stream: FrameStream = tuple(buffered.slot for buffered in frames)
     runs = split_valid_runs(stream)
-    if len(runs) != 1 or len(runs[0]) != count:
+    if len(runs) == 1 and len(runs[0]) == count:
+        sequence = runs[0]
+    elif kind is SampleKind.DYNAMIC:
+        # Bloque 2 (ADR 0021): una dinámica con huecos cortos se guarda —con los
+        # huecos tal como ocurrieron— si `to_sample` podrá reconstruirla. Se mide
+        # sobre la reconstruida, que es lo que verá el entrenamiento.
+        reconstruida = fill_gaps(
+            stream, GapPolicy.from_config(config, config.capture.camera_fps)
+        )
+        if isinstance(reconstruida, GapRejected):
+            return rechazo(Rejection.HAS_GAPS)
+        sequence = reconstruida.sequence
+    else:
         return rechazo(Rejection.HAS_GAPS)
 
-    sequence = runs[0]
     # La mano es la declarada de la sesión, igual en todos los frames por
     # construcción (ADR 0017): ya no hay «lateralidad mixta» que rechazar.
     handedness = sequence.frames[0].handedness

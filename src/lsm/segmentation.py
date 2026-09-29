@@ -119,6 +119,7 @@ from lsm.features import (
     SequenceFeatures,
     extract_sequence_features,
 )
+from lsm.gaps import GapPolicy, can_bridge, interpolate_frames
 from lsm.types import FrameSlot, Prediction, RawFrame, Sequence, WindowOrigin
 
 #: Versión del contrato de segmentación: la §6 de `docs/feature-spec.md` (cómo se
@@ -162,7 +163,11 @@ from lsm.types import FrameSlot, Prediction, RawFrame, Sequence, WindowOrigin
 #: El cierre de DYNAMIC_CANDIDATE se mide con su propia ventana
 #: (`closing_window_ms`, 150 ms), y tras un `DYNAMIC_TOO_LONG` puede nacer otra
 #: racha a los `motion_exhausted_ms` aunque la mano no haya reposado.
-SEGMENTATION_SPEC_VERSION: Final = 6
+#:
+#: **v7** (Bloque 2, ADR 0021): dentro de DYNAMIC_CANDIDATE, un hueco de como
+#: mucho `dynamic_max_gap_ms` entre dos frames de la misma mano se rellena
+#: interpolando los landmarks crudos (`lsm.gaps`), en vez de cortar el trazo.
+SEGMENTATION_SPEC_VERSION: Final = 7
 
 
 def window_velocity(
@@ -311,6 +316,9 @@ class RejectionReason(StrEnum):
     #: Un hueco (mano perdida o escala degenerada) cortó el trazo a medias. No se
     #: cose (`feature-spec.md` §0.3): el trazo se descarta entero.
     DYNAMIC_INTERRUPTED = "DYNAMIC_INTERRUPTED"
+    #: El trazo se cerró, pero más de `dynamic_max_interpolated_fraction` de sus
+    #: frames eran interpolados (Bloque 2): se descarta sin clasificar.
+    DYNAMIC_TOO_MUCH_INTERPOLATED = "DYNAMIC_TOO_MUCH_INTERPOLATED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +390,8 @@ class WindowDynamic:
 
     frame_index: int
     window: Sequence
+    #: Frames de `window` rellenados por interpolación (Bloque 2).
+    interpolated_frames: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +403,9 @@ class LetterEmitted:
     window: Sequence
     #: De qué camino salió. Lo usa la demo para decir qué clasificador habló.
     origin: WindowOrigin = WindowOrigin.STABLE
+    #: Frames de `window` rellenados por interpolación (Bloque 2). Siempre 0 en
+    #: el camino estático, que no interpola.
+    interpolated_frames: int = 0
 
 
 #: Eventos tipados, nunca cadenas: quien consume esto hace `match` sobre tipos y
@@ -434,6 +447,8 @@ class _Stroke:
     #: Longitud del trazo en su último frame en movimiento. El reposo que cierra
     #: el candidato no es parte de la letra y se corta aquí.
     end: int = 0
+    #: Por frame, si se rellenó por interpolación (Bloque 2).
+    filled: list[bool] = field(default_factory=list)
 
     @property
     def active(self) -> bool:
@@ -444,11 +459,13 @@ class _Stroke:
 
     def start(self, origin: RawFrame) -> None:
         self.frames = [origin]
+        self.filled = [False]
         self.moving = 0
         self.end = 1
 
-    def add(self, frame: RawFrame, *, moving: bool) -> None:
+    def add(self, frame: RawFrame, *, moving: bool, filled: bool = False) -> None:
         self.frames.append(frame)
+        self.filled.append(filled)
         if moving:
             self.moving += 1
             self.end = len(self.frames)
@@ -456,8 +473,13 @@ class _Stroke:
     def trace(self) -> Sequence:
         return Sequence(frames=tuple(self.frames[: self.end]))
 
+    def interpolated(self) -> int:
+        """Frames interpolados dentro de `trace()`."""
+        return sum(self.filled[: self.end])
+
     def reset(self) -> None:
         self.frames = []
+        self.filled = []
         self.moving = 0
         self.end = 0
 
@@ -518,7 +540,53 @@ def run_segmentation(
     #: camino estático no promueve a STABLE. Se libera como `pending_repeat`.
     dynamic_lock = False
 
-    for index, slot in enumerate(stream):
+    # -- Huecos dentro de un trazo (Bloque 2) -----------------------------------
+    politica = GapPolicy.from_config(config, thresholds.fps)
+
+    def con_huecos_rellenos() -> Iterator[tuple[int, FrameSlot, bool]]:
+        """El flujo, con los huecos cortos de un candidato ya rellenos.
+
+        Si se pierde la mano dentro de DYNAMIC_CANDIDATE, los frames inválidos
+        se **retienen** sin procesar. Si la mano vuelve antes de pasar
+        `max_gap_frames` y se puede interpolar (`gaps.can_bridge`), se ceden
+        los frames interpolados —con el índice de los que reemplazan— y después
+        el real; si no, se ceden los inválidos tal cual y la máquina corta el
+        trazo como siempre. El precio es latencia: mientras hay un hueco abierto
+        en un trazo, la máquina va hasta `max_gap_frames` cuadros por detrás.
+
+        Lee `state` en cada paso: el cuerpo del bucle ya procesó el cuadro
+        anterior cuando se le pide el siguiente.
+        """
+        retenidos: list[tuple[int, FrameSlot]] = []
+        ultimo: RawFrame | None = None
+        for i, s in enumerate(stream):
+            usable = _usable_frame(s, settings.min_detection_score)
+            if usable is None:
+                if retenidos or (
+                    state is State.DYNAMIC_CANDIDATE and ultimo is not None
+                ):
+                    retenidos.append((i, s))
+                    if len(retenidos) > politica.max_gap_frames:
+                        yield from ((k, x, False) for k, x in retenidos)
+                        retenidos = []
+                        ultimo = None
+                    continue
+                ultimo = None
+                yield i, s, False
+                continue
+            if retenidos:
+                if ultimo is not None and can_bridge(ultimo, usable):
+                    rellenos = interpolate_frames(ultimo, usable, len(retenidos))
+                    for (k, _), relleno in zip(retenidos, rellenos, strict=True):
+                        yield k, relleno, True
+                else:
+                    yield from ((k, x, False) for k, x in retenidos)
+                retenidos = []
+            ultimo = usable
+            yield i, s, False
+        yield from ((k, x, False) for k, x in retenidos)
+
+    for index, slot, relleno in con_huecos_rellenos():
         frame = _usable_frame(slot, settings.min_detection_score)
 
         if frame is None:
@@ -626,11 +694,11 @@ def run_segmentation(
                     # sin él τ tendría su origen ya desplazado.
                     stroke.start(buffer[-2])
                 if stroke.active:
-                    stroke.add(frame, moving=True)
+                    stroke.add(frame, moving=True, filled=relleno)
             else:
                 low_run += 1
                 if stroke.active:
-                    stroke.add(frame, moving=False)
+                    stroke.add(frame, moving=False, filled=relleno)
                 if low_run >= thresholds.motion_confirm_low_frames:
                     exhausted = False
                     if state is not State.DYNAMIC_CANDIDATE:
@@ -685,13 +753,30 @@ def run_segmentation(
                 continue
 
             trazo = stroke.trace()
+            interpolados = stroke.interpolated()
             stroke.reset()
+            if interpolados > politica.max_fraction * len(trazo.frames):
+                # Demasiado reconstruido (Bloque 2): como el trazo demasiado
+                # largo, se descarta sin llegar al clasificador.
+                yield WindowRejected(
+                    frame_index=index,
+                    reason=RejectionReason.DYNAMIC_TOO_MUCH_INTERPOLATED,
+                )
+                yield StateChanged(
+                    frame_index=index,
+                    previous=State.DYNAMIC_CANDIDATE,
+                    current=State.TRACKING,
+                )
+                state = State.TRACKING
+                continue
             yield StateChanged(
                 frame_index=index,
                 previous=State.DYNAMIC_CANDIDATE,
                 current=State.DYNAMIC_EMIT,
             )
-            yield WindowDynamic(frame_index=index, window=trazo)
+            yield WindowDynamic(
+                frame_index=index, window=trazo, interpolated_frames=interpolados
+            )
 
             prediction = classify(trazo, WindowOrigin.DYNAMIC)
             if prediction.is_unknown or prediction.confidence < settings.min_confidence:
@@ -715,6 +800,7 @@ def run_segmentation(
                 prediction=prediction,
                 window=trazo,
                 origin=WindowOrigin.DYNAMIC,
+                interpolated_frames=interpolados,
             )
             yield StateChanged(
                 frame_index=index, previous=State.DYNAMIC_EMIT, current=State.EMIT

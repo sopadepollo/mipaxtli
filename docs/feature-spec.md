@@ -73,6 +73,33 @@ MediaPipe Hands entrega 21 landmarks por mano, cada uno con `(x, y, z)`:
   dactilológico de LSM es monomanual.
 - Si no se detecta ninguna mano, el frame se marca **inválido**. Los frames
   inválidos no se interpolan: interrumpen la secuencia.
+- **Excepción, solo en el camino dinámico** (SEGMENTATION_SPEC_VERSION 7, ADR
+  0021). Dentro de DYNAMIC_CANDIDATE, y en las muestras dinámicas guardadas, una
+  racha de frames inválidos de como mucho `segmentation.dynamic_max_gap_ms` entre
+  dos frames válidos se rellena interpolando los **landmarks crudos** —antes del
+  paso 1—:
+
+  ```
+  n       = frames del hueco
+  t_k     = k / (n + 1),  k = 1 … n
+  p_{k,i} = a_i + (b_i − a_i) · t_k         # x, y, z de cada landmark, en ese orden de operaciones
+  ```
+
+  con `a` el último frame válido antes del hueco y `b` el primero después. Los
+  frames rellenados heredan la resolución y la mano de `a`, toman como scores el
+  menor de los dos extremos y no tienen `detected_handedness`. Condiciones:
+
+  - la mano declarada y la resolución coinciden en `a` y `b`; si no, no se
+    rellena;
+  - un hueco más largo que el máximo no se rellena y corta la secuencia, como
+    siempre;
+  - en una muestra, los inválidos del principio y del final no se rellenan: se
+    recortan;
+  - si los frames interpolados superan `segmentation.dynamic_max_interpolated_fraction`
+    de la secuencia resultante (con `>`), la secuencia se rechaza.
+
+  En el camino estático no cambia nada. La implementación es `lsm.gaps` y los
+  casos normativos son los `gap_cases` de `golden_features.json`.
 
 > **Nota — desde la v2 solo afecta a `detected_handedness`**, que es diagnóstico:
 > la etiqueta ya no llega al paso 2. Se conserva el texto porque la etiqueta sigue
@@ -486,7 +513,15 @@ porque los tres casos se comportan distinto y no basta con probar uno:
 
 ## 6. Velocidad y estabilidad — contrato de segmentación
 
-**`SEGMENTATION_SPEC_VERSION = 6`** (`src/lsm/segmentation.py`).
+**`SEGMENTATION_SPEC_VERSION = 7`** (`src/lsm/segmentation.py`).
+
+> **v7** — `docs/adr/0021-tolerancia-a-huecos-en-el-camino-dinamico.md`. Dentro de
+> DYNAMIC_CANDIDATE, un hueco corto entre dos frames de la misma mano se rellena
+> interpolando los landmarks crudos (§0.3) en vez de cortar el trazo. Mientras un
+> hueco está abierto dentro de un trazo la máquina retiene los frames inválidos,
+> y va hasta `dynamic_max_gap_ms` por detrás. Un trazo con más de
+> `dynamic_max_interpolated_fraction` de frames rellenados se descarta sin
+> clasificar (`DYNAMIC_TOO_MUCH_INTERPOLATED`).
 
 > **v6** — `docs/adr/0019-cierre-del-trazo-y-cascada.md`. La velocidad del §6.1
 > se divide entre el **tamaño de palma** `m` y no entre la escala del paso 4, que

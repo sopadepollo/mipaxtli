@@ -471,7 +471,9 @@ def test_una_sesion_guiada_en_vivo_escribe_su_diagnostico(
     calentamiento = CONFIG.telemetry.fps_window_frames
     quieta = [mano(400.0)] * 12
     trazo = [mano(400.0 + 25.0 * i) for i in range(1, 16)]
-    con_hueco: list[FrameSlot] = [*trazo[:12], SIN_MANO, *trazo[12:]]
+    # Un hueco más largo que `dynamic_max_gap_ms`: ese sí corta el trazo (Bloque
+    # 2). Uno de un cuadro se rellenaría y no habría DYNAMIC_INTERRUPTED.
+    con_hueco: list[FrameSlot] = [*trazo[:12], *([SIN_MANO] * 10), *trazo[12:]]
     slots: list[FrameSlot] = [
         *([mano(400.0)] * calentamiento),
         *quieta,

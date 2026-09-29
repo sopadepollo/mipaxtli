@@ -12,11 +12,13 @@ desaparece. Sin cámara y sin clasificador real.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 
 import pytest
 
 from lsm.config import Config
 from lsm.features import ExtractionRejected, extract_sequence_features
+from lsm.gaps import GapPolicy
 from lsm.segmentation import (
     EvidenceAccumulated,
     FrameThresholds,
@@ -36,6 +38,7 @@ from lsm.segmentation import (
 from lsm.synthetic import canonical_hand, to_frame, translated
 from lsm.types import (
     FrameSlot,
+    Handedness,
     InvalidFrame,
     InvalidReason,
     Prediction,
@@ -1092,15 +1095,17 @@ def test_tras_un_demasiado_largo_la_espera_fija_deja_nacer_otro_trazo() -> None:
     assert len(entradas) == 2
 
 
-def test_un_hueco_descarta_el_trazo_entero() -> None:
-    """Sin coser (§0.3): un frame sin mano en mitad del trazo lo invalida, y lo
-    que viene después empieza de cero."""
+def test_un_hueco_largo_descarta_el_trazo_entero() -> None:
+    """Sin coser (§0.3): un hueco más largo que `dynamic_max_gap_ms` en mitad del
+    trazo lo invalida, y lo que viene después empieza de cero. Los cortos se
+    rellenan desde el Bloque 2 (siguientes tests)."""
     antes = trazo((10.0, 0.0, 8))
     despues = trazo((0.0, 10.0, 2), start=muneca_px(antes))
     clasificador = PorOrigen()
+    largo = DYNAMIC_UMBRALES_HUECOS.max_gap_frames + 1
 
     events = run_dynamic(
-        [*antes, *missing_frames(1), *despues, *quieta_tras(despues, 8)],
+        [*antes, *missing_frames(largo), *despues, *quieta_tras(despues, 8)],
         clasificador,
     )
 
@@ -1149,3 +1154,109 @@ def test_el_cierre_mira_su_propia_ventana_y_el_resto_la_suya() -> None:
         return trazo_entregado.frame_index
 
     assert cierre(larga) - cierre(corta) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Bloque 2: huecos cortos dentro de un trazo
+# --------------------------------------------------------------------------- #
+
+DYNAMIC_UMBRALES_HUECOS = GapPolicy.from_config(DYNAMIC_CONFIG, FPS)
+
+
+def _trazo_con_hueco(hueco: int, largo: int = 12) -> list[FrameSlot]:
+    """Un trazo de `largo` frames en el que se pierden `hueco` a partir del octavo.
+
+    Los perdidos **reemplazan** frames: la mano sigue moviéndose durante el
+    hueco, como en vivo. Si se insertaran, la interpolación entre dos frames
+    contiguos parecería reposo y cerraría el trazo a mitad del hueco.
+    """
+    frames = trazo((10.0, 0.0, largo + hueco))
+    return [
+        *frames[:8],
+        *missing_frames(hueco),
+        *frames[8 + hueco :],
+        *quieta_tras(frames, 8),
+    ]
+
+
+def test_un_hueco_corto_en_el_trazo_se_rellena_y_el_trazo_sale_entero() -> None:
+    clasificador = PorOrigen()
+
+    events = run_dynamic(_trazo_con_hueco(2), clasificador)
+
+    (entregado,) = [e for e in events if isinstance(e, WindowDynamic)]
+    assert entregado.interpolated_frames == 2
+    assert RejectionReason.DYNAMIC_INTERRUPTED not in [
+        e.reason for e in events if isinstance(e, WindowRejected)
+    ]
+    # Los interpolados caen sobre la recta entre los dos extremos.
+    x = [f.landmarks[0].x for f in entregado.window.frames]
+    assert x == sorted(x)
+
+
+def test_el_hueco_mas_largo_que_se_rellena_es_max_gap() -> None:
+    """Con un trazo lo bastante largo para que la fracción interpolada no
+    decida (5 de 23 < 25%) ni el largo máximo: lo que separa los dos casos es el
+    hueco."""
+    justo = DYNAMIC_UMBRALES_HUECOS.max_gap_frames
+
+    rellenado = run_dynamic(_trazo_con_hueco(justo, largo=18), PorOrigen())
+    cortado = run_dynamic(_trazo_con_hueco(justo + 1, largo=18), PorOrigen())
+
+    assert len([e for e in rellenado if isinstance(e, WindowDynamic)]) == 1
+    assert RejectionReason.DYNAMIC_INTERRUPTED in [
+        e.reason for e in cortado if isinstance(e, WindowRejected)
+    ]
+
+
+def test_un_hueco_con_cambio_de_mano_no_se_rellena() -> None:
+    """La mano declarada cambia a través del hueco: no es la misma mano."""
+    frames = trazo((10.0, 0.0, 12))
+    izquierda = [replace(f, handedness=Handedness.LEFT) for f in frames[8:]]
+    flujo = [*frames[:8], *missing_frames(1), *izquierda, *quieta_tras(izquierda, 8)]
+
+    events = run_dynamic(flujo, PorOrigen())
+
+    assert RejectionReason.DYNAMIC_INTERRUPTED in [
+        e.reason for e in events if isinstance(e, WindowRejected)
+    ]
+
+
+def test_un_trazo_demasiado_reconstruido_se_descarta_sin_clasificar() -> None:
+    config = Config.model_validate(
+        {
+            "segmentation": {
+                **DYNAMIC_CONFIG.segmentation.model_dump(),
+                "dynamic_max_interpolated_fraction": 0.05,
+            }
+        }
+    )
+    clasificador = PorOrigen()
+
+    events = list(
+        run_segmentation(iter(_trazo_con_hueco(2)), config, clasificador, fps=FPS)
+    )
+
+    assert RejectionReason.DYNAMIC_TOO_MUCH_INTERPOLATED in [
+        e.reason for e in events if isinstance(e, WindowRejected)
+    ]
+    assert [e for e in events if isinstance(e, WindowDynamic)] == []
+    # Tras el rechazo el camino estático toma la mano quieta, como siempre;
+    # lo que no ocurre es que el trazo llegue al clasificador dinámico.
+    assert [c for c in clasificador.calls if c[0] is WindowOrigin.DYNAMIC] == []
+
+
+def test_fuera_del_candidato_un_hueco_sigue_interrumpiendo() -> None:
+    """El camino estático no cambia (Bloque 2, punto 9): con la mano quieta, un
+    frame perdido vacía el buffer como siempre."""
+    quieta = quieta_tras(trazo((10.0, 0.0, 1)), 20)
+    flujo = [*quieta[:10], *missing_frames(1), *quieta[10:]]
+
+    events = run_dynamic(flujo, PorOrigen())
+
+    assert [e for e in events if isinstance(e, WindowDynamic)] == []
+    estables = [
+        e for e in events if isinstance(e, StateChanged) and e.current is State.STABLE
+    ]
+    # Tras el hueco la ventana estable tiene que volver a llenarse desde cero.
+    assert len(estables) >= 1

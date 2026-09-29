@@ -37,6 +37,7 @@ from lsm.evaluation import (
     Dataset,
     observe,
 )
+from lsm.gaps import GapPolicy
 from lsm.io.corpus import (
     SYNTHETIC_REPETITIONS,
     SYNTHETIC_SIGNERS,
@@ -114,6 +115,9 @@ def main(argv: list[str] | None = None) -> int:
             args.raiz,
             PHASE2_LABELS,
             allow_synthetic=not args.sin_sintetico,
+            # Bloque 2: las dinámicas con huecos cortos se reconstruyen a la
+            # tasa nominal, la de la grabación (ADR 0021).
+            gaps=GapPolicy.from_config(config, config.capture.camera_fps),
             repetitions=args.repeticiones_sinteticas,
             signers=args.firmantes_sinteticos,
             dynamic_labels=PHASE5_LABELS,

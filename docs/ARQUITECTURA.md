@@ -75,6 +75,7 @@ lsm-translator/
 │   ├── types.py                  # LandmarkFrame, Sequence, Prediction, Handedness
 │   ├── features.py               # normalización y extracción — SIN I/O
 │   ├── segmentation.py           # máquina de estados: cuándo empieza/termina seña
+│   ├── gaps.py                   # huecos cortos del camino dinámico (ADR 0021) — SIN I/O
 │   ├── capture.py                # criterio de aceptación de una muestra — SIN I/O
 │   ├── evaluation.py             # splits, matriz, barrido, contraste — SIN I/O
 │   ├── classifiers/

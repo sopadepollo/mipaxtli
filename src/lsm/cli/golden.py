@@ -8,13 +8,15 @@ reimplementación coincide dentro de `1e-6`.
 Se generan en Fase 0, mucho antes de que exista el código web, y a propósito: el
 momento de fijar el contrato es cuando todavía hay una sola implementación.
 
-El archivo tiene tres bloques:
+El archivo tiene cuatro bloques:
 
 - `cases` — el formato del §5.1: un frame de entrada y sus 42 componentes. Cubre
   la tabla de cobertura mínima obligatoria.
 - `sequence_cases` — lo que un frame suelto no puede cubrir: el canal de
   trayectoria (§3.1), el remuestreo a 24 (§3.2), la ponderación de `g_t` (§3.3),
   la dispersión σ (§2) y el comportamiento ante secuencias interrumpidas.
+- `gap_cases` — la reconstrucción de huecos del camino dinámico (Bloque 2,
+  `lsm.gaps`): el flujo de entrada, la política y el resultado, frame a frame.
 - `metadata` — versiones y parámetros con los que se generó todo lo anterior.
 
 Este módulo vive en `cli/` porque escribe en disco. La geometría que usa es la de
@@ -27,7 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +45,7 @@ from lsm.features import (
     resample,
     split_valid_runs,
 )
+from lsm.gaps import GapPolicy, GapRejected, fill_gaps
 from lsm.io.hands import dump_frame_stream
 from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.synthetic import (
@@ -517,6 +520,111 @@ def build_sequence_case(case: SequenceCase, config: Config) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class GapCase:
+    """Un flujo con huecos, la política con que se reconstruye y por qué importa."""
+
+    id: str
+    description: str
+    validates: str
+    stream: FrameStream
+    max_gap_frames: int
+    max_fraction: float
+
+
+def gap_cases() -> tuple[GapCase, ...]:
+    """Los cinco casos del Bloque 2 (ADR 0021)."""
+    hand = canonical_hand()
+    moving = moving_sequence(hand, tuple((12.0 * i, 4.0 * i) for i in range(10))).frames
+    hueco = InvalidFrame(reason=InvalidReason.NO_HAND)
+
+    def con_huecos(frames: tuple[RawFrame, ...], perdidos: set[int]) -> FrameStream:
+        return tuple(hueco if i in perdidos else f for i, f in enumerate(frames))
+
+    izquierda = tuple(
+        f if i < 5 else replace(f, handedness=Handedness.LEFT)
+        for i, f in enumerate(moving)
+    )
+    return (
+        GapCase(
+            id="gap_short_middle",
+            description="Dos frames perdidos a mitad de un trazo.",
+            validates=(
+                "Bloque 2: el hueco se rellena interpolando los landmarks crudos, "
+                "`a + (b - a) · t` con `t = k / (n + 1)`."
+            ),
+            stream=con_huecos(moving, {4, 5}),
+            max_gap_frames=5,
+            max_fraction=0.25,
+        ),
+        GapCase(
+            id="gap_too_long",
+            description="Seis frames perdidos con un máximo de cinco.",
+            validates="Bloque 2: un hueco más largo que el máximo no se rellena.",
+            stream=con_huecos(moving, {2, 3, 4, 5, 6, 7}),
+            max_gap_frames=5,
+            max_fraction=0.9,
+        ),
+        GapCase(
+            id="gap_at_edges",
+            description="Frames perdidos al principio y al final.",
+            validates=("Bloque 2: los huecos del borde no se rellenan, se recortan."),
+            stream=con_huecos(moving, {0, 1, 9}),
+            max_gap_frames=5,
+            max_fraction=0.25,
+        ),
+        GapCase(
+            id="gap_hand_changed",
+            description="La mano declarada cambia a través del hueco.",
+            validates="Bloque 2: no se interpola entre dos manos distintas.",
+            stream=con_huecos(izquierda, {4}),
+            max_gap_frames=5,
+            max_fraction=0.25,
+        ),
+        GapCase(
+            id="gap_too_much_interpolated",
+            description="Tres de diez frames perdidos con un máximo del 25%.",
+            validates=(
+                "Bloque 2: la fracción interpolada se mide sobre la secuencia "
+                "resultante, con `>`."
+            ),
+            stream=con_huecos(moving, {3, 4, 5}),
+            max_gap_frames=5,
+            max_fraction=0.25,
+        ),
+    )
+
+
+def build_gap_case(case: GapCase) -> dict[str, Any]:
+    outcome = fill_gaps(case.stream, GapPolicy(case.max_gap_frames, case.max_fraction))
+    expected: dict[str, Any]
+    if isinstance(outcome, GapRejected):
+        expected = {
+            "outcome": "rejected",
+            "reason": str(outcome.reason),
+            "frame_index": outcome.frame_index,
+        }
+    else:
+        expected = {
+            "outcome": "filled",
+            "interpolated": outcome.interpolated,
+            "trimmed_start": outcome.trimmed_start,
+            "trimmed_end": outcome.trimmed_end,
+            "frames": [_frame_input(frame) for frame in outcome.sequence.frames],
+        }
+    return {
+        "id": case.id,
+        "description": case.description,
+        "validates": case.validates,
+        "input": {
+            "frames": [_slot_input(slot) for slot in case.stream],
+            "max_gap_frames": case.max_gap_frames,
+            "max_fraction": case.max_fraction,
+        },
+        "expected": expected,
+    }
+
+
 def build_document(config: Config) -> dict[str, Any]:
     """Arma el documento completo de golden vectors."""
     cases = [build_frame_case(case, config) for case in frame_cases()]
@@ -543,6 +651,7 @@ def build_document(config: Config) -> dict[str, Any]:
         "sequence_cases": [
             build_sequence_case(case, config) for case in sequence_cases()
         ],
+        "gap_cases": [build_gap_case(case) for case in gap_cases()],
     }
 
 

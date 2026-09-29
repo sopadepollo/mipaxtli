@@ -152,6 +152,8 @@ class SessionEvent:
     label: str | None = None
     prompt: str | None = None
     repetition: int | None = None
+    #: Frames interpolados del trazo, para `WindowDynamic` (Bloque 2).
+    interpolated: int = 0
 
 
 @dataclass
@@ -304,6 +306,7 @@ class TrackingRecorder:
         label: str | None = None,
         prompt: str | None = None,
         repetition: int | None = None,
+        interpolated: int = 0,
     ) -> None:
         self.events.append(
             SessionEvent(
@@ -312,6 +315,7 @@ class TrackingRecorder:
                 label=label,
                 prompt=prompt,
                 repetition=repetition,
+                interpolated=interpolated,
             )
         )
 
@@ -561,6 +565,8 @@ class RepetitionSummary:
     #: último cuadro con velocidad de ventana ≥ `motion_threshold_per_s` y la
     #: entrega. Es la espera de `motion_confirm_low_ms` tal como se vivió.
     stroke_latency_ms: tuple[float, ...] = ()
+    #: Frames interpolados de los trazos entregados en el intento (Bloque 2).
+    interpolated: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,6 +582,9 @@ class LetterSummary:
     #: Intentos sin ninguno.
     lost: int
     stroke_latency_ms: tuple[float, ...]
+    #: Trazos entregados con algún frame interpolado, y frames interpolados.
+    strokes_filled: int = 0
+    interpolated: int = 0
 
 
 def summarize_letters(
@@ -595,6 +604,8 @@ def summarize_letters(
                 stroke_latency_ms=tuple(
                     ms for r in propias for ms in r.stroke_latency_ms
                 ),
+                strokes_filled=sum(1 for r in propias if r.interpolated > 0),
+                interpolated=sum(r.interpolated for r in propias),
             )
         )
     return tuple(filas)
@@ -842,6 +853,9 @@ def summarize_repetitions(
                 too_long=sum(1 for e in propios if e.kind == "DYNAMIC_TOO_LONG"),
                 emitted=tuple(
                     e.label or "" for e in propios if e.kind == "LetterEmitted"
+                ),
+                interpolated=sum(
+                    e.interpolated for e in propios if e.kind == "WindowDynamic"
                 ),
                 stroke_latency_ms=(
                     ()
@@ -1143,7 +1157,9 @@ def render_report(report: TrackingReport, metadata: dict[str, Any]) -> str:
             "**Enteros**: intentos con exactamente un trazo entregado; **partidos**: "
             "más de uno; **perdidos**: ninguno. **Latencia**: ms de reloj real entre "
             "el último cuadro en movimiento (velocidad de ventana ≥ "
-            "`motion_threshold_per_s`) y la entrega del trazo, p50 / p90 / máx.",
+            "`motion_threshold_per_s`) y la entrega del trazo, p50 / p90 / máx. "
+            "**Rellenos**: intentos cuyo trazo entregado tuvo algún hueco rellenado "
+            "(Bloque 2), y cuántos frames se interpolaron en total.",
             "",
             _tabla(
                 [
@@ -1153,6 +1169,7 @@ def render_report(report: TrackingReport, metadata: dict[str, Any]) -> str:
                     "partidos",
                     "perdidos",
                     "latencia (ms)",
+                    "rellenos",
                 ],
                 (
                     [
@@ -1162,6 +1179,7 @@ def render_report(report: TrackingReport, metadata: dict[str, Any]) -> str:
                         str(f.split),
                         str(f.lost),
                         _latencias(f.stroke_latency_ms),
+                        f"{f.strokes_filled} ({f.interpolated} frames)",
                     ]
                     for f in summarize_letters(report.repetitions)
                 ),
@@ -1320,6 +1338,8 @@ def report_to_json(
                     "split": f.split,
                     "lost": f.lost,
                     "stroke_latency_ms": list(f.stroke_latency_ms),
+                    "strokes_filled": f.strokes_filled,
+                    "interpolated": f.interpolated,
                 }
                 for f in summarize_letters(report.repetitions)
             ],
@@ -1379,6 +1399,7 @@ def report_to_json(
                 "label": e.label,
                 "prompt": e.prompt,
                 "repetition": e.repetition,
+                "interpolated": e.interpolated,
             }
             for e in events
         ],

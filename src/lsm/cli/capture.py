@@ -52,6 +52,7 @@ from lsm.capture import (
 from lsm.cli import AYUDA_MANO, MANOS, MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
 from lsm.features import ExtractionRejected, extract_sequence_features
+from lsm.gaps import GapPolicy
 from lsm.hand_check import HandMismatchWatcher, input_looks_unmirrored
 from lsm.io.calibration import (
     Calibration,
@@ -837,9 +838,10 @@ def _cmd_verificar(args: argparse.Namespace) -> int:
     1. Que la σ re-derivada coincida con la que se anotó al aceptarla. σ es un
        agregado de las 42 componentes sobre todos los frames: si un solo landmark
        hubiera perdido un bit al serializarse, el número cambia.
-    2. Que el archivo no tenga huecos, que es lo que `to_sample()` exige. Una
-       muestra interrumpida no se puede entrenar y conviene saberlo ahora y no en
-       mitad de la Fase 2.
+    2. Que el archivo no tenga huecos que `to_sample()` no acepte: ninguno en
+       una estática, y en una dinámica solo los cortos que el Bloque 2 rellena
+       (ADR 0021). Una muestra interrumpida no se puede entrenar y conviene
+       saberlo ahora y no en mitad de la Fase 2.
     """
     config = load_config(args.config)
     raiz: Path = args.raiz
@@ -850,7 +852,10 @@ def _cmd_verificar(args: argparse.Namespace) -> int:
     for ruta in iter_sample_paths(raiz):
         try:
             almacenada = read_sample(ruta)
-            muestra = almacenada.to_sample()
+            # Una dinámica con huecos cortos se reconstruye (Bloque 2).
+            muestra = almacenada.to_sample(
+                GapPolicy.from_config(config, config.capture.camera_fps)
+            )
         except (DatasetError, ValueError, KeyError) as error:
             problemas.append(f"{ruta}: {error}")
             continue

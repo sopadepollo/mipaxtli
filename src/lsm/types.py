@@ -487,6 +487,12 @@ class Sample:
     #: no puede entrenar con las dinámicas. Ver
     #: `docs/adr/0010-la-clase-negativa-y-el-modo-de-grabacion.md`.
     kind: SampleKind
+    #: Frames de `sequence` rellenados por interpolación (Bloque 2, ADR 0021).
+    #: Solo puede ser distinto de 0 en una dinámica. No se guarda en disco: se
+    #: deriva al cargar del flujo guardado, que conserva los huecos tal como
+    #: ocurrieron. Sirve para que la Fase 6 pueda excluir muestras muy
+    #: reconstruidas.
+    interpolated_frames: int = 0
 
     def __post_init__(self) -> None:
         if not self.label:
