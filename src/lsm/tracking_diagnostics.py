@@ -49,7 +49,17 @@ from itertools import pairwise
 from typing import Any, Final
 
 from lsm.config import Config
-from lsm.features import SequenceFeatures, extract_sequence_features
+from lsm.features import (
+    MIN_SCALE,
+    SequenceFeatures,
+    canonicalize_handedness,
+    correct_aspect_and_orientation,
+    extract_sequence_features,
+    mean_displacement,
+    reference_scale,
+    smooth_sequence,
+    translate_to_origin,
+)
 from lsm.types import FrameSlot, InvalidFrame, RawFrame
 from lsm.types import Sequence as FrameSequence
 
@@ -61,10 +71,17 @@ CANDIDATE_STATE: Final = "DYNAMIC_CANDIDATE"
 REST_PREFIX: Final = "REPOSO_"
 
 #: Las posturas de la prueba de reposo y lo que se le pide a quien firma.
+#: Sin acentos: el HUD los dibuja con OpenCV, que no los tiene.
 REST_POSES: Final[dict[str, str]] = {
     "REPOSO_ESTATICA": "una estatica (la A) con la mano quieta",
-    "REPOSO_J": "la posicion inicial de la J, palma de lado, quieta",
+    "REPOSO_K": "la K en su posicion inicial, quieta",
+    "REPOSO_X": "la X (indice en gancho), quieta",
+    "REPOSO_Q": "la Q en su posicion inicial, quieta",
 }
+
+#: Nombres de los dos juegos de puntos de la prueba de reposo.
+ALL_POINTS: Final = "21"
+STABLE_POINTS: Final = "estables"
 
 #: Versión del formato de `diagnostico.json`.
 REPORT_SCHEMA_VERSION: Final = 1
@@ -117,6 +134,10 @@ class FrameRecord:
     #: `segmentation.velocity_window_ms` de antigüedad, sin huecos entre
     #: ellos, en unidades de mano **por segundo** de reloj real.
     velocity_window: float | None = None
+    #: Solo en la prueba de reposo: (juego de puntos, ventana en ms, velocidad
+    #: por segundo) para cada variante de `diagnostics.rest_windows_ms` ×
+    #: {21, estables}.
+    rest_variants: tuple[tuple[str, float, float], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +201,11 @@ class TrackingRecorder:
                 velocity = features.velocities[0]
 
         velocity_window = self._window_velocity(frame, wall_ms)
+        rest_variants = (
+            self._rest_variants(frame, wall_ms)
+            if prompt is not None and prompt.startswith(REST_PREFIX)
+            else ()
+        )
 
         duplicate = bool(thumbnail) and thumbnail == self._previous_thumbnail
         diff = _thumbnail_diff(self._previous_thumbnail, thumbnail)
@@ -209,6 +235,7 @@ class TrackingRecorder:
             repetition=repetition,
             skipped_duplicates=skipped_duplicates,
             velocity_window=velocity_window,
+            rest_variants=rest_variants,
         )
         self.records.append(record)
         self._previous_frame = frame
@@ -220,22 +247,53 @@ class TrackingRecorder:
         if frame is None:
             self._recent.clear()
             return None
-        ventana = self.config.segmentation.velocity_window_ms
-        # El más reciente que ya tenga la antigüedad pedida; los anteriores sobran.
-        base: tuple[float, RawFrame] | None = None
-        while self._recent and wall_ms - self._recent[0][0] >= ventana:
-            base = self._recent.pop(0)
-        if base is not None:
-            self._recent.insert(0, base)
+        # La historia guarda lo necesario para la ventana más larga que se mida:
+        # del más antiguo solo hace falta el más reciente que ya la cumpla.
+        mas_larga = max(
+            self.config.segmentation.velocity_window_ms,
+            *self.config.diagnostics.rest_windows_ms,
+        )
+        while len(self._recent) > 1 and wall_ms - self._recent[1][0] >= mas_larga:
+            self._recent.pop(0)
+        base = self._base(wall_ms, self.config.segmentation.velocity_window_ms)
         self._recent.append((wall_ms, frame))
         if base is None:
             return None
-        features = extract_sequence_features(
-            FrameSequence(frames=(base[1], frame)), self.config
-        )
-        if not isinstance(features, SequenceFeatures) or not features.velocities:
+        velocidad = velocity_between(base[1], frame, self.config)
+        if velocidad is None:
             return None
-        return features.velocities[0] * 1000.0 / (wall_ms - base[0])
+        return velocidad * 1000.0 / (wall_ms - base[0])
+
+    def _base(self, wall_ms: float, window_ms: float) -> tuple[float, RawFrame] | None:
+        """El cuadro más reciente de la historia con al menos `window_ms`."""
+        for entrada in reversed(self._recent):
+            if wall_ms - entrada[0] >= window_ms:
+                return entrada
+        return None
+
+    def _rest_variants(
+        self, frame: RawFrame | None, wall_ms: float
+    ) -> tuple[tuple[str, float, float], ...]:
+        """Cada variante de la prueba de reposo para este cuadro.
+
+        Se llama después de `_window_velocity`, que ya añadió el cuadro actual a
+        la historia: la base se busca sin él.
+        """
+        if frame is None:
+            return ()
+        variantes: list[tuple[str, float, float]] = []
+        estables = self.config.diagnostics.stable_landmarks
+        for ventana in self.config.diagnostics.rest_windows_ms:
+            base = self._base(wall_ms, ventana)
+            if base is None:
+                continue
+            for nombre, puntos in ((ALL_POINTS, None), (STABLE_POINTS, estables)):
+                v = velocity_between(base[1], frame, self.config, puntos)
+                if v is not None:
+                    variantes.append(
+                        (nombre, ventana, v * 1000.0 / (wall_ms - base[0]))
+                    )
+        return tuple(variantes)
 
     def note(
         self,
@@ -255,6 +313,39 @@ class TrackingRecorder:
                 repetition=repetition,
             )
         )
+
+
+def velocity_between(
+    before: RawFrame,
+    after: RawFrame,
+    config: Config,
+    landmarks: Sequence[int] | None = None,
+) -> float | None:
+    """La velocidad del §6.1 entre dos frames cualesquiera, en unidades de mano.
+
+    Con `landmarks=None` es exactamente la de `extract_sequence_features` sobre el
+    par: el mismo suavizado del §4, los pasos 1 y 2 y la escala del paso 4 de
+    cada frame. Con una lista de índices, el desplazamiento medio se toma solo
+    sobre esos puntos; la escala sigue siendo la de la mano entera, para que las
+    dos medidas estén en la misma unidad. `None` si la escala es degenerada.
+    """
+    suavizados = smooth_sequence(
+        FrameSequence(frames=(before, after)), config.smoothing.alpha
+    ).frames
+    geometria: list[tuple[tuple[tuple[float, float, float], ...], float]] = []
+    for f in suavizados:
+        paso_2 = canonicalize_handedness(
+            correct_aspect_and_orientation(f.points(), f.aspect_ratio), f.handedness
+        )
+        escala = reference_scale(translate_to_origin(paso_2))
+        if escala < MIN_SCALE:
+            return None
+        geometria.append((paso_2, escala))
+    (a, s_a), (b, s_b) = geometria
+    if landmarks is not None:
+        a = tuple(a[i] for i in landmarks)
+        b = tuple(b[i] for i in landmarks)
+    return mean_displacement(a, b) / ((s_a + s_b) / 2.0)
 
 
 def _thumbnail_diff(before: bytes, after: bytes) -> float | None:
@@ -524,6 +615,9 @@ class RestSummary:
     window_per_s: tuple[float, ...]
     #: Tasa real durante la postura, en cuadros por segundo.
     fps: float | None
+    #: (juego de puntos, ventana en ms, velocidades por segundo) de cada
+    #: variante, en el orden de `diagnostics.rest_windows_ms`.
+    variants: tuple[tuple[str, float, tuple[float, ...]], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -679,6 +773,10 @@ def summarize_rest(
             v for i in propios if (v := records[i].velocity_window) is not None
         )
         duracion = records[propios[-1]].wall_ms - records[propios[0]].wall_ms
+        variantes: dict[tuple[str, float], list[float]] = {}
+        for i in propios:
+            for nombre, ms, v in records[i].rest_variants:
+                variantes.setdefault((nombre, ms), []).append(v)
         filas.append(
             RestSummary(
                 pose=pose,
@@ -687,6 +785,13 @@ def summarize_rest(
                 pair_per_s=tuple(pares),
                 window_per_s=ventana,
                 fps=(len(propios) - 1) * 1000.0 / duracion if duracion > 0 else None,
+                variants=tuple(
+                    (nombre, ms, tuple(vs))
+                    for (nombre, ms), vs in sorted(
+                        variantes.items(),
+                        key=lambda kv: (kv[0][0] != ALL_POINTS, kv[0][1]),
+                    )
+                ),
             )
         )
     return tuple(filas)
@@ -1138,6 +1243,49 @@ def _render_rest(rest: Sequence[RestSummary], metadata: dict[str, Any]) -> list[
         "",
         "Si el temblor es por cuadro, «pares» queda muy por encima de «ventana»: "
         "al medir por segundo, el ruido crece con la tasa.",
+        *_render_rest_variants(rest, quieto, movimiento),
+    ]
+
+
+def _render_rest_variants(
+    rest: Sequence[RestSummary], quieto: float, movimiento: float
+) -> list[str]:
+    filas = [
+        [
+            r.pose,
+            nombre,
+            f"{ms:g}",
+            _q3(vs),
+            _sobre(vs, movimiento),
+            _sobre(vs, quieto),
+        ]
+        for r in rest
+        for nombre, ms, vs in r.variants
+    ]
+    if not filas:
+        return []
+    return [
+        "",
+        "### 6.1 Variantes: puntos × ventana",
+        "",
+        "Misma grabación, medida de varias formas. **21**: los 21 landmarks, como "
+        "la máquina hoy. **estables**: solo muñeca y nudillos "
+        "(`diagnostics.stable_landmarks`). Velocidad en unidades de mano por "
+        "segundo, p50 / p95 / máx. «≥ movimiento»: fracción de cuadros que no "
+        f"contarían como reposo para cerrar un trazo (`motion_threshold_per_s` = "
+        f"{movimiento:g}); «≥ reposo»: sobre `velocity_threshold_per_s` = {quieto:g}.",
+        "",
+        _tabla(
+            [
+                "postura",
+                "puntos",
+                "ventana (ms)",
+                "velocidad",
+                "≥ movimiento",
+                "≥ reposo",
+            ],
+            filas,
+        ),
     ]
 
 
@@ -1182,6 +1330,10 @@ def report_to_json(
                     "fps": r.fps,
                     "pair_per_s": list(r.pair_per_s),
                     "window_per_s": list(r.window_per_s),
+                    "variants": [
+                        {"points": nombre, "window_ms": ms, "values": list(vs)}
+                        for nombre, ms, vs in r.variants
+                    ],
                 }
                 for r in report.rest
             ],
@@ -1215,6 +1367,7 @@ def report_to_json(
                 "repetition": r.repetition,
                 "skipped_duplicates": r.skipped_duplicates,
                 "velocity_window": r.velocity_window,
+                "rest_variants": [list(v) for v in r.rest_variants],
             }
             for r in records
         ],

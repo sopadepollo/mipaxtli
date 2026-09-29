@@ -26,6 +26,7 @@ from lsm.cli.demo import (
     letras_dinamicas,
 )
 from lsm.config import Config
+from lsm.features import SequenceFeatures, extract_sequence_features
 from lsm.segmentation import (
     LetterEmitted,
     RejectionReason,
@@ -605,10 +606,11 @@ def _graba(sesion: GuidedSession) -> bool:
 
 
 def test_el_reposo_arranca_con_espacio_y_avanza_solo_al_cumplir_su_duracion() -> None:
-    from lsm.tracking_diagnostics import REST_POSES
-
     sesion = GuidedSession(
-        letters=("J",), repetitions=1, rest_poses=tuple(REST_POSES), rest_ms=5000.0
+        letters=("J",),
+        repetitions=1,
+        rest_poses=("REPOSO_ESTATICA", "REPOSO_K"),
+        rest_ms=5000.0,
     )
     assert not _graba(sesion)
     sesion.tick(99999.0)
@@ -619,11 +621,11 @@ def test_el_reposo_arranca_con_espacio_y_avanza_solo_al_cumplir_su_duracion() ->
     sesion.tick(5999.0)
     assert sesion.current() == ("REPOSO_ESTATICA", 1)
     sesion.tick(6000.0)
-    assert sesion.current() == ("REPOSO_J", 1)
+    assert sesion.current() == ("REPOSO_K", 1)
     assert not _graba(sesion)
     sesion.press_next(7000.0)
     sesion.discard_last()  # BACKSPACE reinicia la postura en curso
-    assert sesion.current() == ("REPOSO_J", 1)
+    assert sesion.current() == ("REPOSO_K", 1)
     assert not _graba(sesion)
     sesion.press_next(8000.0)
     sesion.tick(13000.0)
@@ -734,3 +736,61 @@ def test_por_letra_cuenta_enteros_partidos_y_la_latencia_del_fin_del_trazo() -> 
     # x = 580 en el 6 y la ventana de 100 ms todavía lo ve en el 7.
     assert reporte.repetitions[0].stroke_latency_ms == (950.0 - 350.0,)
     assert "### 5.1 Por letra" in render_report(reporte, {})
+
+
+def test_diagnosticar_pide_estatica_k_x_y_q_en_reposo() -> None:
+    from lsm.tracking_diagnostics import REST_POSES
+
+    assert tuple(REST_POSES) == ("REPOSO_ESTATICA", "REPOSO_K", "REPOSO_X", "REPOSO_Q")
+    assert all(
+        texto.isascii() for texto in REST_POSES.values()
+    )  # el HUD no tiene acentos
+
+
+def test_la_velocidad_entre_dos_frames_es_la_del_par_de_la_tuberia() -> None:
+    from lsm.tracking_diagnostics import velocity_between
+
+    a, b = mano(400.0), mano(430.0)
+    features = extract_sequence_features(FrameSequence(frames=(a, b)), CONFIG)
+
+    assert isinstance(features, SequenceFeatures)
+    assert velocity_between(a, b, CONFIG) == pytest.approx(features.velocities[0])
+
+
+def test_los_puntos_estables_ignoran_lo_que_hacen_los_dedos() -> None:
+    """Un dedo que se mueve solo mueve la medida de 21 puntos, no la de estables."""
+    from lsm.tracking_diagnostics import velocity_between
+
+    quieta = canonical_hand()
+    dedo = tuple(
+        (x + 40.0, y, z) if i == 8 else (x, y, z) for i, (x, y, z) in enumerate(quieta)
+    )
+    a = to_frame(translated(quieta, 400.0, 400.0), width=1280, height=720)
+    b = to_frame(translated(dedo, 400.0, 400.0), width=1280, height=720)
+
+    todos = velocity_between(a, b, CONFIG)
+    estables = velocity_between(a, b, CONFIG, CONFIG.diagnostics.stable_landmarks)
+
+    assert todos is not None
+    assert todos > 0.0
+    assert estables == pytest.approx(0.0)
+
+
+def test_el_reposo_mide_cada_variante_de_puntos_y_ventana() -> None:
+    from lsm.tracking_diagnostics import ALL_POINTS, STABLE_POINTS, summarize_rest
+
+    records = _grabar_reposo(1000.0 / 30, 3.0)
+    (reposo,) = summarize_rest(records)
+
+    claves = [(nombre, ms) for nombre, ms, _ in reposo.variants]
+    ventanas = CONFIG.diagnostics.rest_windows_ms
+    assert claves == [(ALL_POINTS, w) for w in ventanas] + [
+        (STABLE_POINTS, w) for w in ventanas
+    ]
+    # Con la ventana de 100 ms la variante de 21 puntos es la velocidad de la v5.
+    (v21,) = [
+        vs for nombre, ms, vs in reposo.variants if (nombre, ms) == (ALL_POINTS, 100.0)
+    ]
+    assert v21 == pytest.approx(reposo.window_per_s)
+    texto = render_report(analyze(records, [], CONFIG), {})
+    assert "### 6.1 Variantes" in texto

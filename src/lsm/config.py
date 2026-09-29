@@ -479,11 +479,33 @@ class DiagnosticsConfig(_Section):
     #: Duración de cada postura de la prueba de reposo, en milisegundos. Mano
     #: quieta en una estática y en la posición inicial de la J: mide cuánto
     #: «se mueve» una mano que no se mueve, o sea el temblor de MediaPipe.
-    rest_ms: float = Field(default=5000.0, gt=0.0, le=60000.0)
+    rest_ms: float = Field(default=10000.0, gt=0.0, le=60000.0)
+
+    #: Ventanas, en ms, con las que la prueba de reposo mide además la velocidad
+    #: de cada postura, para comparar variantes sin volver a grabar (ADR 0019).
+    rest_windows_ms: tuple[float, ...] = Field(
+        default=(100.0, 150.0, 200.0), min_length=1
+    )
+
+    #: Landmarks «estables» con los que la prueba de reposo mide una segunda
+    #: velocidad: muñeca y nudillos (0, 5, 9, 13, 17). No se mueven con los
+    #: dedos, así que su temblor no depende de si la postura los tapa.
+    stable_landmarks: tuple[int, ...] = Field(default=(0, 5, 9, 13, 17), min_length=1)
 
     #: Lo que se descarta al principio de cada postura de reposo, en ms: la
     #: mano todavía se está acomodando tras pulsar ESPACIO.
     rest_settle_ms: float = Field(default=1000.0, ge=0.0, le=60000.0)
+
+    @model_validator(mode="after")
+    def _variantes_de_reposo(self) -> DiagnosticsConfig:
+        if any(not 0.0 < w <= 2000.0 for w in self.rest_windows_ms):
+            msg = f"rest_windows_ms ({self.rest_windows_ms}) fuera de (0, 2000] ms"
+            raise ValueError(msg)
+        indices = self.stable_landmarks
+        if any(not 0 <= i <= 20 for i in indices) or len(set(indices)) != len(indices):
+            msg = f"stable_landmarks ({indices}): índices de 0 a 20, sin repetir"
+            raise ValueError(msg)
+        return self
 
 
 class CaptureConfig(_Section):

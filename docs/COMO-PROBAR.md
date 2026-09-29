@@ -462,9 +462,9 @@ uv run lsm-demo diagnosticar --mano derecha --iluminacion lampara
 # o: make diagnostico ARGS="--iluminacion habitual"
 ```
 
-**Prueba de reposo.** Antes de las letras la sesión pide dos posturas con la
-mano quieta: una estática (la A) y la posición inicial de la J, palma de lado.
-Cada una se arranca con **ESPACIO**, dura `diagnostics.rest_ms` (5 s) y avanza
+**Prueba de reposo.** Antes de las letras la sesión pide cuatro posturas con la
+mano quieta: una estática (la A), y la K, la X y la Q en su posición inicial.
+Cada una se arranca con **ESPACIO**, dura `diagnostics.rest_ms` (10 s) y avanza
 sola; **BACKSPACE** la reinicia. El reporte añade la sección 6: velocidad de la
 mano quieta en unidades por segundo (p50 / p95 / máx), por pares de cuadros y
 contra el cuadro de hace `segmentation.velocity_window_ms` (100 ms) —la que usa la
@@ -472,8 +472,11 @@ máquina desde la v5—, y qué fracción supera `velocity_threshold_per_s` y
 `motion_threshold_per_s`. Cuenta el último intento de cada postura, sin sus
 primeros `diagnostics.rest_settle_ms` (1 s), en que la mano se acomoda. Si te
 mueves a mitad de una postura, reiníciala: el reporte no puede distinguir un
-ajuste de la mano de su temblor. Para
-hacer solo esa prueba, o solo las letras:
+ajuste de la mano de su temblor. La sección 6.1 mide la misma grabación de
+varias formas —con los 21 landmarks o solo con muñeca y nudillos
+(`diagnostics.stable_landmarks`), y con cada ventana de
+`diagnostics.rest_windows_ms` (100, 150 y 200 ms)— para comparar variantes sin
+volver a grabar. Para hacer solo esa prueba, o solo las letras:
 
 ```bash
 uv run lsm-demo diagnosticar --mano derecha --iluminacion habitual --solo-reposo

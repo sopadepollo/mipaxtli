@@ -536,8 +536,15 @@ diagnostics:
   # Repeticiones por letra dinámica en la sesión guiada.
   repetitions_per_letter: 10
 
-  # Prueba de reposo: cada postura (estática, inicio de la J) dura esto, en ms.
-  rest_ms: 5000.0
+  # Prueba de reposo: cada postura (estática, K, X, Q) dura esto, en ms.
+  rest_ms: 10000.0
+
+  # La prueba de reposo mide además la velocidad con estas ventanas, en ms, y
+  # con dos juegos de puntos: los 21 y los estables de abajo (ADR 0019).
+  rest_windows_ms: [100.0, 150.0, 200.0]
+
+  # Puntos estables: muñeca y nudillos.
+  stable_landmarks: [0, 5, 9, 13, 17]
 
   # Lo que se descarta al principio de cada postura de reposo, en ms: la mano
   # todavía se está acomodando tras pulsar ESPACIO.

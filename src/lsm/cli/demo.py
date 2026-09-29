@@ -325,6 +325,12 @@ def escribir_diagnostico(
             metadata["posturas de reposo"] = " ".join(diagnostico.guiada.rest_poses)
             metadata["diagnostics.rest_ms"] = config.diagnostics.rest_ms
             metadata["diagnostics.rest_settle_ms"] = config.diagnostics.rest_settle_ms
+            metadata["diagnostics.rest_windows_ms"] = " ".join(
+                f"{w:g}" for w in config.diagnostics.rest_windows_ms
+            )
+            metadata["diagnostics.stable_landmarks"] = " ".join(
+                str(i) for i in config.diagnostics.stable_landmarks
+            )
         metadata["repeticiones descartadas"] = (
             ", ".join(f"{letra}#{n}" for letra, n in diagnostico.guiada.discarded)
             or "ninguna"

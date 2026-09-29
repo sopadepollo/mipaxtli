@@ -466,6 +466,55 @@ partidos y perdidos, y la latencia entre el último cuadro en movimiento y la
 entrega del trazo. Si en vivo la K no se parte, se propone bajar
 `motion_confirm_low_ms` hacia 400 con esos números.
 
+### Los diagnósticos en vivo con la v5 (2026-09-28)
+
+`2026-09-28-154523-habitual` (28.9 fps) y `2026-09-28-185100-lampara`
+(22.2 fps), `--sin-reposo`, commit `c3d5924`. (`2026-09-28-140627-habitual`
+quedó incompleta y no se usa.)
+
+**Lo que ya sale.** En el primer diagnóstico, de 94 candidatos solo 13
+entregaban trazo. Ahora, emitidas por el camino dinámico:
+
+| letra | habitual | lámpara |
+|---|---|---|
+| J | 9 de 10 | 5 de 12 |
+| K | 7 de 12 | 10 de 10 |
+| Ñ | 11 de 11 | 8 de 10 |
+
+**X y Q: la mano nunca «descansa» en esas posturas.** Un trazo se cierra con
+`motion_confirm_low_ms` (667 ms) de reposo. En la sesión con lámpara —la
+habitual casi no tiene intentos reales de Q y X: tras un primer intento de ~1
+minuto, 10 y 6 repeticiones duraron menos de 1 s—:
+
+| letra | reposo más largo por intento, p50 | intentos con ≥ 667 ms | velocidad p25 en el intento |
+|---|---|---|---|
+| X | 283 ms | 2 de 10 | 0.52 u/s |
+| Q | 580 ms | 4 de 10 | 0.37 u/s |
+| J, K, Ñ, Z | 1000–1400 ms | casi todos | 0.13–0.26 u/s |
+
+El trazo acaba en `DYNAMIC_TOO_LONG` y, como tras un rechazo por largo la máquina
+no admite otra racha hasta ver `motion_confirm_low_ms` de reposo, los intentos
+siguientes ni siquiera llegan a candidato (**la cascada**). La X tiene además 13
+huecos dentro del trazo, 10 de ≤ 3 cuadros (Bloque 2).
+
+**Z: el trazo sale; falla la clasificación.** Los 10 intentos tienen reposo de
+sobra y casi todos entregan trazo entero, pero el camino estático escribe **L**
+con la pose de la Z quieta (4 de 10 y 6 de 10) y el DTW rechaza la mayoría de
+los trazos (10 y 14), con plantillas del dataset viejo. Con lámpara la J sufre
+lo mismo con la I (6 veces).
+
+**K.** En vivo sí se parte (9 de 12 en habitual, 4 de 10 con lámpara), pero por
+huecos de tracking a mitad del trazo (mediana 9 cuadros, ~360 ms), no por el
+cierre. Por el criterio acordado, `motion_confirm_low_ms` **no** baja a 400
+todavía: primero el Bloque 2. Latencia fin del trazo → entrega: p50 680 ms en
+habitual y 790 ms con lámpara.
+
+**Siguiente**, en este orden: prueba de reposo ampliada (estática, K, X y Q;
+21 puntos contra muñeca y nudillos; ventanas de 100, 150 y 200 ms) → ADR 0019
+(condición de cierre y cascada) → Bloque 2 → volver a medir → propuesta de
+retracción de la estática que se cuela antes de la dinámica (I→J, L→Z). LL y RR
+al final.
+
 ## Alternativa anotada: ventana deslizante con spotting por DTW
 
 **No implementada.** Si tras velocidad por segundo, exposición fija y la
