@@ -61,10 +61,15 @@ from lsm.types import (
 #: Bloque 4 guarda el trazo que entregó la máquina de estados **y el reposo que
 #: lo cerró**; `stroke_frames` dice cuántos frames del principio son el trazo, que
 #: es lo que se entrena. `null` en las estáticas y en las dinámicas anteriores.
-SAMPLE_SCHEMA_VERSION: Final = 4
+#:
+#: **v5** (ADR 0018): cada entrada de `frames`, válida o hueco, lleva `"t_ms"`,
+#: la marca de tiempo que puso el detector. Las anteriores se leen sin marcas y
+#: quien necesita el tiempo usa el del índice a la tasa nominal: no se inventan
+#: marcas que no se midieron.
+SAMPLE_SCHEMA_VERSION: Final = 5
 
 #: Versiones que se leen. Solo la actual se escribe.
-READABLE_SAMPLE_SCHEMAS: Final = frozenset({2, 3, 4})
+READABLE_SAMPLE_SCHEMAS: Final = frozenset({2, 3, 4, 5})
 
 #: Manifiesto de las dinámicas grabadas antes del Bloque 4 que terminan con la
 #: mano todavía en movimiento (`lsm-capture marcar-truncadas`). Vive en la raíz

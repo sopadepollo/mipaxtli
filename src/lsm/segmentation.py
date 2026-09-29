@@ -591,7 +591,12 @@ def run_segmentation(
                 continue
             if retenidos:
                 if ultimo is not None and can_bridge(ultimo, usable):
-                    rellenos = interpolate_frames(ultimo, usable, len(retenidos))
+                    rellenos = interpolate_frames(
+                        ultimo,
+                        usable,
+                        len(retenidos),
+                        tuple(x.timestamp_ms for _, x in retenidos),
+                    )
                     for (k, _), relleno in zip(retenidos, rellenos, strict=True):
                         yield k, relleno, True
                 else:

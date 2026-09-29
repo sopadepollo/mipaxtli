@@ -101,7 +101,10 @@ def can_bridge(before: RawFrame, after: RawFrame) -> bool:
 
 
 def interpolate_frames(
-    before: RawFrame, after: RawFrame, count: int
+    before: RawFrame,
+    after: RawFrame,
+    count: int,
+    timestamps: tuple[float | None, ...] | None = None,
 ) -> tuple[RawFrame, ...]:
     """Los `count` frames entre `before` y `after`, por interpolación lineal.
 
@@ -110,10 +113,19 @@ def interpolate_frames(
     TypeScript). Hereda la resolución y la mano de `before`; los scores son el
     menor de los dos extremos —un frame inventado no es más fiable que los reales
     que lo rodean— y `detected_handedness` queda en `None`: nadie lo detectó.
+
+    `timestamps` son las marcas de los huecos que reemplazan (ADR 0018): el
+    cuadro rellenado ocupa el instante en que la cámara entregó el hueco. Sin
+    ellas, `None`. La interpolación es por índice, no por tiempo, como hasta
+    ahora: el contrato de la v7 no cambia.
     """
     frames: list[RawFrame] = []
     score_mano = min(before.handedness_score, after.handedness_score)
     score_deteccion = min(before.detection_score, after.detection_score)
+    marcas = timestamps if timestamps is not None else (None,) * count
+    if len(marcas) != count:
+        msg = f"{len(marcas)} marcas de tiempo para {count} frames rellenados"
+        raise ValueError(msg)
     for k in range(1, count + 1):
         t = k / (count + 1)
         frames.append(
@@ -132,6 +144,7 @@ def interpolate_frames(
                 handedness_score=score_mano,
                 detection_score=score_deteccion,
                 detected_handedness=None,
+                timestamp_ms=marcas[k - 1],
             )
         )
     return tuple(frames)
@@ -175,7 +188,14 @@ def fill_gaps(stream: FrameStream, policy: GapPolicy) -> GapFilled | GapRejected
             return GapRejected(reason=GapRejection.GAP_TOO_LONG, frame_index=i)
         if not can_bridge(antes, despues):
             return GapRejected(reason=GapRejection.HAND_CHANGED, frame_index=i)
-        frames.extend(interpolate_frames(antes, despues, largo))
+        frames.extend(
+            interpolate_frames(
+                antes,
+                despues,
+                largo,
+                tuple(slot.timestamp_ms for slot in stream[i:j]),
+            )
+        )
         interpolados += largo
         i = j
 

@@ -1,7 +1,10 @@
 # ADR 0018 — Marca de tiempo real por cuadro
 
-- **Estado:** **propuesta**, sin implementar. Se decide antes de regrabar las
-  dinámicas (Fase 5.1, Bloque 4), para que las grabaciones nuevas ya la lleven.
+- **Estado:** **implementada en parte** el 2026-09-29: §1 (el tipo), §2 (la
+  función única, `lsm.timing.frame_times_ms`) y §4 (formatos: muestra esquema 5,
+  fixture esquema 2). **§3 no**: la velocidad sigue con la tasa congelada. El
+  primer consumidor del tiempo real es el filtro One Euro (ADR 0028), que lo
+  pedía explícitamente. Las dinámicas del 2026-09-29 se grabaron sin marca.
 - **Fecha:** 2026-09-28
 - **Relacionadas:** ADR 0001 (secuencias como tipo base), ADR 0004 (contrato de
   segmentación), ADR 0013 (umbrales en milisegundos), ADR 0017 (velocidad contra

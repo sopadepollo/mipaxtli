@@ -77,7 +77,7 @@ Es el bloque que comparten los fixtures de los tests y las muestras del dataset:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "frames": [
     {
       "valid": true,
@@ -86,14 +86,24 @@ Es el bloque que comparten los fixtures de los tests y las muestras del dataset:
       "handedness": "RIGHT",
       "handedness_score": 0.98,
       "detection_score": 0.95,
-      "landmarks": [[0.51, 0.62, 0.0], "... 21 tripletas ..."]
+      "detected_handedness": "RIGHT",
+      "landmarks": [[0.51, 0.62, 0.0], "... 21 tripletas ..."],
+      "t_ms": 812344.0
     },
-    { "valid": false, "reason": "NO_HAND", "detail": "la mano salió del encuadre" }
+    { "valid": false, "reason": "NO_HAND", "detail": "la mano salió del encuadre",
+      "t_ms": 812378.0 }
   ]
 }
 ```
 
-Un archivo de otra `schema_version` se rechaza al cargar. Hay un ejemplo generado
+`t_ms` (fixture v2, muestra v5, ADR 0018) es la marca de tiempo que puso el
+detector: la misma que recibió MediaPipe, en milisegundos de un reloj monótono con
+origen arbitrario. La llevan todos los frames del flujo —huecos incluidos— o
+ninguno, y crece estrictamente; un archivo que lo incumple no se lee. Los archivos
+anteriores no la tienen y se leen sin ella: no se inventan marcas que no se
+midieron.
+
+Un archivo de una `schema_version` que no se sabe leer se rechaza al cargar. Hay un ejemplo generado
 por `make golden` en `tests/fixtures/sequences/ejemplo_trazo_j.json`.
 
 Que las dos cosas compartan la representación de un frame no es comodidad:

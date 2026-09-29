@@ -66,6 +66,11 @@ MediaPipe Hands entrega 21 landmarks por mano, cada uno con `(x, y, z)`:
   sesión de diagnóstico—, y cada cambio espejaba la mano de un frame al
   siguiente (ADR 0017).
 - `detection_score`
+- `timestamp_ms` (opcional, ADR 0018): milisegundos de un reloj monótono con
+  origen arbitrario, el mismo que recibe el detector. Lo llevan todos los frames
+  de un flujo o ninguno, y crece estrictamente. **No entra en los §1 a §3.** Un
+  frame sin marca vale `índice · 1000 / fps` a la tasa nominal
+  (`lsm.timing.frame_times_ms`).
 
 ### 0.3 Convenciones obligatorias de captura
 

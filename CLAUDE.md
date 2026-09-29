@@ -23,7 +23,7 @@ es lo primero que lee quien llega al repositorio.
 
 2. **`src/lsm/features.py`, `segmentation.py`, `capture.py`, `evaluation.py`,
    `telemetry.py`, `tracking_diagnostics.py`, `hand_check.py`, `gaps.py`,
-   `signs.py` y
+   `signs.py`, `timing.py` y
    `classifiers/` son código puro.** Sin
    OpenCV, sin MediaPipe, sin acceso a disco, sin cámara. Toda la I/O vive en
    `src/lsm/io/` y en `src/lsm/cli/`. Esto permite testear el núcleo en CI sin

@@ -457,6 +457,7 @@ def _with_points(frame: RawFrame, points: Points3) -> RawFrame:
         handedness=frame.handedness,
         handedness_score=frame.handedness_score,
         detection_score=frame.detection_score,
+        timestamp_ms=frame.timestamp_ms,
     )
 
 

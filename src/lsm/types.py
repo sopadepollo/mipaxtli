@@ -259,6 +259,12 @@ class RawFrame:
     #: del contrato. Con la palma de lado cambia de opinión a mitad de un trazo
     #: (ADR 0017), y por eso dejó de decidir el espejo. `None` si no se sabe.
     detected_handedness: Handedness | None = None
+    #: Milisegundos de un reloj monótono, con origen arbitrario por flujo: solo
+    #: importan las diferencias (ADR 0018). Lo pone `io/hands.py` con el mismo
+    #: valor que recibe MediaPipe. `None` en frames sin tiempo —el dataset
+    #: anterior al esquema 5, los sintéticos—: quien necesita el tiempo usa
+    #: entonces el del índice a la tasa nominal (`lsm.timing.frame_times_ms`).
+    timestamp_ms: float | None = None
 
     def __post_init__(self) -> None:
         if len(self.landmarks) != NUM_LANDMARKS:
@@ -295,6 +301,8 @@ class InvalidFrame:
 
     reason: InvalidReason
     detail: str = ""
+    #: Como en `RawFrame`: la duración de un hueco es tiempo, no cuadros.
+    timestamp_ms: float | None = None
 
 
 #: Lo que produce el detector para un frame de video: mano válida o marcador.

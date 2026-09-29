@@ -36,7 +36,7 @@ import itertools
 import math
 from collections.abc import Iterable, Mapping
 from collections.abc import Sequence as AbcSequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Final
 
@@ -1160,7 +1160,17 @@ def replay_sample(
     que es la de la grabación.
     """
     frames = sample.sequence.frames
-    stream = [*frames, *([frames[-1]] * rest_after)]
+    ultimo = frames[-1]
+    # Con marcas de tiempo (ADR 0018) el reposo fabricado avanza el reloj a la
+    # tasa nominal: repetir la marca rompería el flujo estrictamente creciente.
+    paso = 1000.0 / config.capture.camera_fps
+    reposo = [
+        ultimo
+        if ultimo.timestamp_ms is None
+        else replace(ultimo, timestamp_ms=ultimo.timestamp_ms + k * paso)
+        for k in range(1, rest_after + 1)
+    ]
+    stream = [*frames, *reposo]
     windows = 0
     emitted: list[tuple[str, WindowOrigin]] = []
     for event in run_segmentation(stream, config, classify):

@@ -27,11 +27,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final, Protocol, TypeAlias, runtime_checkable
 
 from lsm.config import Config
+from lsm.timing import check_timestamps
 from lsm.types import (
     NUM_LANDMARKS,
     FrameSlot,
@@ -44,7 +45,13 @@ from lsm.types import (
 )
 
 #: Versión del formato de los fixtures de secuencias en disco.
-FIXTURE_SCHEMA_VERSION: Final = 1
+#:
+#: **v2** (ADR 0018): cada frame, válido o hueco, puede llevar "t_ms", la marca
+#: de tiempo del detector. La v1 se sigue leyendo, sin marcas.
+FIXTURE_SCHEMA_VERSION: Final = 2
+
+#: Versiones de fixture que se leen. Solo la actual se escribe.
+READABLE_FIXTURE_SCHEMAS: Final = frozenset({1, 2})
 
 #: Un frame de video crudo, tal como lo entrega `io/camera.py`. Se tipa laxo a
 #: propósito: el tipo real es un arreglo de OpenCV, y nombrarlo aquí metería
@@ -279,7 +286,12 @@ class MediaPipeHandDetector:
         result = self._landmarker.detect_for_video(
             mp.Image(image_format=mp.ImageFormat.SRGB, data=image), self._elapsed_ms
         )
-        return self._to_slot(result, width=width, height=height)
+        # El cuadro lleva la misma marca que recibió MediaPipe: un solo reloj en
+        # toda la tubería (ADR 0018). Con `hands.real_timestamps` es el real.
+        return replace(
+            self._to_slot(result, width=width, height=height),
+            timestamp_ms=float(self._elapsed_ms),
+        )
 
     def _to_slot(self, result: Any, *, width: int, height: int) -> FrameSlot:
         """Traduce un `HandLandmarkerResult` al tipo del proyecto.
@@ -502,10 +514,10 @@ def load_frame_stream(path: Path | str) -> FrameStream:
     """Lee un flujo de frames grabado. Rechaza formatos de otra versión."""
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     version = payload.get("schema_version")
-    if version != FIXTURE_SCHEMA_VERSION:
+    if version not in READABLE_FIXTURE_SCHEMAS:
         msg = (
             f"{path}: schema_version {version} incompatible; "
-            f"este código lee la versión {FIXTURE_SCHEMA_VERSION}"
+            f"este código lee las versiones {sorted(READABLE_FIXTURE_SCHEMAS)}"
         )
         raise ValueError(msg)
     return frames_from_json(payload["frames"])
@@ -525,13 +537,33 @@ def frames_to_json(stream: FrameStream) -> list[dict[str, Any]]:
 
 
 def frames_from_json(entries: Any) -> FrameStream:
-    """Inverso de `frames_to_json`. Los huecos vuelven como huecos."""
-    return tuple(_slot_from_json(entry) for entry in entries)
+    """Inverso de `frames_to_json`. Los huecos vuelven como huecos.
+
+    Rechaza un flujo cuyas marcas de tiempo mezclen cuadros con y sin marca, o
+    no crezcan (`lsm.timing.check_timestamps`, ADR 0018).
+    """
+    flujo = tuple(_slot_from_json(entry) for entry in entries)
+    check_timestamps(flujo)
+    return flujo
 
 
 def _slot_to_json(slot: FrameSlot) -> dict[str, Any]:
     if isinstance(slot, InvalidFrame):
-        return {"valid": False, "reason": str(slot.reason), "detail": slot.detail}
+        hueco: dict[str, Any] = {
+            "valid": False,
+            "reason": str(slot.reason),
+            "detail": slot.detail,
+        }
+        if slot.timestamp_ms is not None:
+            hueco["t_ms"] = slot.timestamp_ms
+        return hueco
+    entrada = _raw_to_json(slot)
+    if slot.timestamp_ms is not None:
+        entrada["t_ms"] = slot.timestamp_ms
+    return entrada
+
+
+def _raw_to_json(slot: RawFrame) -> dict[str, Any]:
     return {
         "valid": True,
         "width": slot.width,
@@ -547,9 +579,14 @@ def _slot_to_json(slot: FrameSlot) -> dict[str, Any]:
 
 
 def _slot_from_json(entry: dict[str, Any]) -> FrameSlot:
+    # Sin "t_ms" —archivos anteriores a la marca de tiempo— el cuadro no la
+    # tiene: no se inventan marcas que no se midieron (ADR 0018).
+    marca = entry.get("t_ms")
     if not entry["valid"]:
         return InvalidFrame(
-            reason=InvalidReason(entry["reason"]), detail=entry.get("detail", "")
+            reason=InvalidReason(entry["reason"]),
+            detail=entry.get("detail", ""),
+            timestamp_ms=marca,
         )
     landmarks = entry["landmarks"]
     if len(landmarks) != NUM_LANDMARKS:
@@ -574,4 +611,5 @@ def _slot_from_json(entry: dict[str, Any]) -> FrameSlot:
                 else None
             )
         ),
+        timestamp_ms=marca,
     )
