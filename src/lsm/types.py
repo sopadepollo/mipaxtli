@@ -203,6 +203,11 @@ class InvalidReason(StrEnum):
     #: palma lo bastante de frente para fijar la rotación. Es de la secuencia,
     #: no de un frame: el índice que acompaña al rechazo es 0.
     PALM_EDGE_ON = "PALM_EDGE_ON"
+    #: §0.4 (FEATURE_SPEC_VERSION 4): hubo mano, pero físicamente imposible —un
+    #: hueso que cambió de largo, un salto de la palma—. `detail` dice qué
+    #: comprobación falló (`lsm.plausibility.ImplausibleKind`). Se trata igual
+    #: que un cuadro sin mano: no se corrige, se rellena o interrumpe.
+    IMPLAUSIBLE = "IMPLAUSIBLE"
 
 
 # --------------------------------------------------------------------------- #
@@ -505,6 +510,9 @@ class Sample:
     #: ocurrieron. Sirve para que la Fase 6 pueda excluir muestras muy
     #: reconstruidas.
     interpolated_frames: int = 0
+    #: De `interpolated_frames`, los que sustituyen a un cuadro invalidado por
+    #: plausibilidad (§0.4, FEATURE_SPEC_VERSION 4). Se deriva al cargar.
+    implausible_frames: int = 0
 
     def __post_init__(self) -> None:
         if not self.label:

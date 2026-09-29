@@ -30,6 +30,7 @@ lsm-eval = "lsm.cli.evaluate:main"
 lsm-eval-dinamico = "lsm.cli.evaluate_dynamic:main"
 lsm-demo = "lsm.cli.demo:main"
 lsm-signs = "lsm.cli.signs:main"
+lsm-medir = "lsm.cli.measure:main"
 
 [build-system]
 requires = ["hatchling"]

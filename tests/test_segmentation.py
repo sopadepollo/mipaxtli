@@ -68,6 +68,12 @@ def _ms(frames: int) -> float:
 #: Umbrales apretados para que las secuencias de prueba quepan en pocos frames.
 CONFIG = Config.model_validate(
     {
+        # Los flujos de estos tests teletransportan la mano entre bloques (la
+        # quieta en x=640 y el viaje desde x=300, o 700 px a través de un hueco
+        # de un cuadro): el filtro de plausibilidad los invalida con razón
+        # (§0.4). Estos tests son de la lógica de estados; el filtro tiene los
+        # suyos en `tests/test_plausibility.py`.
+        "plausibility": {"enabled": False},
         "segmentation": {
             "buffer_ms": _ms(6),
             "stable_ms": _ms(2),
@@ -89,7 +95,7 @@ CONFIG = Config.model_validate(
             "motion_min_ms": _ms(20),
             "motion_confirm_low_ms": _ms(4),
             "motion_max_ms": _ms(60),
-        }
+        },
     }
 )
 
@@ -768,6 +774,7 @@ def test_la_maquina_usa_la_tasa_que_se_le_pasa() -> None:
 #: candidato y 4 frames de reposo lo cierran.
 DYNAMIC_CONFIG = Config.model_validate(
     {
+        "plausibility": {"enabled": False},
         "segmentation": {
             **CONFIG.segmentation.model_dump(),
             "velocity_threshold_per_s": 0.02 * FPS,
@@ -779,7 +786,7 @@ DYNAMIC_CONFIG = Config.model_validate(
             "motion_min_ms": _ms(4),
             "motion_confirm_low_ms": _ms(4),
             "motion_max_ms": _ms(30),
-        }
+        },
     }
 )
 DYNAMIC_UMBRALES = FrameThresholds.from_config(DYNAMIC_CONFIG, FPS)

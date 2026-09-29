@@ -135,6 +135,54 @@ MediaPipe Hands entrega 21 landmarks por mano, cada uno con `(x, y, z)`:
 > coherente consigo mismo y el modelo entrena sin quejarse. Ver
 > `docs/adr/0006-deteccion-de-manos-y-captura.md`.
 
+### 0.4 Plausibilidad anatómica (entra en la v4, ADR 0027)
+
+> **Versión.** Esta sección forma parte del bloque de tolerancia a MediaPipe
+> (plausibilidad, One Euro del §4 y δ) y entra con él en `FEATURE_SPEC_VERSION`
+> 4, con los golden regenerados una sola vez. Hasta entonces el runtime la aplica
+> por defecto (`plausibility.enabled`) y los golden no la cubren.
+
+Antes que nada —antes del relleno de huecos del §0.3 y del filtro del §4—, cada
+frame válido se juzga contra los anteriores del mismo flujo. Los que no pasan se
+convierten en **inválidos** con motivo `IMPLAUSIBLE` y se tratan como un frame
+sin mano: no se corrigen.
+
+Sea `q` el frame tras los pasos 1 y 2 **conservando z** (`z · a`), `t` su tiempo
+en ms (`timestamp_ms`, o `índice · 1000 / fps`), y
+
+```
+P       = los segmentos de palma del §1, paso 4
+palma3  = max_{(a,b) ∈ P} ‖q_a − q_b‖                      # 3D
+L_k     = ‖q_hijo − q_padre‖ / palma3,  k = 1 … 20          # BONES, en su orden
+c       = media de q_0, q_5, q_9, q_13, q_17, en 2D          # centro de la palma
+palma2  = la palma del paso 4 (2D)
+```
+
+Estado: `R`, los `L` de los últimos `bone_reference_frames` frames **aceptados**;
+`U = (c, palma2, t)` del último aceptado; `r0`, el tiempo del primer rechazo de la
+racha en curso. Si `palma3 < 1e-6` el frame no se juzga ni entra en `R`.
+
+```
+motivo = ninguno
+si |R| = bone_reference_frames:
+    para k = 1 … 20:  si |L_k − mediana(R_k)| > bone_max_deviation → BONE
+si motivo = ninguno y max_mcp_dorsal_deg ≠ null:
+    si max(elevación dorsal MCP) > max_mcp_dorsal_deg → JOINT
+si motivo = ninguno y U existe:
+    v = ‖c − c_U‖ / ((palma2 + palma2_U) / 2) · 1000 / (t − t_U)
+    si v > max_palm_speed_per_s → JUMP
+
+si motivo ≠ ninguno:
+    si r0 no existe: r0 = t
+    si t − r0 < reset_after_ms: el frame es INVÁLIDO (IMPLAUSIBLE, motivo); fin
+    vaciar R y U                     # la referencia ya no describe a esta mano
+r0 = ninguno;  añadir L a R;  U = (c, palma2, t)
+```
+
+La mediana de una cantidad par es la media de los dos centrales. La elevación
+dorsal es `landmark_stats.mcp_dorsal_elevation`; hoy está desactivada
+(`null`). Los frames sin mano no reinician nada.
+
 ---
 
 ## 1. Pipeline por frame

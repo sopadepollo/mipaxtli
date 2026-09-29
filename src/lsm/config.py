@@ -14,13 +14,13 @@ incrementar `FEATURE_SPEC_VERSION`. Ver `docs/adr/0002-formato-de-features.md`.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class Metric(StrEnum):
@@ -141,6 +141,54 @@ class SmoothingConfig(_Section):
     #: que perjudica justo a las señas dinámicas. Si se activa aquí, debe
     #: activarse idénticamente en la implementación web.
     alpha: float = Field(default=1.0, gt=0.0, le=1.0)
+
+
+class PlausibilityConfig(_Section):
+    """Filtro de plausibilidad anatómica (`feature-spec.md` §0.4, ADR 0027).
+
+    Un cuadro físicamente imposible se marca inválido y lo resuelve el relleno
+    de huecos, igual que un cuadro sin mano. Todos los valores salen de las
+    mediciones del Paso 1 (ADR 0026).
+    """
+
+    #: Con `false` ningún cuadro se invalida por plausibilidad.
+    enabled: bool = True
+
+    #: Diferencia máxima entre el largo 3D de un hueso y su referencia, en
+    #: palmas 3D. MEDIDO: en las grabaciones limpias (dinámicas del 2026-09-29,
+    #: estáticas A, prueba de reposo) el peor hueso por cuadro no pasa de 0.41
+    #: (p99.9 de la X nueva) y ningún cuadro supera 0.45; en los diagnósticos
+    #: en vivo lo superan el 0.8% de los cuadros de X y el 0.9% de K.
+    bone_max_deviation: float = Field(default=0.45, gt=0.0, le=10.0)
+
+    #: Cuadros aceptados cuya mediana es la referencia de cada hueso. 15 es la
+    #: ventana con que se midió (~0.5 s a 30 fps). Con menos cuadros en la
+    #: referencia no se comprueba ningún hueso.
+    bone_reference_frames: int = Field(default=15, ge=1, le=300)
+
+    #: Elevación dorsal máxima de una falange proximal, en grados, o `null` para
+    #: no comprobarla. DESACTIVADA: en grabaciones limpias MediaPipe da hasta
+    #: +83° (Q del 2026-09-29) y +84° (reposo de la J) —anatómicamente
+    #: imposible—, porque con la palma de canto la normal de la palma es casi
+    #: toda `z`. Cualquier umbral que atrapara algo tiraría poses buenas.
+    max_mcp_dorsal_deg: float | None = Field(default=None, gt=0.0, le=180.0)
+
+    #: Velocidad máxima del centro de la palma desde el último cuadro aceptado,
+    #: en palmas por segundo de tiempo real. MEDIDO: en limpio el máximo es 21
+    #: (K y X nuevas, reposo de la J) salvo un cuadro de 200; en los
+    #: diagnósticos la fracción por encima de 25 y de 100 casi no cambia (una
+    #: meseta de saltos rotos). 30 queda dentro de la meseta.
+    max_palm_speed_per_s: float = Field(default=30.0, gt=0.0, le=10000.0)
+
+    #: Si los cuadros con mano se rechazan sin interrupción durante esto, en ms,
+    #: la referencia se vacía y se empieza otra con el cuadro actual: la forma de
+    #: la mano cambió de verdad y la mediana móvil todavía no la alcanza.
+    #: MEDIDO sin reinicio: de las rachas de rechazo por hueso, el 58% dura un
+    #: cuadro y el 84% hasta tres; desde cuatro la cola se aplana (cambios
+    #: persistentes, sobre todo en la K). 100 ms ≈ 3 cuadros a 30 fps: un cambio
+    #: persistente cuesta como mucho tres cuadros, que el relleno cubre. Con 200
+    #: cortaba 18 K del dataset (seis rechazos seguidos, hueco demasiado largo).
+    reset_after_ms: float = Field(default=100.0, gt=0.0, le=60000.0)
 
 
 class DtwConfig(_Section):
@@ -684,16 +732,19 @@ class CaptureConfig(_Section):
 class CorpusConfig(_Section):
     """Qué muestras grabadas entran al entrenamiento y a la evaluación."""
 
-    #: Letra → fecha desde la que valen sus muestras. Las de esa letra grabadas
-    #: **antes** —por la fecha local de su `timestamp`— se dejan fuera al cargar
-    #: el corpus, sin borrarlas. Es para cuando la definición de una letra
-    #: cambia: lo grabado con la anterior es otra seña con la misma etiqueta.
+    #: Letra → instante (con zona horaria) desde el que valen sus muestras. Las
+    #: de esa letra cuyo `timestamp` es **anterior** se dejan fuera al cargar el
+    #: corpus, sin borrarlas. Es para cuando la definición de una letra cambia:
+    #: lo grabado con la anterior es otra seña con la misma etiqueta. Por hora y
+    #: no por fecha: una definición puede cambiar a media mañana.
     #:
-    #: X desde el 2026-09-29: su definición final es la mano de frente con un
-    #: desplazamiento hacia la cámara y de regreso (glosario). Todo lo grabado
-    #: antes se hizo con otra ejecución.
-    exclude_before: dict[str, date] = Field(
-        default_factory=lambda: {"X": date(2026, 9, 29)}
+    #: X desde el 2026-09-29 a las 11:35 (−06:00): mano de frente, desplazamiento
+    #: hacia la cámara y de regreso (glosario). Las X de esa misma mañana se
+    #: grabaron con la definición anterior (mano de perfil).
+    exclude_before: dict[str, AwareDatetime] = Field(
+        default_factory=lambda: {
+            "X": datetime(2026, 9, 29, 11, 35, tzinfo=timezone(timedelta(hours=-6)))
+        }
     )
 
 
@@ -758,6 +809,7 @@ class Config(_Section):
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     static_knn: StaticKnnConfig = Field(default_factory=StaticKnnConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
+    plausibility: PlausibilityConfig = Field(default_factory=PlausibilityConfig)
     dtw: DtwConfig = Field(default_factory=DtwConfig)
     segmentation: SegmentationConfig = Field(default_factory=SegmentationConfig)
     hands: HandsConfig = Field(default_factory=HandsConfig)

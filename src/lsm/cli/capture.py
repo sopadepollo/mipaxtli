@@ -68,7 +68,6 @@ from lsm.features import (
     ExtractionRejected,
     extract_sequence_features,
 )
-from lsm.gaps import GapPolicy
 from lsm.hand_check import HandMismatchWatcher, input_looks_unmirrored
 from lsm.io.calibration import (
     Calibration,
@@ -105,6 +104,7 @@ from lsm.io.dataset import (
 from lsm.io.glossary import DEFAULT_GLOSSARY, is_validated
 from lsm.io.hands import HandDetector, build_detector
 from lsm.io.preview import HudState, draw_hud, draw_landmarks
+from lsm.preprocessing import Preprocessing
 from lsm.types import (
     Distance,
     FrameSlot,
@@ -1090,9 +1090,9 @@ def _cmd_verificar(args: argparse.Namespace) -> int:
     for ruta in iter_sample_paths(raiz):
         try:
             almacenada = read_sample(ruta)
-            # Una dinámica con huecos cortos se reconstruye (Bloque 2).
+            # Plausibilidad y huecos cortos, como al entrenar (ADR 0027).
             muestra = almacenada.to_sample(
-                GapPolicy.from_config(config, config.capture.camera_fps)
+                Preprocessing.from_config(config, config.capture.camera_fps)
             )
         except (DatasetError, ValueError, KeyError) as error:
             problemas.append(f"{ruta}: {error}")

@@ -37,6 +37,7 @@ from lsm.io.dataset import (
     save_consent,
     write_sample,
 )
+from lsm.preprocessing import Preprocessing
 from lsm.synthetic import arc_offsets, canonical_hand, moving_sequence, still_sequence
 from lsm.types import (
     Distance,
@@ -372,26 +373,49 @@ def _con_un_hueco() -> FrameStream:
     return (*frames[:10], InvalidFrame(reason=InvalidReason.NO_HAND), *frames[11:])
 
 
+def _preprocesado() -> Preprocessing:
+    from lsm.config import Config
+
+    return Preprocessing.from_config(Config(), 30.0)
+
+
 def test_una_dinamica_con_un_hueco_corto_se_reconstruye_con_politica() -> None:
     """Bloque 2 (ADR 0021): con política, la dinámica se rellena y dice cuánto."""
-    from lsm.gaps import GapPolicy
-
     convertida = muestra(frames=_con_un_hueco(), kind=SampleKind.DYNAMIC).to_sample(
-        GapPolicy(max_gap_frames=5, max_fraction=0.25)
+        _preprocesado()
     )
 
     assert convertida.interpolated_frames == 1
+    assert convertida.implausible_frames == 0
     assert len(convertida.sequence.frames) == 24
 
 
 def test_una_estatica_con_hueco_sigue_siendo_un_error_con_politica() -> None:
     """El camino estático no cambia (Bloque 2, punto 9)."""
-    from lsm.gaps import GapPolicy
-
     with pytest.raises(DatasetError, match="huecos"):
-        muestra(frames=_con_un_hueco()).to_sample(
-            GapPolicy(max_gap_frames=5, max_fraction=0.25)
-        )
+        muestra(frames=_con_un_hueco()).to_sample(_preprocesado())
+
+
+def test_un_cuadro_imposible_de_una_dinamica_se_rellena_y_se_cuenta() -> None:
+    """ADR 0027: al cargar, la muestra pasa por la plausibilidad como en vivo. Un
+    salto de media pantalla en un cuadro se invalida y se rellena."""
+    from dataclasses import replace
+
+    frames = list(still_sequence(canonical_hand(), length=24).frames)
+    frames[12] = replace(
+        frames[12],
+        landmarks=tuple(
+            replace(lm, x=lm.x + 0.4, y=lm.y + 0.3) for lm in frames[12].landmarks
+        ),
+    )
+
+    convertida = muestra(frames=tuple(frames), kind=SampleKind.DYNAMIC).to_sample(
+        _preprocesado()
+    )
+
+    assert convertida.interpolated_frames == 1
+    assert convertida.implausible_frames == 1
+    assert convertida.sequence.frames[12].landmarks == frames[11].landmarks
 
 
 def test_sin_politica_una_dinamica_con_hueco_sigue_siendo_un_error() -> None:
@@ -430,15 +454,15 @@ def test_las_muestras_anteriores_a_la_definicion_de_su_letra_quedan_fuera(
     tmp_path: Path,
 ) -> None:
     """`corpus.exclude_before`: la X grabada antes de su definición final es otra
-    seña con la misma etiqueta. Se deja fuera sin borrarla; las otras letras y
-    las X nuevas entran."""
-    from datetime import date, datetime, timedelta, timezone
+    seña con la misma etiqueta —aunque sea del mismo día—. Se deja fuera sin
+    borrarla; las otras letras y las X nuevas entran."""
+    from datetime import datetime, timedelta, timezone
 
     from lsm.io.corpus import load_corpus
 
     mexico = timezone(timedelta(hours=-6))
-    vieja = datetime(2026, 9, 28, 23, 30, tzinfo=mexico)
-    nueva = datetime(2026, 9, 29, 0, 5, tzinfo=mexico)
+    vieja = datetime(2026, 9, 29, 11, 26, tzinfo=mexico)
+    nueva = datetime(2026, 9, 29, 11, 40, tzinfo=mexico)
     rutas = [
         write_sample(tmp_path, muestra(label="X", timestamp=vieja)),
         write_sample(tmp_path, muestra(label="X", timestamp=nueva)),
@@ -450,7 +474,7 @@ def test_las_muestras_anteriores_a_la_definicion_de_su_letra_quedan_fuera(
         ("A", "X"),
         allow_synthetic=False,
         repo=tmp_path,
-        exclude_before={"X": date(2026, 9, 29)},
+        exclude_before={"X": datetime(2026, 9, 29, 11, 35, tzinfo=mexico)},
     )
 
     assert sorted((s.label, s.timestamp) for s in corpus.samples) == [
@@ -458,13 +482,15 @@ def test_las_muestras_anteriores_a_la_definicion_de_su_letra_quedan_fuera(
         ("X", nueva),
     ]
     assert corpus.provenance.excluded_by_date == 1
+    assert corpus.provenance.excluded_by_date_detail == (("X/s01", 1),)
     assert all(ruta.exists() for ruta in rutas)
 
 
 def test_la_x_de_antes_de_hoy_queda_fuera_por_defecto() -> None:
-    from datetime import date
+    from datetime import datetime, timedelta, timezone
 
     from lsm.config import Config, load_config
 
-    assert Config().corpus.exclude_before == {"X": date(2026, 9, 29)}
+    once_35 = datetime(2026, 9, 29, 11, 35, tzinfo=timezone(timedelta(hours=-6)))
+    assert Config().corpus.exclude_before == {"X": once_35}
     assert load_config("config.yaml").corpus == Config().corpus

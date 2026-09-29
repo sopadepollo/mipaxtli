@@ -190,11 +190,13 @@ las listadas y lo anota en la procedencia (`excluded_truncated`). Lo escribe
 
 #### Letras grabadas antes de su definición final
 
-`config.corpus.exclude_before` (letra → fecha) deja fuera, al cargar el corpus,
-las muestras de esa letra cuyo `timestamp` cae en una fecha local anterior. Es
-para cuando cambia cómo se ejecuta una letra: lo grabado con la definición vieja
-es otra seña con la misma etiqueta. No borra nada, y la procedencia del corpus lo
-cuenta en `excluded_by_date`. Hoy: **X antes del 2026-09-29**.
+`config.corpus.exclude_before` (letra → instante con zona horaria) deja fuera,
+al cargar el corpus, las muestras de esa letra con `timestamp` anterior. Es para
+cuando cambia cómo se ejecuta una letra: lo grabado con la definición vieja es
+otra seña con la misma etiqueta. Por hora y no por fecha, porque una definición
+puede cambiar a media mañana. No borra nada, y la procedencia del corpus lo cuenta
+en `excluded_by_date` y, por letra y firmante, en `excluded_by_date_detail`. Hoy:
+**X antes del 2026-09-29 a las 11:35 (−06:00)**, que son todas las X grabadas.
 
 #### Los intentos dinámicos rechazados
 

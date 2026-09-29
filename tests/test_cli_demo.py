@@ -64,7 +64,12 @@ from lsm.vocabulary import Label
 
 RAIZ_REPO = Path(__file__).resolve().parents[1]
 
-CONFIG = Config()
+#: Sin el filtro de plausibilidad: el viaje sale de x=300 mientras la letra
+#: anterior está quieta en x=640 —un teletransporte— y las manos sintéticas
+#: doblan los dedos encogiéndolos (`lsm.synthetic._bend`), así que el largo de
+#: los huesos cambia entre letras. El filtro invalida las dos cosas con razón
+#: (§0.4); aquí se prueba el deletreo, no el filtro.
+CONFIG = Config.model_validate({"plausibility": {"enabled": False}})
 
 #: Los umbrales de `CONFIG` resueltos a cuadros con la tasa NOMINAL, que es la
 #: que usa `run_segmentation` cuando nadie le pasa una medida — el caso de estos
@@ -336,7 +341,10 @@ def test_nada_por_debajo_del_umbral_llega_al_buffer() -> None:
         # Los dos umbrales por las nubes: `config.py` no admite un
         # `high_confidence` por debajo del piso, y lo que se quiere aquí es que
         # NADA emita, ni de inmediato ni acumulando.
-        {"segmentation": {"min_confidence": 0.99, "high_confidence": 0.99}}
+        {
+            "plausibility": {"enabled": False},
+            "segmentation": {"min_confidence": 0.99, "high_confidence": 0.99},
+        }
     )
     stream = eventos(frames(PALABRA), exigente)
 

@@ -113,6 +113,32 @@ smoothing:
   # Si se activa aquí, hay que activarlo idénticamente en la implementación web.
   alpha: 1.0
 
+# Filtro de plausibilidad anatómica (feature-spec.md §0.4, ADR 0027). Un cuadro
+# físicamente imposible no se corrige: se marca inválido (IMPLAUSIBLE) y lo
+# resuelve el relleno de huecos, como un cuadro sin mano. Umbrales medidos en el
+# Paso 1 (ADR 0026, `lsm-medir tolerancia`); fracción invalidada por letra con
+# `lsm-medir plausibilidad` (≤ 1.75% en todas).
+plausibility:
+  # Interruptor para medir el componente por separado (ablación).
+  enabled: true
+  # |largo 3D − mediana de los últimos cuadros aceptados| máximo de un hueso, en
+  # palmas 3D. En grabaciones limpias ningún cuadro pasa de 0.45 (p99.9 de la X
+  # nueva: 0.41); en los diagnósticos lo pasan el 0.8% de X y el 0.9% de K.
+  bone_max_deviation: 0.45
+  # Cuadros aceptados de la mediana de referencia (con los que se midió).
+  bone_reference_frames: 15
+  # Elevación dorsal máxima de la falange proximal, en grados. null: DESACTIVADA.
+  # Poses limpias dan hasta +83° (Q) y +84° (reposo de la J) por la z de MediaPipe
+  # con la palma de canto; cualquier umbral útil tiraría poses buenas.
+  max_mcp_dorsal_deg: null
+  # Salto máximo del centro de la palma desde el último aceptado, en palmas por
+  # segundo. Limpio: máximo 21. Diagnósticos: meseta de saltos rotos entre 25 y 100.
+  max_palm_speed_per_s: 30.0
+  # Racha de rechazos tras la que la referencia se reinicia: la forma cambió de
+  # verdad. El 84% de las rachas por hueso dura ≤ 3 cuadros; la cola, persistente.
+  # Con 200 quedaban 19 dinámicas del dataset ilegibles (17 K); con 100, ninguna.
+  reset_after_ms: 100.0
+
 # Clasificador dinámico (feature-spec.md §3.2 y §3.4).
 dtw:
   # Radio de la ventana de Sakoe-Chiba sobre secuencias de 24 frames. Acota el
@@ -555,16 +581,21 @@ signs:
 
 # Qué muestras grabadas entran al entrenamiento y a la evaluación (io/corpus.py).
 corpus:
-  # Letra → fecha desde la que valen sus muestras. Las de esa letra grabadas
-  # antes (fecha local de su timestamp) quedan fuera al cargar, sin borrarse, y
-  # la procedencia lo cuenta en excluded_by_date. Es para cuando cambia la
-  # definición de una letra: lo grabado con la anterior es otra seña.
+  # Letra → instante (ISO-8601 con zona) desde el que valen sus muestras. Las
+  # de timestamp anterior quedan fuera al cargar, sin borrarse, y la
+  # procedencia las cuenta por letra y firmante (excluded_by_date_detail). Es
+  # para cuando cambia la definición de una letra: lo grabado con la anterior
+  # es otra seña. Por hora, no por fecha: la de la X cambió a media mañana.
   #
-  # X: definición final el 2026-09-29 (glosario): mano de frente, desplazamiento
-  # hacia la cámara y de regreso. Su movimiento solo se ve como cambio de
-  # escala, así que hasta el canal δ (feature-spec) el DTW apenas lo distingue.
+  # X: definición final el 2026-09-29 a las 11:35 (glosario): mano de frente,
+  # desplazamiento hacia la cámara y de regreso. Las X de esa mañana se
+  # grabaron de perfil, con la anterior. Todas las X del dataset son anteriores:
+  # 166 (s01 61, s02 62, s03 43), de las que 101 ya excluía truncadas.json; esta
+  # regla saca las 65 restantes (s01 23, s02 33, s03 9) y no queda ninguna X
+  # para entrenar hasta grabarla de nuevo. Su movimiento solo se ve como cambio de
+  # escala, así que hasta el canal δ el DTW apenas lo distingue.
   exclude_before:
-    X: 2026-09-29
+    X: "2026-09-29T11:35:00-06:00"
 
 # Diagnóstico de pérdidas de tracking (src/lsm/tracking_diagnostics.py, Fase 5.1).
 #

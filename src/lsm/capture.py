@@ -33,7 +33,8 @@ from lsm.features import (
     scale_to_pixels,
     split_valid_runs,
 )
-from lsm.gaps import GapPolicy, GapRejected, GapRejection, fill_gaps
+from lsm.gaps import GapRejection
+from lsm.preprocessing import NotReconstructed, Preprocessing, reconstruct
 from lsm.segmentation import (
     RejectionReason,
     WindowDynamic,
@@ -321,14 +322,17 @@ def evaluate_window(
     elif kind is SampleKind.DYNAMIC:
         # Bloque 2 (ADR 0021): una dinámica con huecos cortos se guarda —con los
         # huecos tal como ocurrieron— si `to_sample` podrá reconstruirla. Se mide
-        # sobre la reconstruida, que es lo que verá el entrenamiento.
-        reconstruida = fill_gaps(
-            stream, GapPolicy.from_config(config, config.capture.camera_fps)
+        # sobre la reconstruida, que es lo que verá el entrenamiento: plausibilidad
+        # y relleno (ADR 0027).
+        reconstruida = reconstruct(
+            stream,
+            kind,
+            Preprocessing.from_config(config, config.capture.camera_fps),
         )
-        if isinstance(reconstruida, GapRejected):
+        if isinstance(reconstruida, NotReconstructed):
             return rechazo(
                 Rejection.TOO_MUCH_INTERPOLATED
-                if reconstruida.reason is GapRejection.TOO_MUCH_INTERPOLATED
+                if GapRejection.TOO_MUCH_INTERPOLATED.value in reconstruida.detail
                 else Rejection.HAS_GAPS
             )
         sequence = reconstruida.sequence

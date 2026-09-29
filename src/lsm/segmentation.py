@@ -120,6 +120,7 @@ from lsm.features import (
     pair_velocity,
 )
 from lsm.gaps import GapPolicy, can_bridge, interpolate_frames
+from lsm.plausibility import PlausibilityParams, filter_stream, is_implausible
 from lsm.types import (
     FrameSlot,
     InvalidReason,
@@ -404,6 +405,9 @@ class WindowDynamic:
     #: Índice, en el flujo, del primer frame de `window` (Bloque 4). Con él la
     #: captura guarda exactamente el tramo que el clasificador recibe.
     start_frame_index: int = 0
+    #: De los rellenados, los que sustituyen a un cuadro invalidado por
+    #: plausibilidad (§0.4, ADR 0027).
+    implausible_frames: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,6 +422,8 @@ class LetterEmitted:
     #: Frames de `window` rellenados por interpolación (Bloque 2). Siempre 0 en
     #: el camino estático, que no interpola.
     interpolated_frames: int = 0
+    #: De los rellenados, los que sustituyen a un cuadro implausible (§0.4).
+    implausible_frames: int = 0
 
 
 #: Eventos tipados, nunca cadenas: quien consume esto hace `match` sobre tipos y
@@ -461,6 +467,8 @@ class _Stroke:
     end: int = 0
     #: Por frame, si se rellenó por interpolación (Bloque 2).
     filled: list[bool] = field(default_factory=list)
+    #: Por frame, si el relleno sustituye a un cuadro implausible (§0.4).
+    implausible: list[bool] = field(default_factory=list)
     #: Índice, en el flujo, del frame de partida del trazo (Bloque 4).
     start_index: int = 0
 
@@ -474,13 +482,22 @@ class _Stroke:
     def start(self, origin: RawFrame, index: int) -> None:
         self.frames = [origin]
         self.filled = [False]
+        self.implausible = [False]
         self.start_index = index
         self.moving = 0
         self.end = 1
 
-    def add(self, frame: RawFrame, *, moving: bool, filled: bool = False) -> None:
+    def add(
+        self,
+        frame: RawFrame,
+        *,
+        moving: bool,
+        filled: bool = False,
+        implausible: bool = False,
+    ) -> None:
         self.frames.append(frame)
         self.filled.append(filled)
+        self.implausible.append(implausible)
         if moving:
             self.moving += 1
             self.end = len(self.frames)
@@ -492,9 +509,14 @@ class _Stroke:
         """Frames interpolados dentro de `trace()`."""
         return sum(self.filled[: self.end])
 
+    def implausible_count(self) -> int:
+        """De los interpolados, los que sustituyen a un cuadro implausible."""
+        return sum(self.implausible[: self.end])
+
     def reset(self) -> None:
         self.frames = []
         self.filled = []
+        self.implausible = []
         self.moving = 0
         self.end = 0
 
@@ -558,7 +580,14 @@ def run_segmentation(
     # -- Huecos dentro de un trazo (Bloque 2) -----------------------------------
     politica = GapPolicy.from_config(config, thresholds.fps)
 
-    def con_huecos_rellenos() -> Iterator[tuple[int, FrameSlot, bool]]:
+    # -- Plausibilidad (§0.4, FEATURE_SPEC 4) ----------------------------------
+    # Antes que todo lo demás: un cuadro imposible llega a la máquina como un
+    # hueco, con `IMPLAUSIBLE`, y se rellena o interrumpe como cualquier otro.
+    stream = filter_stream(
+        stream, PlausibilityParams.from_config(config), thresholds.fps
+    )
+
+    def con_huecos_rellenos() -> Iterator[tuple[int, FrameSlot, bool, bool]]:
         """El flujo, con los huecos cortos de un candidato ya rellenos.
 
         Si se pierde la mano dentro de DYNAMIC_CANDIDATE, los frames inválidos
@@ -570,7 +599,9 @@ def run_segmentation(
         en un trazo, la máquina va hasta `max_gap_frames` cuadros por detrás.
 
         Lee `state` en cada paso: el cuerpo del bucle ya procesó el cuadro
-        anterior cuando se le pide el siguiente.
+        anterior cuando se le pide el siguiente. Cede `(índice, slot, relleno,
+        implausible)`: el último dice si el relleno sustituye a un cuadro que
+        invalidó la plausibilidad.
         """
         retenidos: list[tuple[int, FrameSlot]] = []
         ultimo: RawFrame | None = None
@@ -582,12 +613,12 @@ def run_segmentation(
                 ):
                     retenidos.append((i, s))
                     if len(retenidos) > politica.max_gap_frames:
-                        yield from ((k, x, False) for k, x in retenidos)
+                        yield from ((k, x, False, False) for k, x in retenidos)
                         retenidos = []
                         ultimo = None
                     continue
                 ultimo = None
-                yield i, s, False
+                yield i, s, False, False
                 continue
             if retenidos:
                 if ultimo is not None and can_bridge(ultimo, usable):
@@ -597,16 +628,16 @@ def run_segmentation(
                         len(retenidos),
                         tuple(x.timestamp_ms for _, x in retenidos),
                     )
-                    for (k, _), relleno in zip(retenidos, rellenos, strict=True):
-                        yield k, relleno, True
+                    for (k, x), relleno in zip(retenidos, rellenos, strict=True):
+                        yield k, relleno, True, is_implausible(x)
                 else:
-                    yield from ((k, x, False) for k, x in retenidos)
+                    yield from ((k, x, False, False) for k, x in retenidos)
                 retenidos = []
             ultimo = usable
-            yield i, s, False
-        yield from ((k, x, False) for k, x in retenidos)
+            yield i, s, False, False
+        yield from ((k, x, False, False) for k, x in retenidos)
 
-    for index, slot, relleno in con_huecos_rellenos():
+    for index, slot, relleno, implausible in con_huecos_rellenos():
         frame = _usable_frame(slot, settings.min_detection_score)
 
         if frame is None:
@@ -722,11 +753,15 @@ def run_segmentation(
                     # un candidato no hay huecos rellenados que desplacen índices.
                     stroke.start(buffer[-2], index - 1)
                 if stroke.active:
-                    stroke.add(frame, moving=True, filled=relleno)
+                    stroke.add(
+                        frame, moving=True, filled=relleno, implausible=implausible
+                    )
             else:
                 low_run += 1
                 if stroke.active:
-                    stroke.add(frame, moving=False, filled=relleno)
+                    stroke.add(
+                        frame, moving=False, filled=relleno, implausible=implausible
+                    )
                 if low_run >= thresholds.motion_confirm_low_frames:
                     exhausted = False
                     if state is not State.DYNAMIC_CANDIDATE:
@@ -782,6 +817,7 @@ def run_segmentation(
 
             trazo = stroke.trace()
             interpolados = stroke.interpolated()
+            implausibles = stroke.implausible_count()
             inicio_trazo = stroke.start_index
             stroke.reset()
             if interpolados > politica.max_fraction * len(trazo.frames):
@@ -808,6 +844,7 @@ def run_segmentation(
                 window=trazo,
                 interpolated_frames=interpolados,
                 start_frame_index=inicio_trazo,
+                implausible_frames=implausibles,
             )
 
             prediction = classify(trazo, WindowOrigin.DYNAMIC)
@@ -833,6 +870,7 @@ def run_segmentation(
                 window=trazo,
                 origin=WindowOrigin.DYNAMIC,
                 interpolated_frames=interpolados,
+                implausible_frames=implausibles,
             )
             yield StateChanged(
                 frame_index=index, previous=State.DYNAMIC_EMIT, current=State.EMIT

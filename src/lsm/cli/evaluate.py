@@ -60,7 +60,6 @@ from lsm.evaluation import (
     score,
     sweep,
 )
-from lsm.gaps import GapPolicy
 from lsm.io.corpus import (
     SYNTHETIC_REPETITIONS,
     SYNTHETIC_SIGNERS,
@@ -70,6 +69,7 @@ from lsm.io.corpus import (
     load_corpus,
 )
 from lsm.io.glossary import DEFAULT_GLOSSARY, parse_confundible, read_letter_table
+from lsm.preprocessing import Preprocessing
 from lsm.types import UNKNOWN_LABEL
 
 DEFAULT_OUTPUT = Path("data/models/eval")
@@ -800,9 +800,9 @@ def main(argv: list[str] | None = None) -> int:
             args.raiz,
             PHASE2_LABELS,
             allow_synthetic=not args.sin_sintetico,
-            # Bloque 2: las dinámicas con huecos cortos se reconstruyen a la
-            # tasa nominal, la de la grabación (ADR 0021).
-            gaps=GapPolicy.from_config(config, config.capture.camera_fps),
+            # Plausibilidad y huecos cortos, como en vivo, a la tasa nominal:
+            # la de la grabación (ADR 0021, ADR 0027).
+            preprocessing=Preprocessing.from_config(config, config.capture.camera_fps),
             exclude_before=config.corpus.exclude_before,
             repetitions=args.repeticiones_sinteticas,
             signers=args.firmantes_sinteticos,

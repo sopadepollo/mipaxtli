@@ -325,6 +325,26 @@ reproducir. Para una pasada rápida:
 uv run lsm-eval-dinamico --rejilla rapido --sin-reproduccion
 ```
 
+### 5.2 Mediciones de tolerancia a MediaPipe
+
+Sin cámara. Leen `data/diagnostico/` (las sesiones de `lsm-demo diagnosticar`) y
+`data/raw/`, y escriben un reporte en Markdown; son las que fijan los umbrales de
+la plausibilidad, el One Euro y el relleno de huecos (ADR 0026 a 0029):
+
+```bash
+# Paso 1: huecos por fase y por estado, score antes de cada pérdida, largo de
+# los huesos, elevación de las falanges, saltos de la palma, temblor por dedo.
+uv run lsm-medir --salida docs/mediciones/tolerancia.md tolerancia
+
+# Paso 2: qué fracción de cuadros invalida el filtro de plausibilidad, por letra.
+uv run lsm-medir --salida docs/mediciones/plausibilidad.md plausibilidad
+```
+
+`tolerancia` toma las dinámicas desde `--desde` (por defecto el 2026-09-29) y la
+A estática como control; ~30 s. `plausibilidad` recorre todo el dataset y los
+diagnósticos con la configuración de `config.yaml`: para medir otro umbral,
+`--config` con otra copia.
+
 ---
 
 ## 6. La demo

@@ -35,14 +35,14 @@ import hashlib
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
 from lsm.capture import CAPTURE_SPEC_VERSION
 from lsm.features import FEATURE_SPEC_VERSION
-from lsm.gaps import GapPolicy
 from lsm.io.dataset import iter_sample_paths, read_sample, read_truncated_manifest
+from lsm.preprocessing import Preprocessing
 from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.synthetic import synthetic_dynamic_samples, synthetic_samples
 from lsm.types import Sample
@@ -86,6 +86,8 @@ class Provenance:
     #: Muestras de una letra grabadas antes de la fecha desde la que vale su
     #: definición (`corpus.exclude_before`).
     excluded_by_date: int = 0
+    #: (letra/firmante, muestras) de las excluidas por fecha.
+    excluded_by_date_detail: tuple[tuple[str, int], ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -99,6 +101,7 @@ class Provenance:
             "git_commit": self.git_commit,
             "excluded_truncated": self.excluded_truncated,
             "excluded_by_date": self.excluded_by_date,
+            "excluded_by_date_detail": dict(self.excluded_by_date_detail),
             "feature_spec_version": FEATURE_SPEC_VERSION,
             "segmentation_spec_version": SEGMENTATION_SPEC_VERSION,
             "capture_spec_version": CAPTURE_SPEC_VERSION,
@@ -180,10 +183,12 @@ def _describe(
     repo: Path,
     excluded_truncated: int = 0,
     excluded_by_date: int = 0,
+    excluded_by_date_detail: tuple[tuple[str, int], ...] = (),
 ) -> Provenance:
     return Provenance(
         excluded_truncated=excluded_truncated,
         excluded_by_date=excluded_by_date,
+        excluded_by_date_detail=excluded_by_date_detail,
         source=source,
         synthetic=synthetic,
         fingerprint=fingerprint,
@@ -204,8 +209,8 @@ def load_corpus(
     signers: int = SYNTHETIC_SIGNERS,
     repo: Path | None = None,
     dynamic_labels: tuple[str, ...] = (),
-    gaps: GapPolicy | None = None,
-    exclude_before: Mapping[str, date] | None = None,
+    preprocessing: Preprocessing | None = None,
+    exclude_before: Mapping[str, datetime] | None = None,
 ) -> Corpus:
     """Lee `data/raw`; si está vacío y se permite, genera el corpus sintético.
 
@@ -218,9 +223,9 @@ def load_corpus(
     quien consume filtra. Vacío por defecto para que el corpus sintético de la
     Fase 2 —y su huella— sigan siendo exactamente los de antes.
 
-    `exclude_before` (`config.corpus.exclude_before`): letra → fecha desde la
-    que valen sus muestras. Las grabadas antes, por la fecha local de su
-    `timestamp`, quedan fuera sin borrarse.
+    `exclude_before` (`config.corpus.exclude_before`): letra → instante desde
+    el que valen sus muestras. Las de `timestamp` anterior quedan fuera sin
+    borrarse, y la procedencia las cuenta por letra y firmante.
     """
     repo = repo or Path.cwd()
     # Bloque 4: las dinámicas truncadas del manifiesto quedan fuera, sin borrarse.
@@ -234,14 +239,23 @@ def load_corpus(
         (path, almacenada)
         for path, almacenada in leidas
         if (limite := limites.get(almacenada.metadata.label)) is None
-        or almacenada.metadata.timestamp.date() >= limite
+        or almacenada.metadata.timestamp >= limite
     ]
+    fuera: dict[str, int] = {}
+    for _, almacenada in leidas:
+        meta = almacenada.metadata
+        limite = limites.get(meta.label)
+        if limite is not None and meta.timestamp < limite:
+            clave = f"{meta.label}/{meta.signer_id}"
+            fuera[clave] = fuera.get(clave, 0) + 1
 
     # Con grabaciones reales nunca se cae al sintético, aunque las exclusiones
     # dejen el corpus vacío: eso tiene que verse, no taparse con manos de mentira.
     if leidas:
-        # `gaps`: las dinámicas con huecos cortos se reconstruyen (Bloque 2).
-        samples = tuple(almacenada.to_sample(gaps) for _, almacenada in vigentes)
+        # `preprocessing`: plausibilidad y relleno, como un trazo en vivo.
+        samples = tuple(
+            almacenada.to_sample(preprocessing) for _, almacenada in vigentes
+        )
         return Corpus(
             samples=samples,
             provenance=_describe(
@@ -252,6 +266,7 @@ def load_corpus(
                 repo=repo,
                 excluded_truncated=len(todas) - len(no_truncadas),
                 excluded_by_date=len(leidas) - len(vigentes),
+                excluded_by_date_detail=tuple(sorted(fuera.items())),
             ),
         )
 

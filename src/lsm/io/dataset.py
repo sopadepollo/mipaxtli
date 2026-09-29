@@ -30,8 +30,8 @@ from typing import Any, Final
 
 from lsm.capture import CAPTURE_SPEC_VERSION
 from lsm.features import split_valid_runs
-from lsm.gaps import GapPolicy, GapRejected, fill_gaps
 from lsm.io.hands import frames_from_json, frames_to_json
+from lsm.preprocessing import NotReconstructed, Preprocessing, reconstruct
 from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.types import (
     HANDEDNESS_CONVENTION,
@@ -205,7 +205,7 @@ class StoredSample:
     metadata: SampleMetadata
     frames: FrameStream
 
-    def to_sample(self, gaps: GapPolicy | None = None) -> Sample:
+    def to_sample(self, preprocessing: Preprocessing | None = None) -> Sample:
         """Convierte a `types.Sample`, que es lo que consume el entrenamiento.
 
         Exige que el flujo sea **una sola secuencia válida sin huecos**. No es
@@ -215,10 +215,11 @@ class StoredSample:
         completa. Las dos cosas envenenan el entrenamiento en silencio, así que se
         prefiere fallar aquí, al cargar, donde todavía se puede regrabar.
 
-        **La excepción del Bloque 2** (ADR 0021): una muestra **dinámica** con
-        huecos cortos se reconstruye con `lsm.gaps.fill_gaps` si se pasa
-        `gaps`. Sin política, o en una estática, cualquier hueco sigue siendo un
-        error.
+        **La excepción del Bloque 2** (ADR 0021): con `preprocessing`, la
+        muestra pasa por lo mismo que un trazo en vivo (`lsm.preprocessing`): el
+        filtro de plausibilidad (§0.4) y, en una **dinámica**, el relleno de
+        huecos cortos. Sin él, o en una estática, cualquier hueco sigue siendo
+        un error.
         """
         # Bloque 4: lo que se entrena de una dinámica es el trazo, sin el reposo
         # que lo cerró; el reposo queda en el archivo para reproducirla.
@@ -229,20 +230,22 @@ class StoredSample:
         )
         runs = split_valid_runs(flujo)
         interpolados = 0
-        if len(runs) == 1 and len(runs[0]) == len(flujo):
-            secuencia = runs[0]
-        elif gaps is not None and self.metadata.kind is SampleKind.DYNAMIC:
-            reconstruida = fill_gaps(flujo, gaps)
-            if isinstance(reconstruida, GapRejected):
+        implausibles = 0
+        if preprocessing is not None:
+            reconstruida = reconstruct(flujo, self.metadata.kind, preprocessing)
+            if isinstance(reconstruida, NotReconstructed):
                 msg = (
-                    f"la muestra dinámica {self.metadata.label} de "
-                    f"{self.metadata.signer_id} tiene huecos que no se pueden "
-                    f"rellenar ({reconstruida.reason} en el frame "
-                    f"{reconstruida.frame_index}); hay que regrabarla."
+                    f"la muestra {self.metadata.kind.value.lower()} "
+                    f"{self.metadata.label} de {self.metadata.signer_id} tiene "
+                    f"huecos que no se pueden rellenar ({reconstruida.reason}: "
+                    f"{reconstruida.detail}); hay que regrabarla."
                 )
                 raise DatasetError(msg)
             secuencia = reconstruida.sequence
             interpolados = reconstruida.interpolated
+            implausibles = reconstruida.implausible
+        elif len(runs) == 1 and len(runs[0]) == len(flujo):
+            secuencia = runs[0]
         else:
             msg = (
                 f"la muestra {self.metadata.label} de {self.metadata.signer_id} "
@@ -280,6 +283,7 @@ class StoredSample:
             mean_scale_px=meta.mean_scale_px,
             kind=meta.kind,
             interpolated_frames=interpolados,
+            implausible_frames=implausibles,
         )
 
 

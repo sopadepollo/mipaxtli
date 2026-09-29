@@ -37,7 +37,6 @@ from lsm.evaluation import (
     Dataset,
     observe,
 )
-from lsm.gaps import GapPolicy
 from lsm.io.corpus import (
     SYNTHETIC_REPETITIONS,
     SYNTHETIC_SIGNERS,
@@ -47,6 +46,7 @@ from lsm.io.corpus import (
     Provenance,
     load_corpus,
 )
+from lsm.preprocessing import Preprocessing
 from lsm.types import SampleKind
 
 DEFAULT_MODEL = Path("data/models/static_knn.json")
@@ -115,9 +115,9 @@ def main(argv: list[str] | None = None) -> int:
             args.raiz,
             PHASE2_LABELS,
             allow_synthetic=not args.sin_sintetico,
-            # Bloque 2: las dinámicas con huecos cortos se reconstruyen a la
-            # tasa nominal, la de la grabación (ADR 0021).
-            gaps=GapPolicy.from_config(config, config.capture.camera_fps),
+            # Plausibilidad y huecos cortos, como en vivo, a la tasa nominal:
+            # la de la grabación (ADR 0021, ADR 0027).
+            preprocessing=Preprocessing.from_config(config, config.capture.camera_fps),
             exclude_before=config.corpus.exclude_before,
             repetitions=args.repeticiones_sinteticas,
             signers=args.firmantes_sinteticos,
