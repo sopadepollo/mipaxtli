@@ -155,6 +155,7 @@ grabó**, y sirven para auditar el dataset sin volver a procesarlo:
 | `video` | Nombre del archivo de video hermano, o `null`. **Nunca se rellena sin consentimiento registrado.** |
 | `stroke_frames` | Esquema v4 (Bloque 4, ADR 0023). En una dinámica grabada desde el Bloque 4, cuántos frames del principio de `frames` son el **trazo** que la máquina de estados entregó; los siguientes son el reposo que lo cerró. Se entrena solo el trazo; el reposo se guarda para que reproducir la muestra cierre el trazo sin fabricar nada. `null` en las estáticas y en las dinámicas anteriores. |
 | `feature_spec_version` | Esquema v4. Con qué `FEATURE_SPEC_VERSION` se calcularon `dispersion` y `arc_length`. `null` en las anteriores. `lsm-capture verificar` solo compara la σ cuando coincide con la actual. |
+| `preprocessing` | Esquema v5. La plausibilidad, el relleno de huecos y el One Euro (§0.3, §0.4, §4) con que se calcularon `dispersion` y `arc_length` (`lsm.preprocessing.preprocessing_record`). Cambiarlos dentro de una misma versión del contrato cambia la σ: `verificar` solo la compara si coincide con el de ahora. |
 
 `video: null` se escribe explícitamente y no se omite: una clave que falta se
 confunde con un archivo truncado.

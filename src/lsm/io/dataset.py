@@ -190,6 +190,11 @@ class SampleMetadata:
     #: `arc_length`. `None` en las muestras anteriores, que no lo anotaban: su σ
     #: no se puede comparar con la de otra versión del contrato.
     feature_spec_version: int | None = None
+    #: Esquema v5: la plausibilidad, el relleno y el One Euro con que se
+    #: calcularon `dispersion` y `arc_length` (`preprocessing.preprocessing_record`).
+    #: Dentro de una misma versión del contrato, cambiarlos cambia la σ; `lsm-capture
+    #: verificar` solo la compara cuando coinciden.
+    preprocessing: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,6 +376,7 @@ def write_sample(root: Path, sample: StoredSample, index: int | None = None) -> 
         "video": meta.video,
         "stroke_frames": meta.stroke_frames,
         "feature_spec_version": meta.feature_spec_version,
+        "preprocessing": meta.preprocessing,
         "frames": frames_to_json(sample.frames),
     }
 
@@ -425,6 +431,7 @@ def read_sample(path: Path) -> StoredSample:
         feature_spec_version=(
             payload.get("feature_spec_version") if version >= 4 else None
         ),
+        preprocessing=payload.get("preprocessing") if version >= 5 else None,
     )
     return StoredSample(metadata=metadata, frames=frames_from_json(payload["frames"]))
 

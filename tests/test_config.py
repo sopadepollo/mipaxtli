@@ -22,7 +22,7 @@ def test_config_por_defecto_cubre_los_umbrales_del_contrato() -> None:
 
     assert config.quality.max_dispersion > 0.0
     assert config.features.trajectory_weight == 1.0
-    assert config.smoothing.alpha == 1.0
+    assert config.smoothing.enabled is False
     assert config.dtw.band_radius == 6
     assert config.dtw.min_source_frames >= 1
 
@@ -41,17 +41,17 @@ def test_la_configuracion_es_inmutable() -> None:
     config = Config()
 
     with pytest.raises(ValidationError):
-        config.smoothing.alpha = 0.5
+        config.smoothing.min_cutoff = 0.5
 
 
 def test_alpha_de_suavizado_solo_admite_el_intervalo_semiabierto() -> None:
-    Config.model_validate({"smoothing": {"alpha": 1.0}})
-    Config.model_validate({"smoothing": {"alpha": 0.3}})
+    Config.model_validate({"smoothing": {"min_cutoff": 1.0, "beta": 0.0}})
+    Config.model_validate({"smoothing": {"enabled": True, "beta": 0.3}})
 
     with pytest.raises(ValidationError):
-        Config.model_validate({"smoothing": {"alpha": 0.0}})
+        Config.model_validate({"smoothing": {"min_cutoff": 0.0}})
     with pytest.raises(ValidationError):
-        Config.model_validate({"smoothing": {"alpha": 1.5}})
+        Config.model_validate({"smoothing": {"beta": -1.0}})
 
 
 def test_confianza_minima_fuera_de_rango_se_rechaza() -> None:

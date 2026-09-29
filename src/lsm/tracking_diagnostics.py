@@ -57,7 +57,6 @@ from lsm.features import (
     extract_sequence_features,
     mean_displacement,
     palm_size,
-    smooth_sequence,
 )
 from lsm.types import FrameSlot, InvalidFrame, RawFrame
 from lsm.types import Sequence as FrameSequence
@@ -321,21 +320,19 @@ class TrackingRecorder:
 def velocity_between(
     before: RawFrame,
     after: RawFrame,
-    config: Config,
+    config: Config,  # noqa: ARG001 — la misma firma que `features.pair_velocity`
     landmarks: Sequence[int] | None = None,
 ) -> float | None:
     """La velocidad del §6.1 entre dos frames cualesquiera, en unidades de mano.
 
     Con `landmarks=None` es exactamente la de `extract_sequence_features` sobre el
-    par: el mismo suavizado del §4, los pasos 1 y 2, y el tamaño de palma de
+    par: los pasos 1 y 2, y el tamaño de palma de
     cada frame como divisor (v6). Con una lista de índices, el desplazamiento
     medio se toma solo sobre esos puntos; el divisor sigue siendo el de la mano
     entera, para que las dos medidas estén en la misma unidad. `None` si la escala
     del paso 4 es degenerada, como en la tubería.
     """
-    suavizados = smooth_sequence(
-        FrameSequence(frames=(before, after)), config.smoothing.alpha
-    ).frames
+    suavizados = (before, after)
     geometria: list[tuple[tuple[tuple[float, float, float], ...], float]] = []
     for f in suavizados:
         paso_2 = canonicalize_handedness(

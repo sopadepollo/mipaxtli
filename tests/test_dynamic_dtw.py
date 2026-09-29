@@ -28,6 +28,7 @@ from lsm.classifiers.dynamic_dtw import (
 )
 from lsm.config import Config
 from lsm.features import RESAMPLE_LENGTH
+from lsm.preprocessing import preprocessing_record
 from lsm.synthetic import (
     class_hand,
     still_sequence,
@@ -241,7 +242,7 @@ def test_el_export_es_json_y_lleva_lo_que_el_navegador_necesita(
         "trajectory_weight": CONFIG.features.trajectory_weight,
         "min_source_frames": CONFIG.dtw.min_source_frames,
         "resample_length": RESAMPLE_LENGTH,
-        "smoothing_alpha": CONFIG.smoothing.alpha,
+        "preprocessing": preprocessing_record(CONFIG),
     }
     plantilla = payload["data"]["templates"][0]
     assert len(plantilla["rows"]) == RESAMPLE_LENGTH

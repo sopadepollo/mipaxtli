@@ -109,12 +109,18 @@ class DemoHudState:
     aviso_mano: bool = False
 
 
-def draw_landmarks(image: Any, frame: RawFrame, *, mirrored: bool) -> None:
+def draw_landmarks(
+    image: Any, frame: RawFrame, *, mirrored: bool, ghost: bool = False
+) -> None:
     """Dibuja el esqueleto de la mano sobre la imagen, en su sitio.
 
     Modifica `image` en el lugar: es un arreglo de OpenCV de varios megabytes por
     cuadro y copiarlo treinta veces por segundo para no mutar nada sería una
     elegancia cara.
+
+    `ghost` lo dibuja en gris y fino: es el esqueleto crudo debajo del filtrado,
+    para comparar a ojo cuánto temblor quita el One Euro (`lsm-demo
+    --comparar-one-euro`).
     """
     import cv2
 
@@ -124,10 +130,11 @@ def draw_landmarks(image: Any, frame: RawFrame, *, mirrored: bool) -> None:
         for landmark in frame.landmarks
     ]
 
+    linea, grosor, radio = (_GRIS, 1, 2) if ghost else (_VERDE, 2, 3)
     for inicio, fin in HAND_CONNECTIONS:
-        cv2.line(image, puntos[inicio], puntos[fin], _VERDE, 2, cv2.LINE_AA)
+        cv2.line(image, puntos[inicio], puntos[fin], linea, grosor, cv2.LINE_AA)
     for punto in puntos:
-        cv2.circle(image, punto, 3, _BLANCO, -1, cv2.LINE_AA)
+        cv2.circle(image, punto, radio, _GRIS if ghost else _BLANCO, -1, cv2.LINE_AA)
 
 
 def draw_hud(image: Any, state: HudState) -> None:

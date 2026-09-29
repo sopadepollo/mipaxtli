@@ -134,13 +134,26 @@ class StaticKnnConfig(_Section):
 
 
 class SmoothingConfig(_Section):
-    """Media móvil exponencial sobre landmarks crudos (`feature-spec.md` §4)."""
+    """Filtro One Euro sobre los landmarks crudos (`feature-spec.md` §4, ADR 0028).
 
-    #: α = 1.0 desactiva el suavizado. Valores menores reducen el jitter de
-    #: MediaPipe a costa de latencia y de emborronar los movimientos rápidos, lo
-    #: que perjudica justo a las señas dinámicas. Si se activa aquí, debe
-    #: activarse idénticamente en la implementación web.
-    alpha: float = Field(default=1.0, gt=0.0, le=1.0)
+    Sustituye a la media exponencial de α fijo. Se aplica tras la plausibilidad
+    y el relleno de huecos y antes del paso 1, cuadro a cuadro en vivo y desde el
+    primer frame en una muestra guardada. Si se activa aquí, debe activarse
+    idénticamente en la implementación web: los modelos exportan estos valores.
+    """
+
+    #: Interruptor, para medir el componente por separado (ablación).
+    enabled: bool = False
+
+    #: Frecuencia de corte con la mano quieta, en Hz: cuánto temblor se quita.
+    min_cutoff: float = Field(default=1.0, gt=0.0, le=100.0)
+
+    #: Cuánto sube la frecuencia de corte por cada palma por segundo de
+    #: velocidad: cuánto se abre el filtro en un trazo para no retrasarlo.
+    beta: float = Field(default=0.0, ge=0.0, le=1000.0)
+
+    #: Frecuencia de corte del filtro de la derivada, en Hz.
+    d_cutoff: float = Field(default=1.0, gt=0.0, le=100.0)
 
 
 class PlausibilityConfig(_Section):

@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Iterator, Sequence
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime
 from pathlib import Path
 
 from lsm.config import Config, load_config
@@ -28,12 +29,19 @@ from lsm.measurements import (
     Phase,
     Recording,
     Tally,
+    amplitude_ratio,
     attempt_bounds,
+    lag_frames,
     measure,
     percentile,
     phases_from_states,
+    stroke_signals,
+    window_speeds_per_s,
 )
+from lsm.one_euro import OneEuroFilter, OneEuroParams
 from lsm.plausibility import ImplausibleKind, PlausibilityParams, filter_stream
+from lsm.preprocessing import NotReconstructed, Preprocessing, reconstruct
+from lsm.timing import frame_times_ms
 from lsm.tracking_diagnostics import REST_PREFIX
 from lsm.types import FrameStream, InvalidFrame, InvalidReason, RawFrame, SampleKind
 
@@ -570,6 +578,182 @@ def _cmd_plausibilidad(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Rejilla del barrido del One Euro: min_cutoff (Hz) × beta (1/palma).
+_MIN_CUTOFFS = (0.25, 0.5, 1.0, 2.0, 4.0)
+_BETAS = (0.0, 0.1, 0.3, 1.0, 3.0, 10.0)
+#: Letras cuyos trazos se miden: la J es la referencia de τ; Ñ y Q, del giro.
+_LETRAS_TRAZO = ("J", "ENIE", "Q")
+
+
+def _reposos(
+    raiz: Path, config: Config, plaus: PlausibilityParams
+) -> dict[str, list[tuple[list[RawFrame], list[float]]]]:
+    """Tramos válidos de cada postura de reposo, sin el asentamiento."""
+    tramos: dict[str, list[tuple[list[RawFrame], list[float]]]] = {}
+    for carpeta in iter_diagnostic_folders(raiz):
+        sesion = load_diagnostic_session(carpeta)
+        if not any((r.prompt or "").startswith(REST_PREFIX) for r in sesion.records):
+            continue
+        flujo = tuple(filter_stream(sesion.stream, plaus, 30.0))
+        actual: list[RawFrame] = []
+        tiempos: list[float] = []
+        postura: str | None = None
+        inicio = 0.0
+        for slot, r in zip(flujo, sesion.records, strict=True):
+            pose = r.prompt if (r.prompt or "").startswith(REST_PREFIX) else None
+            if pose != postura:
+                if postura and len(actual) > 5:
+                    tramos.setdefault(postura, []).append((actual, tiempos))
+                actual, tiempos, postura, inicio = [], [], pose, r.wall_ms
+            if (
+                postura is None
+                or r.wall_ms - inicio < config.diagnostics.rest_settle_ms
+            ):
+                continue
+            if isinstance(slot, RawFrame):
+                actual.append(slot)
+                tiempos.append(r.wall_ms)
+        if postura and len(actual) > 5:
+            tramos.setdefault(postura, []).append((actual, tiempos))
+    return tramos
+
+
+def _trazos(
+    raiz: Path, config: Config, desde: datetime
+) -> dict[str, list[tuple[list[RawFrame], list[float]]]]:
+    """El trazo de cada muestra dinámica de J, Ñ y Q grabada desde `desde`,
+    reconstruido sin One Euro (plausibilidad y huecos), a la tasa nominal."""
+    pre = Preprocessing.from_config(config, float(config.capture.camera_fps))
+    pre = replace(pre, one_euro=replace(pre.one_euro, enabled=False))
+    trazos: dict[str, list[tuple[list[RawFrame], list[float]]]] = {}
+    for ruta in iter_sample_paths(raiz):
+        muestra = read_sample(ruta)
+        meta = muestra.metadata
+        if (
+            meta.kind is not SampleKind.DYNAMIC
+            or meta.label not in _LETRAS_TRAZO
+            or meta.timestamp < desde
+        ):
+            continue
+        flujo = muestra.frames[: meta.stroke_frames or len(muestra.frames)]
+        hecha = reconstruct(flujo, SampleKind.DYNAMIC, pre)
+        if isinstance(hecha, NotReconstructed) or len(hecha.sequence) < 12:
+            continue
+        frames = list(hecha.sequence.frames)
+        trazos.setdefault(meta.label, []).append(
+            (frames, list(frame_times_ms(tuple(frames), pre.fps)))
+        )
+    return trazos
+
+
+def _filtrar(
+    frames: list[RawFrame], tiempos: list[float], params: OneEuroParams
+) -> list[RawFrame]:
+    filtro = OneEuroFilter(params)
+    return [filtro.step(f, t) for f, t in zip(frames, tiempos, strict=True)]
+
+
+def _cmd_one_euro(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    plaus = PlausibilityParams.from_config(config)
+    reposos = _reposos(args.diagnosticos, config, plaus)
+    trazos = _trazos(args.raiz, config, args.desde)
+    ventana = config.segmentation.velocity_window_ms
+    umbral_quieto = config.segmentation.velocity_threshold_per_s
+    d_cutoff = args.d_cutoff
+
+    def reposo(params: OneEuroParams) -> tuple[float, float]:
+        """p95 de la velocidad de ventana y fracción ≥ velocity_threshold."""
+        velocidades: list[float] = []
+        for tramos in reposos.values():
+            for frames, tiempos in tramos:
+                filtrados = _filtrar(frames, tiempos, params)
+                velocidades += window_speeds_per_s(filtrados, tiempos, ventana)
+        p95 = percentile(velocidades, 0.95) or 0.0
+        sobre = sum(1 for v in velocidades if v >= umbral_quieto) / max(
+            1, len(velocidades)
+        )
+        return p95, sobre
+
+    def trazo(params: OneEuroParams) -> dict[str, tuple[float, float, float]]:
+        """Por letra: retraso mediano de τ y del giro, en ms, y amplitud del giro."""
+        salida: dict[str, tuple[float, float, float]] = {}
+        for letra, lista in trazos.items():
+            lag_tau: list[float] = []
+            lag_giro: list[float] = []
+            amplitud: list[float] = []
+            for frames, tiempos in lista:
+                paso = (tiempos[-1] - tiempos[0]) / (len(tiempos) - 1)
+                crudas = stroke_signals(frames)
+                filtradas = stroke_signals(_filtrar(frames, tiempos, params))
+                for eje in ("tau_x", "tau_y"):
+                    if amplitude_ratio(crudas[eje], filtradas[eje]) is not None:
+                        lag_tau.append(
+                            lag_frames(crudas[eje], filtradas[eje], 8) * paso
+                        )
+                lag_giro.append(lag_frames(crudas["giro"], filtradas["giro"], 8) * paso)
+                a = amplitude_ratio(crudas["giro"], filtradas["giro"])
+                if a is not None:
+                    amplitud.append(a)
+            salida[letra] = (
+                percentile(lag_tau, 0.5) or 0.0,
+                percentile(lag_giro, 0.5) or 0.0,
+                percentile(amplitud, 0.5) or 0.0,
+            )
+        return salida
+
+    base = OneEuroParams(enabled=False, min_cutoff=1.0, beta=0.0, d_cutoff=d_cutoff)
+    p95_crudo, sobre_crudo = reposo(base)
+    filas: list[list[str]] = []
+    for min_cutoff in _MIN_CUTOFFS:
+        for beta in _BETAS:
+            params = OneEuroParams(
+                enabled=True, min_cutoff=min_cutoff, beta=beta, d_cutoff=d_cutoff
+            )
+            p95, sobre = reposo(params)
+            por_letra = trazo(params)
+            filas.append(
+                [
+                    f"{min_cutoff:g}",
+                    f"{beta:g}",
+                    f"{p95:.3f} ({p95 / p95_crudo - 1:+.0%})",
+                    f"{sobre:.3f}",
+                    *(
+                        f"{por_letra[letra][0]:.0f} / {por_letra[letra][1]:.0f} / "
+                        f"{por_letra[letra][2]:.2f}"
+                        if letra in por_letra
+                        else "—"
+                        for letra in _LETRAS_TRAZO
+                    ),
+                ]
+            )
+    partes = [
+        "# Calibración del One Euro (Paso 3)",
+        "",
+        f"- **reposo**: {sum(len(v) for v in reposos.values())} tramos de "
+        f"{', '.join(sorted(reposos))} (diagnósticos, reloj real, sin los "
+        f"{config.diagnostics.rest_settle_ms:g} ms de asentamiento)",
+        "- **trazos**: "
+        + ", ".join(f"{letra} {len(v)}" for letra, v in sorted(trazos.items()))
+        + f" (muestras dinámicas desde {args.desde.isoformat()}, reloj nominal)",
+        f"- **d_cutoff**: {d_cutoff:g} Hz",
+        f"- **sin filtro**: velocidad de ventana en reposo p95 {p95_crudo:.3f} "
+        f"palmas/s, fracción ≥ velocity_threshold ({umbral_quieto:g}) "
+        f"{sobre_crudo:.3f}",
+        "",
+        "Reposo: p95 de la velocidad con la que decide la máquina (ventana de "
+        f"{ventana:g} ms) y fracción de cuadros que la máquina llamaría "
+        "movimiento. Trazos, por letra: retraso mediano de τ / del giro en ms y "
+        "amplitud mediana del giro (1 = intacta).",
+        "",
+        *_tabla(
+            ["min_cutoff", "beta", "reposo p95", "≥ reposo", *_LETRAS_TRAZO], filas
+        ),
+    ]
+    _escribir("\n".join(partes) + "\n", args.salida)
+    return 0
+
+
 def medir(
     grabaciones: list[Recording],
     tally: Tally,
@@ -632,6 +816,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="fracción por encima de la cual se marca la letra (por defecto 0.10)",
     )
     plausibilidad.set_defaults(func=_cmd_plausibilidad)
+    one_euro = subcomandos.add_parser(
+        "one-euro",
+        help="Paso 3: barrido del One Euro, temblor en reposo contra retraso",
+    )
+    one_euro.add_argument(
+        "--desde",
+        type=datetime.fromisoformat,
+        default=datetime.fromisoformat("2026-09-29T00:00:00-06:00"),
+        help="instante desde el que se toman los trazos (ISO-8601 con zona)",
+    )
+    one_euro.add_argument(
+        "--d-cutoff", type=float, default=1.0, dest="d_cutoff", help="en Hz"
+    )
+    one_euro.set_defaults(func=_cmd_one_euro)
     return parser
 
 

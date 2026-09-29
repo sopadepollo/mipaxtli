@@ -104,7 +104,7 @@ from lsm.io.dataset import (
 from lsm.io.glossary import DEFAULT_GLOSSARY, is_validated
 from lsm.io.hands import HandDetector, build_detector
 from lsm.io.preview import HudState, draw_hud, draw_landmarks
-from lsm.preprocessing import Preprocessing
+from lsm.preprocessing import Preprocessing, preprocessing_record
 from lsm.types import (
     Distance,
     FrameSlot,
@@ -762,6 +762,7 @@ def guardar_muestra(
             video=nombre_video,
             stroke_frames=stroke_frames,
             feature_spec_version=FEATURE_SPEC_VERSION,
+            preprocessing=preprocessing_record(config),
         ),
         frames=tuple(buffered.slot for buffered in frames),
     )
@@ -1107,7 +1108,10 @@ def _cmd_verificar(args: argparse.Namespace) -> int:
             continue
 
         revisadas += 1
-        if almacenada.metadata.feature_spec_version != FEATURE_SPEC_VERSION:
+        if (
+            almacenada.metadata.feature_spec_version != FEATURE_SPEC_VERSION
+            or almacenada.metadata.preprocessing != preprocessing_record(config)
+        ):
             otra_version += 1
             continue
         sigma = extraccion.static.dispersion

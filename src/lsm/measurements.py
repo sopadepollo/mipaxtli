@@ -403,3 +403,88 @@ def percentile(values: Sequence[float], q: float) -> float | None:
         return None
     ordenados = sorted(values)
     return ordenados[min(len(ordenados) - 1, max(0, math.ceil(q * len(ordenados)) - 1))]
+
+
+# --------------------------------------------------------------------------- #
+# Paso 3: el One Euro, entre el temblor y el retraso (ADR 0028)
+# --------------------------------------------------------------------------- #
+
+
+def window_speeds_per_s(
+    frames: Sequence[RawFrame], times_ms: Sequence[float], window_ms: float
+) -> list[float]:
+    """La velocidad con la que decide la máquina (§6.1.1), por segundo de tiempo
+    real: cada frame contra el más reciente con al menos `window_ms` de
+    antigüedad, desplazamiento medio de los 21 puntos entre la palma media."""
+    from lsm.features import mean_displacement, palm_size
+
+    puntos = [canonical_points(f) for f in frames]
+    salida: list[float] = []
+    for i in range(len(frames)):
+        base = next(
+            (j for j in range(i - 1, -1, -1) if times_ms[i] - times_ms[j] >= window_ms),
+            None,
+        )
+        if base is None:
+            continue
+        palma = (palm_size(puntos[i]) + palm_size(puntos[base])) / 2.0
+        if palma <= 0.0:
+            continue
+        salida.append(
+            mean_displacement(puntos[base], puntos[i])
+            / palma
+            * 1000.0
+            / (times_ms[i] - times_ms[base])
+        )
+    return salida
+
+
+def stroke_signals(frames: Sequence[RawFrame]) -> dict[str, list[float]]:
+    """Las señales del trazo cuyo retraso se mide: τ (x, y) en palmas y el giro,
+    el ángulo de la línea de nudillos 17 → 5 en grados, desenrollado."""
+    from lsm.features import palm_size
+
+    puntos = [canonical_points(f) for f in frames]
+    palma = sum(palm_size(p) for p in puntos) / len(puntos)
+    x0, y0 = puntos[0][0][0], puntos[0][0][1]
+    angulos: list[float] = []
+    for p in puntos:
+        a = math.degrees(math.atan2(p[5][1] - p[17][1], p[5][0] - p[17][0]))
+        if angulos:
+            while a - angulos[-1] > 180.0:
+                a -= 360.0
+            while a - angulos[-1] < -180.0:
+                a += 360.0
+        angulos.append(a)
+    return {
+        "tau_x": [(p[0][0] - x0) / palma for p in puntos],
+        "tau_y": [(p[0][1] - y0) / palma for p in puntos],
+        "giro": angulos,
+    }
+
+
+def lag_frames(raw: Sequence[float], filtered: Sequence[float], max_lag: int) -> float:
+    """El retraso, en cuadros, que mejor alinea la señal filtrada con la cruda.
+
+    `L` entero en `[0, max_lag]` que minimiza la media de `(f[i] − r[i − L])²`,
+    afinado con una parábola por los tres vecinos: el filtro solo retrasa.
+    """
+    errores: list[float] = []
+    for lag in range(max_lag + 1):
+        pares = [(filtered[i], raw[i - lag]) for i in range(lag, len(raw))]
+        errores.append(sum((f - r) ** 2 for f, r in pares) / max(1, len(pares)))
+    mejor = min(range(len(errores)), key=errores.__getitem__)
+    if 0 < mejor < len(errores) - 1:
+        a, b, c = errores[mejor - 1], errores[mejor], errores[mejor + 1]
+        curva = a - 2.0 * b + c
+        if curva > 0.0:
+            return mejor + 0.5 * (a - c) / curva
+    return float(mejor)
+
+
+def amplitude_ratio(raw: Sequence[float], filtered: Sequence[float]) -> float | None:
+    """Recorrido (máx − mín) de la filtrada sobre el de la cruda."""
+    rango = max(raw) - min(raw)
+    if rango <= 0.0:
+        return None
+    return (max(filtered) - min(filtered)) / rango

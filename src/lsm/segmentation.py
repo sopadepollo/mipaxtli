@@ -120,6 +120,7 @@ from lsm.features import (
     pair_velocity,
 )
 from lsm.gaps import GapPolicy, can_bridge, interpolate_frames
+from lsm.one_euro import OneEuroFilter, OneEuroParams
 from lsm.plausibility import PlausibilityParams, filter_stream, is_implausible
 from lsm.types import (
     FrameSlot,
@@ -587,6 +588,13 @@ def run_segmentation(
         stream, PlausibilityParams.from_config(config), thresholds.fps
     )
 
+    # -- One Euro (§4) -----------------------------------------------------------
+    # Sobre cada frame que llega a la máquina, rellenados incluidos, con el tiempo
+    # de su marca o del índice a la tasa congelada. Un hueco que no se rellena
+    # corta la secuencia y con ella el estado del filtro.
+    suavizado = OneEuroFilter(OneEuroParams.from_config(config))
+    paso_ms = 1000.0 / thresholds.fps
+
     def con_huecos_rellenos() -> Iterator[tuple[int, FrameSlot, bool, bool]]:
         """El flujo, con los huecos cortos de un candidato ya rellenos.
 
@@ -639,6 +647,15 @@ def run_segmentation(
 
     for index, slot, relleno, implausible in con_huecos_rellenos():
         frame = _usable_frame(slot, settings.min_detection_score)
+        if frame is None:
+            suavizado.reset()
+        else:
+            frame = suavizado.step(
+                frame,
+                frame.timestamp_ms
+                if frame.timestamp_ms is not None
+                else index * paso_ms,
+            )
 
         if frame is None:
             # Un hueco interrumpe la secuencia: el buffer se vacía en vez de coser

@@ -51,6 +51,7 @@ from typing import Any, Final
 from lsm.classifiers.base import build_export, check_export_compatibility
 from lsm.config import Config, Metric
 from lsm.features import SequenceFeatures, extract_sequence_features
+from lsm.preprocessing import config_from_record, preprocessing_record
 from lsm.types import NUM_FEATURES, Prediction, Sample, Sequence
 
 #: Nombre con el que este clasificador se identifica en el campo `classifier` del
@@ -303,11 +304,11 @@ class StaticKnnClassifier:
     def export(self) -> dict[str, Any]:
         """El JSON del `ARQUITECTURA.md` §4.6, reimplementable en JavaScript.
 
-        `params` lleva los tres umbrales de decisión **y** `smoothing_alpha`. Ese
-        último no decide nada, pero sin él la app web no puede reproducir el
-        vector de entrada: el suavizado del `feature-spec.md` §4 se aplica antes
-        del paso 1, y si el navegador no lo aplica igual el modelo recibe otros
-        números (`ARQUITECTURA.md` §4.5).
+        `params` lleva los tres umbrales de decisión **y** `preprocessing`: la
+        plausibilidad (§0.4), el relleno y el One Euro (§4) con que se entrenó.
+        No deciden nada aquí, pero sin ellos la app web no puede reproducir el
+        vector de entrada: se aplican antes del paso 1, y si el navegador no los
+        aplica igual el modelo recibe otros números (`ARQUITECTURA.md` §4.5).
         """
         return build_export(
             classifier=CLASSIFIER_NAME,
@@ -317,7 +318,7 @@ class StaticKnnClassifier:
                 "max_distance": self.config.static_knn.max_distance,
                 "min_margin": self.config.static_knn.min_margin,
                 "max_dispersion": self.config.quality.max_dispersion,
-                "smoothing_alpha": self.config.smoothing.alpha,
+                "preprocessing": preprocessing_record(self.config),
             },
             data={
                 "centroids": {
@@ -356,7 +357,7 @@ class StaticKnnClassifier:
                     "min_margin": params["min_margin"],
                 },
                 "quality": {"max_dispersion": params["max_dispersion"]},
-                "smoothing": {"alpha": params["smoothing_alpha"]},
+                **config_from_record(params["preprocessing"]),
             }
         )
 

@@ -35,7 +35,6 @@ from lsm.types import (
     FrameStream,
     Handedness,
     InvalidReason,
-    Landmark,
     LandmarkIndex,
     Point2,
     Points2,
@@ -405,63 +404,6 @@ def _sequence_geometry(
 
 
 # --------------------------------------------------------------------------- #
-# §4 — Suavizado temporal, antes del paso 1
-# --------------------------------------------------------------------------- #
-
-
-def smooth_sequence(sequence: Sequence, alpha: float) -> Sequence:
-    """Media móvil exponencial sobre los landmarks crudos (§4).
-
-    `p̃_t = α · p_t + (1 - α) · p̃_{t-1}`, con `p̃_0 = p_0`: la serie arranca en el
-    primer frame observado. El contrato no fijaba la inicialización; se elige
-    ésta porque cualquier otra (arrancar en cero, por ejemplo) inventaría un
-    movimiento desde el origen del encuadre que nadie ejecutó. Queda anotado en
-    `docs/feature-spec.md` §4.
-
-    Con `α = 1.0` la secuencia se devuelve tal cual, sin recorrerla: el suavizado
-    está desactivado por defecto porque emborrona justo los movimientos rápidos
-    que distinguen a las letras dinámicas.
-    """
-    if not 0.0 < alpha <= 1.0:
-        raise ValueError(f"alpha debe estar en (0, 1], no {alpha}")
-    if alpha == 1.0:
-        return sequence
-
-    complement = 1.0 - alpha
-    smoothed: list[RawFrame] = []
-    previous: Points3 | None = None
-    for frame in sequence.frames:
-        points = frame.points()
-        if previous is None:
-            current = points
-        else:
-            current = tuple(
-                (
-                    alpha * x + complement * px,
-                    alpha * y + complement * py,
-                    alpha * z + complement * pz,
-                )
-                for (x, y, z), (px, py, pz) in zip(points, previous, strict=True)
-            )
-        smoothed.append(_with_points(frame, current))
-        previous = current
-    return Sequence(frames=tuple(smoothed))
-
-
-def _with_points(frame: RawFrame, points: Points3) -> RawFrame:
-    """Copia un frame cambiándole los landmarks y conservando los metadatos."""
-    return RawFrame(
-        landmarks=tuple(Landmark(x=x, y=y, z=z) for x, y, z in points),
-        width=frame.width,
-        height=frame.height,
-        handedness=frame.handedness,
-        handedness_score=frame.handedness_score,
-        detection_score=frame.detection_score,
-        timestamp_ms=frame.timestamp_ms,
-    )
-
-
-# --------------------------------------------------------------------------- #
 # §2 — Agregación estática
 # --------------------------------------------------------------------------- #
 
@@ -689,15 +631,16 @@ def scale_to_pixels(scale: float, frame_height: int) -> float:
 def extract_sequence_features(sequence: Sequence, config: Config) -> ExtractionOutcome:
     """Tubería completa: de `(T, 21, 3)` crudos a todo lo que consume el sistema.
 
-    Orden: suavizado (§4) → pasos 1-7 por frame (§1) → agregación estática (§2) →
-    canal de trayectoria (§3.1) → remuestreo y ponderación (§3.2, §3.3).
+    Orden: pasos 1-7 por frame (§1) → agregación estática (§2) → canal de
+    trayectoria (§3.1) → remuestreo y ponderación (§3.2, §3.3). El filtro del §4
+    no se aplica aquí: actúa sobre el flujo, antes de que exista la secuencia
+    (`lsm.one_euro`, en vivo y en `lsm.preprocessing`).
 
     Devuelve `ExtractionRejected` —no lanza, no devuelve `None`— cuando algún
     frame tiene escala degenerada, e indica cuál, o cuando ningún frame tiene la
     palma lo bastante de frente para fijar la rotación (`PALM_EDGE_ON`, v3).
     """
-    smoothed = smooth_sequence(sequence, config.smoothing.alpha)
-    geometries = _sequence_geometry(smoothed, config)
+    geometries = _sequence_geometry(sequence, config)
     if isinstance(geometries, ExtractionRejected):
         return geometries
 
@@ -714,20 +657,21 @@ def extract_sequence_features(sequence: Sequence, config: Config) -> ExtractionO
     )
 
 
-def pair_velocity(before: RawFrame, after: RawFrame, config: Config) -> float | None:
+def pair_velocity(
+    before: RawFrame,
+    after: RawFrame,
+    config: Config,  # noqa: ARG001 — la firma de la §6.1; el §4 ya no pasa por aquí
+) -> float | None:
     """La velocidad del §6.1 entre dos frames cualesquiera, sin pasar por el paso 5.
 
-    El mismo suavizado del §4, los pasos 1 a 3 y el tamaño de palma: exactamente
+    Los pasos 1 a 3 y el tamaño de palma: exactamente
     la `velocities[0]` de `extract_sequence_features` sobre el par, pero sin
     depender de que la rotación sea fiable (v3). Una mano de canto sigue teniendo
     velocidad aunque su secuencia no se pueda clasificar. `None` si la palma es
     degenerada en alguno de los dos.
     """
-    suavizados = smooth_sequence(
-        Sequence(frames=(before, after)), config.smoothing.alpha
-    )
     geometria: list[tuple[Points3, float]] = []
-    for frame in suavizados.frames:
+    for frame in (before, after):
         step_2 = canonicalize_handedness(
             correct_aspect_and_orientation(frame.points(), frame.aspect_ratio),
             frame.handedness,

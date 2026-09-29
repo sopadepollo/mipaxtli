@@ -697,7 +697,6 @@ def _with_overrides(config: Config, overrides: Mapping[str, Any]) -> Config:
 #: barrido solo mueve umbrales, que se aplican sobre rankings ya calculados.
 _EXTRACTION_PATHS: Final = frozenset(
     {
-        "smoothing.alpha",
         "features.trajectory_weight",
         "dtw.min_source_frames",
     }
@@ -1173,7 +1172,13 @@ def replay_sample(
     stream = [*frames, *reposo]
     windows = 0
     emitted: list[tuple[str, WindowOrigin]] = []
-    for event in run_segmentation(stream, config, classify):
+    # `Sample.sequence` ya pasó por la plausibilidad, el relleno y el One Euro al
+    # cargarse (`lsm.preprocessing`): la máquina no los vuelve a aplicar, o el
+    # trazo saldría filtrado dos veces.
+    ya_preprocesado = _with_overrides(
+        config, {"plausibility.enabled": False, "smoothing.enabled": False}
+    )
+    for event in run_segmentation(stream, ya_preprocesado, classify):
         if isinstance(event, WindowDynamic):
             windows += 1
         elif isinstance(event, LetterEmitted):

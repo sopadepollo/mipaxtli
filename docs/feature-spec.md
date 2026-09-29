@@ -479,24 +479,44 @@ plantillas; la confianza es `d₂ / (d₁ + d₂)` entre las dos letras más cer
 
 ---
 
-## 4. Suavizado temporal (opcional)
+## 4. Suavizado temporal: filtro One Euro (entra en la v4, ADR 0028)
 
-Media móvil exponencial sobre los landmarks crudos, **antes del paso 1**:
+> **Versión.** Sustituye a la media exponencial de α fijo de la v3 (que estaba
+> desactivada, `α = 1`). Entra en `FEATURE_SPEC_VERSION` 4 junto con el §0.4 y δ,
+> con los golden regenerados una sola vez. Hasta entonces está **apagado por
+> defecto** (`smoothing.enabled: false`): ningún punto del barrido cumplió a la
+> vez quitar el temblor y no retrasar los trazos (ADR 0028).
+
+Filtro de Casiez, Roussel y Vogel (2012) sobre **cada coordenada cruda** (x, y, z
+de los 21 landmarks: 63 señales con estado propio), **después** de la
+plausibilidad (§0.4) y del relleno de huecos (§0.3) y **antes del paso 1**. Para
+la muestra `k` de una señal, con `Δ_k = (t_k − t_{k−1}) / 1000` segundos de tiempo
+real (`timestamp_ms`, o `índice · 1000 / fps`; un `Δ ≤ 0` es un error):
 
 ```
-p̃_t = α · p_t + (1 - α) · p̃_{t-1}
+α(f, Δ) = r / (r + 1),   r = 2π · f · Δ
+
+k = 0:  x̂_0 = x_0 ;  d̂_0 = 0
+k ≥ 1:  d_k = (x_k − x̂_{k−1}) / Δ_k
+        d̂_k = α(d_cutoff, Δ_k) · d_k + (1 − α(d_cutoff, Δ_k)) · d̂_{k−1}
+        f_k = min_cutoff + β · |d̂_k| · e / m
+        x̂_k = α(f_k, Δ_k) · x_k + (1 − α(f_k, Δ_k)) · x̂_{k−1}
 ```
 
-con `p̃_0 = p_0`: la serie arranca en el primer frame observado de la secuencia.
-Cualquier otra inicialización —arrancar en cero, por ejemplo— inventaría un
-desplazamiento desde el origen del encuadre que nadie ejecutó, y contaminaría el
-canal de trayectoria del §3.1. El estado se reinicia en cada secuencia: un frame
-inválido interrumpe la secuencia (§0.3) y con ella la media móvil.
-
-`α = config.smoothing.alpha`, por defecto `1.0` (desactivado). Valores menores
-reducen el jitter de MediaPipe a costa de latencia y de emborronar los movimientos
-rápidos, lo que perjudica a las señas dinámicas. Si se activa, debe activarse
-idénticamente en la implementación web.
+- **`e / m`, la única diferencia con el original**: la velocidad que abre el filtro
+  va en palmas por segundo. `e` es el factor del paso 1 para el eje (`a =
+  width/height` para x y z, 1 para y) y `m` el tamaño de palma del paso 4 del
+  frame `k`, calculado sobre el frame **crudo**; si es `< 1e-6`, el del último
+  frame que no lo era, y si no hay ninguno, la velocidad vale 0. Así `β` significa
+  lo mismo cerca o lejos de la cámara y en cualquier resolución.
+- El orden de las operaciones es el de arriba, coordenada por coordenada en el
+  orden `x_0, y_0, z_0, x_1, …`.
+- **Estado**: se reinicia cuando la secuencia se corta —un hueco que no se
+  rellena—. En vivo el filtro llega al trazo con la historia de la mano; en una
+  muestra guardada arranca en su primer frame (`lsm.preprocessing`).
+- Parámetros: `smoothing.min_cutoff`, `smoothing.beta`, `smoothing.d_cutoff`. Los
+  modelos exportados los llevan en `params.preprocessing.one_euro` y la
+  implementación web tiene que usar esos.
 
 ---
 

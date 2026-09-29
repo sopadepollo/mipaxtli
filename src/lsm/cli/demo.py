@@ -34,7 +34,7 @@ import importlib.metadata
 import json
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +47,7 @@ from lsm.io.corpus import git_commit
 from lsm.io.dataset import iter_sample_paths, now, read_sample
 from lsm.io.hands import HandDetector, build_detector, dump_frame_stream
 from lsm.io.preview import DemoHudState
+from lsm.one_euro import OneEuroFilter, OneEuroParams
 from lsm.segmentation import (
     EvidenceAccumulated,
     FrameThresholds,
@@ -522,6 +523,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"dónde escribir los diagnósticos (por defecto: {DEFAULT_DIAGNOSTIC_DIR})",
     )
     parser.add_argument("--mano", choices=sorted(MANOS), default=None, help=AYUDA_MANO)
+    parser.add_argument(
+        "--one-euro",
+        choices=("on", "off"),
+        default=None,
+        dest="one_euro",
+        help=(
+            "activa o desactiva el filtro One Euro (§4) para esta sesión, por "
+            "encima de smoothing.enabled de config.yaml"
+        ),
+    )
+    parser.add_argument(
+        "--one-euro-params",
+        default=None,
+        dest="one_euro_params",
+        metavar="MIN_CUTOFF,BETA,D_CUTOFF",
+        help="los tres parámetros del One Euro para esta sesión, p. ej. 0.5,1,2",
+    )
+    parser.add_argument(
+        "--comparar-one-euro",
+        action="store_true",
+        dest="comparar_one_euro",
+        help=(
+            "dibuja a la vez el esqueleto crudo (gris) y el filtrado por el One "
+            "Euro (color), para comparar a ojo cuánto temblor quita y cuánto "
+            "retrasa. Usa los parámetros efectivos aunque el filtro esté apagado"
+        ),
+    )
     subcomandos = parser.add_subparsers(dest="comando")
     guiado = subcomandos.add_parser(
         "diagnosticar",
@@ -596,9 +624,30 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def con_one_euro(config: Config, estado: str | None, parametros: str | None) -> Config:
+    """`config` con el One Euro que pidió la línea de comandos (ADR 0028)."""
+    cambios: dict[str, object] = {}
+    if estado is not None:
+        cambios["enabled"] = estado == "on"
+    if parametros is not None:
+        try:
+            minimo, beta, derivada = (float(v) for v in parametros.split(","))
+        except ValueError:
+            msg = (
+                f"--one-euro-params espera MIN_CUTOFF,BETA,D_CUTOFF, no {parametros!r}"
+            )
+            raise SystemExit(msg) from None
+        cambios |= {"min_cutoff": minimo, "beta": beta, "d_cutoff": derivada}
+    if not cambios:
+        return config
+    crudo = config.model_dump(mode="json")
+    crudo["smoothing"] |= cambios
+    return Config.model_validate(crudo)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    config = load_config(args.config)
+    config = con_one_euro(load_config(args.config), args.one_euro, args.one_euro_params)
 
     medida = _medida_pedida(args, config)
     if isinstance(medida, str):
@@ -637,8 +686,25 @@ def main(argv: list[str] | None = None) -> int:
             "mano con la que vas a firmar (ADR 0017)"
         )
         return 2
+    print(
+        "One Euro: "
+        + ("activo" if config.smoothing.enabled else "apagado")
+        + f" (min_cutoff {config.smoothing.min_cutoff:g}, beta "
+        f"{config.smoothing.beta:g}, d_cutoff {config.smoothing.d_cutoff:g})"
+        + (
+            "; el preview compara crudo (gris) y filtrado"
+            if args.comparar_one_euro
+            else ""
+        )
+    )
     return _sesion_en_vivo(
-        config, registro, sesion, medida, diagnostico, mano=MANOS[args.mano]
+        config,
+        registro,
+        sesion,
+        medida,
+        diagnostico,
+        mano=MANOS[args.mano],
+        comparar_one_euro=args.comparar_one_euro,
     )
 
 
@@ -919,6 +985,7 @@ def _sesion_en_vivo(
     diagnostico: Diagnostico | None = None,
     *,
     mano: Handedness = Handedness.RIGHT,
+    comparar_one_euro: bool = False,
 ) -> int:
     """Abre la cámara y deletrea hasta que se pulse `q`.
 
@@ -943,6 +1010,14 @@ def _sesion_en_vivo(
         import cv2
 
         from lsm.io.preview import draw_demo_hud, draw_landmarks
+
+        # Solo para dibujar (`--comparar-one-euro`): el mismo filtro que aplica
+        # la máquina, con los parámetros efectivos aunque esté apagado.
+        comparador = (
+            OneEuroFilter(replace(OneEuroParams.from_config(config), enabled=True))
+            if comparar_one_euro
+            else None
+        )
 
         def flujo(camera: Camera, detector: HandDetector) -> Iterator[FrameSlot]:
             # El `return` de la tecla de salida agota el generador, y agotarlo
@@ -999,7 +1074,15 @@ def _sesion_en_vivo(
                 if config.capture.preview_mirror:
                     imagen = cv2.flip(imagen, 1)
                 if isinstance(slot, InvalidFrame):
+                    if comparador is not None:
+                        comparador.reset()
                     sesion.aplicar(HandAbsent())
+                elif comparador is not None:
+                    espejo = config.capture.preview_mirror
+                    draw_landmarks(imagen, slot, mirrored=espejo, ghost=True)
+                    filtrado = comparador.step(slot, slot.timestamp_ms or recibido_ms)
+                    draw_landmarks(imagen, filtrado, mirrored=espejo)
+                    sesion.aplicar(HandPresent())
                 else:
                     draw_landmarks(imagen, slot, mirrored=config.capture.preview_mirror)
                     sesion.aplicar(HandPresent())

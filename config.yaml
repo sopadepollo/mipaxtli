@@ -105,13 +105,20 @@ static_knn:
   # equivocado. 0.6 rechaza el 5.7% y aún deja 0.9261, por encima del criterio.
   min_margin: 0.6
 
-# Suavizado temporal opcional sobre landmarks crudos (feature-spec.md §4).
+# Filtro One Euro sobre los landmarks crudos (feature-spec.md §4, ADR 0028).
+# Sustituye a la media exponencial de α fijo. Va tras la plausibilidad y el
+# relleno de huecos y antes del paso 1; usa el tiempo real entre cuadros. Los
+# modelos exportan estos valores y la implementación web tiene que usar los
+# mismos. Calibración: `lsm-medir one-euro`.
 smoothing:
-  # α = 1.0 desactiva el suavizado (cada frame se usa tal cual). Valores menores
-  # reducen el jitter de MediaPipe a costa de latencia y de emborronar los
-  # movimientos rápidos, lo que perjudica justo a las letras con movimiento.
-  # Si se activa aquí, hay que activarlo idénticamente en la implementación web.
-  alpha: 1.0
+  # Interruptor, para medir el componente por separado (ablación).
+  enabled: false
+  # Frecuencia de corte con la mano quieta, en Hz: cuánto temblor se quita.
+  min_cutoff: 1.0
+  # Cuánto se abre el filtro por cada palma por segundo de velocidad.
+  beta: 0.0
+  # Frecuencia de corte de la derivada, en Hz.
+  d_cutoff: 1.0
 
 # Filtro de plausibilidad anatómica (feature-spec.md §0.4, ADR 0027). Un cuadro
 # físicamente imposible no se corrige: se marca inválido (IMPLAUSIBLE) y lo

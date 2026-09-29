@@ -31,7 +31,6 @@ from lsm.features import (
     pair_velocity,
     reference_scales,
     scale_to_pixels,
-    split_valid_runs,
 )
 from lsm.gaps import GapRejection
 from lsm.preprocessing import NotReconstructed, Preprocessing, reconstruct
@@ -316,28 +315,21 @@ def evaluate_window(
         return rechazo(Rejection.TOO_MANY_FRAMES)
 
     stream: FrameStream = tuple(buffered.slot for buffered in frames)
-    runs = split_valid_runs(stream)
-    if len(runs) == 1 and len(runs[0]) == count:
-        sequence = runs[0]
-    elif kind is SampleKind.DYNAMIC:
-        # Bloque 2 (ADR 0021): una dinámica con huecos cortos se guarda —con los
-        # huecos tal como ocurrieron— si `to_sample` podrá reconstruirla. Se mide
-        # sobre la reconstruida, que es lo que verá el entrenamiento: plausibilidad
-        # y relleno (ADR 0027).
-        reconstruida = reconstruct(
-            stream,
-            kind,
-            Preprocessing.from_config(config, config.capture.camera_fps),
+    # Se mide sobre lo que verá el entrenamiento (`to_sample`): plausibilidad,
+    # relleno de huecos cortos en una dinámica (Bloque 2, ADR 0021; la muestra se
+    # guarda con los huecos tal como ocurrieron) y One Euro (ADR 0027, 0028).
+    reconstruida = reconstruct(
+        stream,
+        kind,
+        Preprocessing.from_config(config, config.capture.camera_fps),
+    )
+    if isinstance(reconstruida, NotReconstructed):
+        return rechazo(
+            Rejection.TOO_MUCH_INTERPOLATED
+            if GapRejection.TOO_MUCH_INTERPOLATED.value in reconstruida.detail
+            else Rejection.HAS_GAPS
         )
-        if isinstance(reconstruida, NotReconstructed):
-            return rechazo(
-                Rejection.TOO_MUCH_INTERPOLATED
-                if GapRejection.TOO_MUCH_INTERPOLATED.value in reconstruida.detail
-                else Rejection.HAS_GAPS
-            )
-        sequence = reconstruida.sequence
-    else:
-        return rechazo(Rejection.HAS_GAPS)
+    sequence = reconstruida.sequence
 
     # La mano es la declarada de la sesión, igual en todos los frames por
     # construcción (ADR 0017): ya no hay «lateralidad mixta» que rechazar.

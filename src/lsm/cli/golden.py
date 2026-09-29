@@ -47,6 +47,7 @@ from lsm.features import (
 )
 from lsm.gaps import GapPolicy, GapRejected, fill_gaps
 from lsm.io.hands import dump_frame_stream
+from lsm.preprocessing import preprocessing_record
 from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.synthetic import (
     arc_offsets,
@@ -690,7 +691,7 @@ def build_document(config: Config) -> dict[str, Any]:
         "config": {
             "trajectory_weight": config.features.trajectory_weight,
             "min_source_frames": config.dtw.min_source_frames,
-            "smoothing_alpha": config.smoothing.alpha,
+            "preprocessing": preprocessing_record(config),
             "resample_length": RESAMPLE_LENGTH,
             "min_scale": MIN_SCALE,
         },

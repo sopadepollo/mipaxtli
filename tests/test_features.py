@@ -34,7 +34,6 @@ from lsm.features import (
     reference_scale,
     resample,
     rotate_to_axis,
-    smooth_sequence,
     split_valid_runs,
     translate_to_origin,
 )
@@ -667,37 +666,8 @@ def test_una_secuencia_corta_conserva_sus_features_estaticas() -> None:
     assert len(outcome.static.shape) == NUM_FEATURES
 
 
-# --------------------------------------------------------------------------- #
-# §4 — suavizado
-# --------------------------------------------------------------------------- #
-
-
-def test_alpha_uno_desactiva_el_suavizado() -> None:
-    sequence = moving_sequence(canonical_hand(), arc_offsets(6))
-
-    assert smooth_sequence(sequence, 1.0) == sequence
-
-
-def test_el_suavizado_conserva_el_primer_frame_y_arrastra_los_siguientes() -> None:
-    sequence = moving_sequence(canonical_hand(), ((0.0, 0.0), (100.0, 0.0)))
-
-    smoothed = smooth_sequence(sequence, 0.5)
-
-    assert smoothed.frames[0] == sequence.frames[0]
-    original_x = sequence.frames[1].landmarks[0].x
-    previous_x = sequence.frames[0].landmarks[0].x
-    assert smoothed.frames[1].landmarks[0].x == pytest.approx(
-        0.5 * original_x + 0.5 * previous_x
-    )
-
-
-def test_el_suavizado_no_altera_los_metadatos_del_frame() -> None:
-    sequence = moving_sequence(canonical_hand(), arc_offsets(4))
-
-    smoothed = smooth_sequence(sequence, 0.4)
-
-    assert smoothed.frames[1].width == sequence.frames[1].width
-    assert smoothed.frames[1].handedness is sequence.frames[1].handedness
+# El §4 (One Euro) no pasa por `extract_sequence_features`: actúa sobre el flujo.
+# Sus tests están en `tests/test_one_euro.py`.
 
 
 # --------------------------------------------------------------------------- #

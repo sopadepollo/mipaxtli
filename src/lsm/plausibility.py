@@ -80,6 +80,16 @@ class PlausibilityParams:
             reset_after_ms=p.reset_after_ms,
         )
 
+    def to_json(self) -> dict[str, float | int | bool | None]:
+        return {
+            "enabled": self.enabled,
+            "bone_max_deviation": self.bone_max_deviation,
+            "bone_reference_frames": self.bone_reference_frames,
+            "max_mcp_dorsal_deg": self.max_mcp_dorsal_deg,
+            "max_palm_speed_per_s": self.max_palm_speed_per_s,
+            "reset_after_ms": self.reset_after_ms,
+        }
+
 
 @dataclass
 class PlausibilityFilter:

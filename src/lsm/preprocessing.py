@@ -1,4 +1,4 @@
-"""Del flujo crudo guardado a la secuencia que se entrena (§0.3 y §0.4).
+"""Del flujo crudo guardado a la secuencia que se entrena (§0.3, §0.4 y §4).
 
 Una muestra en disco es el flujo tal como salió del detector, huecos incluidos
 (`io/dataset.py`). Lo que se entrena tiene que pasar por **lo mismo** que pasa un
@@ -6,11 +6,14 @@ trazo en vivo antes de llegar al clasificador, en el mismo orden:
 
 1. el filtro de plausibilidad (§0.4): los cuadros imposibles pasan a huecos;
 2. el relleno de huecos (§0.3): solo en las dinámicas; en una estática,
-   cualquier hueco sigue siendo un error.
+   cualquier hueco sigue siendo un error;
+3. el filtro One Euro (§4), desde el primer frame de la secuencia resultante.
 
 Este módulo es ese recorrido, en un solo sitio, para que el entrenamiento, la
 evaluación y la captura no lo reimplementen cada uno a su manera. En vivo lo
-mismo ocurre cuadro a cuadro dentro de `segmentation.run_segmentation`.
+mismo ocurre cuadro a cuadro dentro de `segmentation.run_segmentation`; la
+diferencia es que allí el One Euro llega al trazo ya caliente, con la historia
+anterior al trazo, y aquí arranca en su primer frame.
 
 Código puro.
 """
@@ -18,10 +21,13 @@ Código puro.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from lsm.config import Config
 from lsm.gaps import GapFilled, GapPolicy, GapRejected, fill_gaps
+from lsm.one_euro import OneEuroParams, filter_sequence
 from lsm.plausibility import PlausibilityParams, filter_stream, is_implausible
+from lsm.timing import frame_times_ms
 from lsm.types import FrameStream, RawFrame, SampleKind, Sequence
 
 
@@ -35,6 +41,7 @@ class Preprocessing:
 
     plausibility: PlausibilityParams
     gaps: GapPolicy
+    one_euro: OneEuroParams
     fps: float
 
     @classmethod
@@ -42,8 +49,40 @@ class Preprocessing:
         return cls(
             plausibility=PlausibilityParams.from_config(config),
             gaps=GapPolicy.from_config(config, fps),
+            one_euro=OneEuroParams.from_config(config),
             fps=fps,
         )
+
+
+def preprocessing_record(config: Config) -> dict[str, Any]:
+    """Lo que la configuración decide del preprocesado, como JSON.
+
+    Viaja en las muestras (con qué se calculó su σ) y en los modelos exportados
+    (con qué se entrenaron): los dos se comparan contra el de ahora.
+    """
+    return {
+        "plausibility": PlausibilityParams.from_config(config).to_json(),
+        "one_euro": OneEuroParams.from_config(config).to_json(),
+        "dynamic_max_gap_ms": config.segmentation.dynamic_max_gap_ms,
+        "dynamic_max_interpolated_fraction": (
+            config.segmentation.dynamic_max_interpolated_fraction
+        ),
+    }
+
+
+def config_from_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Las secciones de configuración de un `preprocessing_record`, para
+    reconstruir la configuración con que se entrenó un modelo."""
+    return {
+        "plausibility": dict(record["plausibility"]),
+        "smoothing": dict(record["one_euro"]),
+        "segmentation": {
+            "dynamic_max_gap_ms": record["dynamic_max_gap_ms"],
+            "dynamic_max_interpolated_fraction": record[
+                "dynamic_max_interpolated_fraction"
+            ],
+        },
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +108,7 @@ class NotReconstructed:
 def reconstruct(
     stream: FrameStream, kind: SampleKind, pre: Preprocessing
 ) -> Reconstructed | NotReconstructed:
-    """Plausibilidad y relleno sobre un flujo guardado, con estado nuevo.
+    """Plausibilidad, relleno y One Euro sobre un flujo guardado, con estado nuevo.
 
     Una estática no pasa por la plausibilidad: sin relleno en el camino
     estático, un solo cuadro invalidado la haría ilegible. En el dataset de hoy
@@ -82,8 +121,9 @@ def reconstruct(
     )
     if all(isinstance(slot, RawFrame) for slot in filtrado):
         return Reconstructed(
-            sequence=Sequence(
-                frames=tuple(f for f in filtrado if isinstance(f, RawFrame))
+            sequence=_suavizada(
+                Sequence(frames=tuple(f for f in filtrado if isinstance(f, RawFrame))),
+                pre,
             ),
             interpolated=0,
             implausible=0,
@@ -105,9 +145,18 @@ def reconstruct(
             detail=f"{relleno.reason} en el frame {relleno.frame_index}",
         )
     return Reconstructed(
-        sequence=relleno.sequence,
+        sequence=_suavizada(relleno.sequence, pre),
         interpolated=relleno.interpolated,
         implausible=_implausibles_rellenados(filtrado, relleno),
+    )
+
+
+def _suavizada(sequence: Sequence, pre: Preprocessing) -> Sequence:
+    """El One Euro sobre la secuencia, con el tiempo de `lsm.timing`."""
+    if not pre.one_euro.enabled:
+        return sequence
+    return filter_sequence(
+        sequence, frame_times_ms(sequence.frames, pre.fps), pre.one_euro
     )
 
 

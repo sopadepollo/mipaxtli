@@ -57,6 +57,7 @@ from lsm.features import (
     SequenceFeatures,
     extract_sequence_features,
 )
+from lsm.preprocessing import config_from_record, preprocessing_record
 from lsm.types import NUM_FEATURES, Prediction, Sample, Sequence
 from lsm.vocabulary import DIRECTION_PENDING_LABELS
 
@@ -349,9 +350,10 @@ class DynamicDtwClassifier:
 
         `params` lleva lo que decide —`band_radius`, `max_distance`— y lo que hace
         falta para reconstruir la entrada: `trajectory_weight` (§3.3),
-        `min_source_frames` y `resample_length` (§3.2) y `smoothing_alpha` (§4).
-        Sin cualquiera de los cuatro, el navegador compararía otras filas contra
-        las mismas plantillas.
+        `min_source_frames` y `resample_length` (§3.2) y `preprocessing` (la
+        plausibilidad, el relleno y el One Euro, §0.3, §0.4 y §4). Sin cualquiera
+        de ellos, el navegador compararía otras filas contra las mismas
+        plantillas.
         """
         return build_export(
             classifier=CLASSIFIER_NAME,
@@ -362,7 +364,7 @@ class DynamicDtwClassifier:
                 "trajectory_weight": self.config.features.trajectory_weight,
                 "min_source_frames": self.config.dtw.min_source_frames,
                 "resample_length": RESAMPLE_LENGTH,
-                "smoothing_alpha": self.config.smoothing.alpha,
+                "preprocessing": preprocessing_record(self.config),
             },
             data={
                 "templates": [
@@ -409,7 +411,7 @@ class DynamicDtwClassifier:
                     "min_source_frames": params["min_source_frames"],
                 },
                 "features": {"trajectory_weight": params["trajectory_weight"]},
-                "smoothing": {"alpha": params["smoothing_alpha"]},
+                **config_from_record(params["preprocessing"]),
             }
         )
 

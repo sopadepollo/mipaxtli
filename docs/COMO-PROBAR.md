@@ -345,6 +345,27 @@ A estática como control; ~30 s. `plausibilidad` recorre todo el dataset y los
 diagnósticos con la configuración de `config.yaml`: para medir otro umbral,
 `--config` con otra copia.
 
+```bash
+# Paso 3: barrido del One Euro. Temblor en reposo contra retraso y amplitud del
+# trazo en J, Ñ y Q. ~40 s por valor de d_cutoff.
+uv run lsm-medir --salida docs/mediciones/one-euro.md one-euro --d-cutoff 2
+```
+
+### 5.3 El One Euro a ojo 📷
+
+El barrido no encontró un punto que quite el temblor sin retrasar los trazos
+(ADR 0028), así que el filtro viene apagado. Para verlo en vivo, con el
+esqueleto crudo en gris y el filtrado en color encima:
+
+```bash
+uv run lsm-demo --mano derecha --comparar-one-euro --one-euro-params 0.5,1,2
+```
+
+`--comparar-one-euro` solo cambia el dibujo; la máquina sigue con lo que diga
+`smoothing.enabled`. Para que además deletree con el filtro, `--one-euro on`;
+`--one-euro off` lo apaga aunque `config.yaml` lo tenga encendido. Los tres
+candidatos del ADR 0028 son `0.5,1,2`, `0.5,3,0.5` y `1,1,2`.
+
 ---
 
 ## 6. La demo
