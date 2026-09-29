@@ -37,6 +37,7 @@ from lsm.synthetic import (
     translated,
 )
 from lsm.types import (
+    FrameSlot,
     Handedness,
     InvalidFrame,
     InvalidReason,
@@ -583,6 +584,78 @@ def test_un_trazo_que_no_termina_nunca_se_rechaza_por_largo() -> None:
     assert (
         delimit_dynamic_stroke(iter(flujo), config, 30.0) is Rejection.STROKE_TOO_LONG
     )
+
+
+def test_un_trazo_cortado_por_un_hueco_largo_se_rechaza_por_interrumpido() -> None:
+    """Paso 0: el motivo dice que se perdió la mano, no que no se detuvo."""
+    from lsm.capture import delimit_dynamic_stroke
+    from lsm.segmentation import FrameThresholds
+
+    config = Config()
+    umbrales = FrameThresholds.from_config(config, 30.0)
+    hueco_largo = [InvalidFrame(reason=InvalidReason.NO_HAND)] * (
+        umbrales.missing_frames_to_idle - 1
+    )
+    flujo: list[FrameSlot] = [*_trazo_y_reposo(movimiento=20, reposo=0), *hueco_largo]
+
+    assert (
+        delimit_dynamic_stroke(iter(flujo), config, 30.0)
+        is Rejection.STROKE_INTERRUPTED
+    )
+
+
+def test_un_trazo_demasiado_reconstruido_se_rechaza_por_exceso_de_relleno() -> None:
+    """Paso 0: la máquina cierra el trazo pero lo descarta por relleno."""
+    from lsm.capture import delimit_dynamic_stroke
+    from lsm.segmentation import FrameThresholds
+    from lsm.synthetic import canonical_hand, to_frame, translated
+
+    config = Config()
+    umbrales = FrameThresholds.from_config(config, 30.0)
+    base = canonical_hand()
+    flujo: list[RawFrame | InvalidFrame] = [
+        to_frame(translated(base, 400.0, 400.0), width=1280, height=720)
+    ] * 10
+    for i in range(1, 60):
+        mano = to_frame(
+            translated(base, 400.0 + 12.0 * i, 400.0), width=1280, height=720
+        )
+        # Tras entrar al candidato, uno de cada dos cuadros se pierde: la mitad
+        # del trazo sale interpolada.
+        flujo.append(
+            InvalidFrame(reason=InvalidReason.NO_HAND) if i > 20 and i % 2 else mano
+        )
+    ultimo = flujo[-1] if isinstance(flujo[-1], RawFrame) else flujo[-2]
+    flujo += [ultimo] * (umbrales.motion_confirm_low_frames + 10)
+
+    assert (
+        delimit_dynamic_stroke(iter(flujo), config, 30.0)
+        is Rejection.TOO_MUCH_INTERPOLATED
+    )
+
+
+def test_un_intento_rechazado_se_vuelve_a_segmentar_igual_que_en_vivo() -> None:
+    """`resegment_attempt` es la captura sin cámara: el mismo trazo, la misma
+    evaluación. Un intento que se perdió por un hueco sigue perdido con la
+    configuración con que se perdió."""
+    from lsm.capture import ResegmentedStroke, resegment_attempt
+    from lsm.segmentation import FrameThresholds
+
+    config = Config()
+    umbrales = FrameThresholds.from_config(config, 30.0)
+    bueno = tuple(
+        _trazo_y_reposo(movimiento=20, reposo=umbrales.motion_confirm_low_frames + 5)
+    )
+    resultado = resegment_attempt(bueno, config, 30.0)
+    assert isinstance(resultado, ResegmentedStroke)
+    assert resultado.stroke.start == 9
+    assert resultado.quality.accepted
+
+    cortado: tuple[FrameSlot, ...] = (
+        *_trazo_y_reposo(movimiento=20, reposo=0),
+        *[InvalidFrame(reason=InvalidReason.NO_HAND)] * 8,
+    )
+    assert resegment_attempt(cortado, config, 30.0) is Rejection.STROKE_INTERRUPTED
 
 
 def test_una_dinamica_que_acaba_en_movimiento_es_truncada() -> None:

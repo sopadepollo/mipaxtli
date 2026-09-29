@@ -32,6 +32,7 @@ from lsm.capture import CAPTURE_SPEC_VERSION
 from lsm.features import split_valid_runs
 from lsm.gaps import GapPolicy, GapRejected, fill_gaps
 from lsm.io.hands import frames_from_json, frames_to_json
+from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.types import (
     HANDEDNESS_CONVENTION,
     Distance,
@@ -85,6 +86,14 @@ class HandSource(StrEnum):
     #: aquí no hay manera de saberlo.
     DETECTED = "DETECTED"
 
+
+#: Intentos dinámicos que la captura rechazó (Paso 0, ADR 0024). Viven en una
+#: subcarpeta de la letra, `<firmante>/<sesion>/<LETRA>/rechazados/NNN.json`:
+#: un nivel más abajo que las muestras, así que `iter_sample_paths` no los
+#: alcanza y el entrenamiento no los ve. Además no son muestras: su archivo
+#: tiene otro esquema y `read_sample` los rechaza.
+REJECTED_DIRNAME: Final = "rechazados"
+REJECTED_ATTEMPT_SCHEMA_VERSION: Final = 1
 
 #: Versión del registro de consentimiento.
 CONSENT_SCHEMA_VERSION: Final = 1
@@ -434,7 +443,10 @@ def iter_sample_paths(root: Path) -> Iterator[Path]:
         # Relativo a la raíz, no absoluto: apuntar la raíz **a** `pruebas/` es la
         # forma soportada de recorrerlas (`--raiz data/raw/pruebas`), y con una
         # comprobación sobre la ruta completa esa raíz se excluiría a sí misma.
-        if TRIAL_DIRNAME not in path.relative_to(root).parts
+        # Los intentos rechazados (Paso 0) quedan un nivel más abajo y el patrón
+        # no los alcanza; se excluyen también por nombre, por lo mismo.
+        if TRIAL_DIRNAME not in (partes := path.relative_to(root).parts)
+        and REJECTED_DIRNAME not in partes
     )
 
 
@@ -611,3 +623,121 @@ def read_truncated_manifest(root: Path) -> frozenset[str]:
         )
         raise DatasetError(msg)
     return frozenset(entrada["path"] for entrada in payload["samples"])
+
+
+# --------------------------------------------------------------------------- #
+# Intentos dinámicos rechazados (Paso 0)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedAttempt:
+    """Una grabación dinámica que la captura rechazó, entera y en crudo.
+
+    Se guarda **todo** lo que la cámara entregó desde que ESPACIO armó la
+    grabación hasta que se rechazó —huecos incluidos—, con el motivo. No es una
+    muestra: no tiene trazo delimitado ni σ, y el entrenamiento no la lee. Existe
+    para que, cuando mejore la tolerancia de la tubería, el intento se pueda
+    volver a segmentar (`lsm.capture.resegment_attempt`) sin regrabarlo.
+    """
+
+    label: str
+    signer_id: str
+    session_id: str
+    timestamp: datetime
+    #: La mano declarada de la sesión, igual que en una muestra.
+    handedness: Handedness
+    light_level: LightLevel
+    light_direction: LightDirection
+    distance: Distance
+    mean_luminance: float
+    #: `lsm.capture.Rejection`, como texto.
+    reason: str
+    #: La tasa con la que la máquina de estados convirtió sus umbrales al
+    #: delimitar: re-segmentar con otra daría otros cortes.
+    fps: float
+    #: La sección `segmentation` de la configuración con que se rechazó, para
+    #: saber contra qué umbrales perdió.
+    segmentation: dict[str, Any]
+    frames: FrameStream
+    capture_spec_version: int = CAPTURE_SPEC_VERSION
+    segmentation_spec_version: int = SEGMENTATION_SPEC_VERSION
+
+
+def rejected_dir(root: Path, signer_id: str, session_id: str, label: str) -> Path:
+    """`data/raw/<signer>/<sesion>/<LABEL>/rechazados/`."""
+    return label_dir(root, signer_id, session_id, label) / REJECTED_DIRNAME
+
+
+def write_rejected_attempt(root: Path, attempt: RejectedAttempt) -> Path:
+    """Escribe un intento rechazado con el siguiente número libre de su carpeta."""
+    directory = rejected_dir(root, attempt.signer_id, attempt.session_id, attempt.label)
+    directory.mkdir(parents=True, exist_ok=True)
+    destino = sample_path(directory, next_sample_index(directory))
+    payload = {
+        "schema_version": REJECTED_ATTEMPT_SCHEMA_VERSION,
+        "kind": "REJECTED_ATTEMPT",
+        "capture_spec_version": attempt.capture_spec_version,
+        "segmentation_spec_version": attempt.segmentation_spec_version,
+        "label": attempt.label,
+        "signer_id": attempt.signer_id,
+        "session_id": attempt.session_id,
+        "timestamp": attempt.timestamp.isoformat(),
+        "handedness": str(attempt.handedness),
+        "light_level": str(attempt.light_level),
+        "light_direction": str(attempt.light_direction),
+        "distance": str(attempt.distance),
+        "mean_luminance": attempt.mean_luminance,
+        "rejection": attempt.reason,
+        "fps": attempt.fps,
+        "segmentation": attempt.segmentation,
+        "frames": frames_to_json(attempt.frames),
+    }
+    temporal = destino.with_suffix(".json.tmp")
+    temporal.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    temporal.replace(destino)
+    return destino
+
+
+def read_rejected_attempt(path: Path) -> RejectedAttempt:
+    payload: Any = json.loads(path.read_text(encoding="utf-8"))
+    version = payload.get("schema_version")
+    if payload.get("kind") != "REJECTED_ATTEMPT" or (
+        version != REJECTED_ATTEMPT_SCHEMA_VERSION
+    ):
+        msg = (
+            f"{path}: no es un intento rechazado de la versión "
+            f"{REJECTED_ATTEMPT_SCHEMA_VERSION} (kind {payload.get('kind')!r}, "
+            f"schema_version {version})"
+        )
+        raise DatasetError(msg)
+    return RejectedAttempt(
+        label=payload["label"],
+        signer_id=payload["signer_id"],
+        session_id=payload["session_id"],
+        timestamp=datetime.fromisoformat(payload["timestamp"]),
+        handedness=Handedness(payload["handedness"]),
+        light_level=LightLevel(payload["light_level"]),
+        light_direction=LightDirection(payload["light_direction"]),
+        distance=Distance(payload["distance"]),
+        mean_luminance=payload["mean_luminance"],
+        reason=payload["rejection"],
+        fps=payload["fps"],
+        segmentation=payload["segmentation"],
+        frames=frames_from_json(payload["frames"]),
+        capture_spec_version=payload["capture_spec_version"],
+        segmentation_spec_version=payload["segmentation_spec_version"],
+    )
+
+
+def iter_rejected_attempt_paths(root: Path) -> Iterator[Path]:
+    """Todos los intentos rechazados, en orden estable, sin los de prueba."""
+    if not root.is_dir():
+        return
+    yield from sorted(
+        path
+        for path in root.glob(f"*/*/*/{REJECTED_DIRNAME}/[0-9]*.json")
+        if TRIAL_DIRNAME not in path.relative_to(root).parts
+    )

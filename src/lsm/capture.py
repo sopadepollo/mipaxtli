@@ -33,7 +33,7 @@ from lsm.features import (
     scale_to_pixels,
     split_valid_runs,
 )
-from lsm.gaps import GapPolicy, GapRejected, fill_gaps
+from lsm.gaps import GapPolicy, GapRejected, GapRejection, fill_gaps
 from lsm.segmentation import (
     RejectionReason,
     WindowDynamic,
@@ -91,6 +91,14 @@ class Rejection(StrEnum):
     STROKE_NOT_CLOSED = "STROKE_NOT_CLOSED"
     #: La máquina descartó el trazo por pasar de `motion_max_ms` (Bloque 4).
     STROKE_TOO_LONG = "STROKE_TOO_LONG"
+    #: Se alcanzó `capture.dynamic_max_ms` y lo último que hizo la máquina fue
+    #: cortar un candidato por un hueco que no se pudo rellenar: la mano se
+    #: perdió a mitad del trazo (Paso 0).
+    STROKE_INTERRUPTED = "STROKE_INTERRUPTED"
+    #: Demasiados frames rellenados por interpolación: en el trazo que la
+    #: máquina descartó (`DYNAMIC_TOO_MUCH_INTERPOLATED`) o en la ventana
+    #: (`dynamic_max_interpolated_fraction`). Solo dinámicas (Paso 0).
+    TOO_MUCH_INTERPOLATED = "TOO_MUCH_INTERPOLATED"
 
 
 #: Qué hacer ante cada rechazo, en palabras de quien está frente a la cámara.
@@ -111,6 +119,8 @@ _INSTRUCCIONES: Final[dict[Rejection, str]] = {
     Rejection.TRAJECTORY_TOO_SHORT: "falta recorrido: marca el trazo de la letra",
     Rejection.STROKE_NOT_CLOSED: "no se cerro el trazo: deten la mano al terminar",
     Rejection.STROKE_TOO_LONG: "trazo demasiado largo: hazlo de una vez y detente",
+    Rejection.STROKE_INTERRUPTED: "se perdio la mano a mitad del trazo: mejora la luz",
+    Rejection.TOO_MUCH_INTERPOLATED: "demasiados cuadros sin mano en el trazo",
 }
 
 
@@ -316,7 +326,11 @@ def evaluate_window(
             stream, GapPolicy.from_config(config, config.capture.camera_fps)
         )
         if isinstance(reconstruida, GapRejected):
-            return rechazo(Rejection.HAS_GAPS)
+            return rechazo(
+                Rejection.TOO_MUCH_INTERPOLATED
+                if reconstruida.reason is GapRejection.TOO_MUCH_INTERPOLATED
+                else Rejection.HAS_GAPS
+            )
         sequence = reconstruida.sequence
     else:
         return rechazo(Rejection.HAS_GAPS)
@@ -457,11 +471,17 @@ def delimit_dynamic_stroke(
 
     - un trazo entregado → `DelimitedStroke`;
     - la máquina lo descartó por largo → `STROKE_TOO_LONG`;
-    - `stream` se acabó sin trazo → `STROKE_NOT_CLOSED`.
+    - `stream` se acabó sin trazo → el motivo de lo último que le pasó a un
+      candidato: `STROKE_INTERRUPTED` si lo cortó un hueco que no se pudo
+      rellenar, `TOO_MUCH_INTERPOLATED` si se cerró demasiado reconstruido, y
+      `STROKE_NOT_CLOSED` si no le pasó nada de eso (Paso 0).
 
-    Un candidato interrumpido por un hueco largo no rechaza: la grabación sigue
-    y quien firma puede volver a hacer la letra antes del tope.
+    Un candidato interrumpido o demasiado reconstruido no rechaza en el acto: la
+    grabación sigue y quien firma puede volver a hacer la letra antes del tope.
+    El motivo solo decide qué se le dice, y con qué etiqueta se guarda el
+    intento, si el tope llega sin trazo.
     """
+    motivo = Rejection.STROKE_NOT_CLOSED
     for evento in run_segmentation(stream, config, _ningun_clasificador, fps=fps):
         if isinstance(evento, WindowDynamic):
             return DelimitedStroke(
@@ -469,12 +489,48 @@ def delimit_dynamic_stroke(
                 end=evento.frame_index,
                 stroke_frames=len(evento.window.frames),
             )
-        if (
-            isinstance(evento, WindowRejected)
-            and evento.reason is RejectionReason.DYNAMIC_TOO_LONG
-        ):
+        if not isinstance(evento, WindowRejected):
+            continue
+        if evento.reason is RejectionReason.DYNAMIC_TOO_LONG:
             return Rejection.STROKE_TOO_LONG
-    return Rejection.STROKE_NOT_CLOSED
+        if evento.reason is RejectionReason.DYNAMIC_INTERRUPTED:
+            motivo = Rejection.STROKE_INTERRUPTED
+        elif evento.reason is RejectionReason.DYNAMIC_TOO_MUCH_INTERPOLATED:
+            motivo = Rejection.TOO_MUCH_INTERPOLATED
+    return motivo
+
+
+@dataclass(frozen=True, slots=True)
+class ResegmentedStroke:
+    """Un intento guardado que, segmentado otra vez, da una muestra aceptable."""
+
+    stroke: DelimitedStroke
+    quality: WindowQuality
+
+
+def resegment_attempt(
+    frames: FrameStream, config: Config, fps: float
+) -> ResegmentedStroke | Rejection:
+    """Vuelve a pasar un intento dinámico rechazado por la captura (Paso 0).
+
+    Es exactamente lo que hace `lsm-capture grabar` con la cámara: la máquina
+    delimita el trazo (`delimit_dynamic_stroke`) y la ventana del trazo se
+    evalúa como cualquier muestra (`evaluate_window`). Con la configuración de
+    hoy un intento que ayer se perdió por un hueco puede salir entero, y así se
+    sabe sin volver a grabarlo.
+    """
+    trazo = delimit_dynamic_stroke(iter(frames), config, fps)
+    if isinstance(trazo, Rejection):
+        return trazo
+    ventana = frames[trazo.start : trazo.start + trazo.stroke_frames]
+    calidad = evaluate_window(
+        tuple(BufferedFrame(slot=slot, luminance=0.0) for slot in ventana),
+        SampleKind.DYNAMIC,
+        config,
+    )
+    if calidad.rejection is not None:
+        return calidad.rejection
+    return ResegmentedStroke(stroke=trazo, quality=calidad)
 
 
 def final_velocity(frames: FrameStream, config: Config) -> float | None:

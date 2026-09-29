@@ -12,6 +12,10 @@ Cuatro subcomandos:
   `--guardar-video` no hace nada.
 - `verificar` — relee el dataset, re-deriva las features y comprueba que salen
   idénticas a las del momento de grabar. No necesita cámara.
+- `marcar-truncadas` — excluye sin borrar las dinámicas anteriores al Bloque 4
+  que acaban en movimiento (ADR 0023).
+- `rechazados` — vuelve a segmentar los intentos dinámicos que `grabar` rechazó
+  y guardó en `rechazados/`, con la configuración de hoy (ADR 0024).
 
 **Los tres bloqueos de `grabar` son rechazos, no avisos.** Un aviso en una
 terminal, antes de cuarenta minutos de grabación con otra persona delante, no lo
@@ -55,6 +59,7 @@ from lsm.capture import (
     is_truncated,
     maximum_frames,
     minimum_frames,
+    resegment_attempt,
 )
 from lsm.cli import AYUDA_MANO, MANOS, MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
@@ -75,20 +80,25 @@ from lsm.io.calibration import (
 )
 from lsm.io.camera import Camera, CameraError, VideoRecorder
 from lsm.io.dataset import (
+    REJECTED_DIRNAME,
     Consent,
     DatasetError,
+    RejectedAttempt,
     SampleMetadata,
     StoredSample,
     check_identifier,
     count_samples,
+    iter_rejected_attempt_paths,
     iter_sample_paths,
     label_dir,
     may_store_video,
     next_sample_index,
     now,
+    read_rejected_attempt,
     read_sample,
     save_consent,
     trial_root,
+    write_rejected_attempt,
     write_sample,
     write_truncated_manifest,
 )
@@ -546,7 +556,17 @@ def _grabar_dinamica(
         sesion.mensaje = "grabacion descartada"
         return True
     if isinstance(resultado, Rejection):
-        sesion.mensaje = f"no se guardo: {explain(resultado)}"
+        sesion.mensaje = _rechazo_guardado(
+            resultado,
+            registro,
+            sesion,
+            config,
+            fps,
+            raiz,
+            signer_id,
+            session_id,
+            condiciones,
+        )
         return True
 
     frames = tuple(registro[resultado.start : resultado.end + 1])
@@ -563,7 +583,17 @@ def _grabar_dinamica(
         stroke_frames=resultado.stroke_frames,
     )
     if isinstance(guardada, Rejection):
-        sesion.mensaje = f"no se guardo: {explain(guardada)}"
+        sesion.mensaje = _rechazo_guardado(
+            guardada,
+            registro,
+            sesion,
+            config,
+            fps,
+            raiz,
+            signer_id,
+            session_id,
+            condiciones,
+        )
         return True
     if guarda_video and guardada.video is not None:
         _guardar_video(
@@ -576,6 +606,79 @@ def _grabar_dinamica(
         f"+ {len(frames) - resultado.stroke_frames} de reposo"
     )
     return True
+
+
+def _rechazo_guardado(
+    motivo: Rejection,
+    registro: list[BufferedFrame],
+    sesion: _Sesion,
+    config: Config,
+    fps: float,
+    raiz: Path,
+    signer_id: str,
+    session_id: str,
+    condiciones: Condiciones,
+) -> str:
+    """Guarda el intento rechazado y devuelve el mensaje para el HUD (Paso 0)."""
+    ruta = guardar_intento_rechazado(
+        motivo=motivo,
+        registro=tuple(registro),
+        label=sesion.label,
+        config=config,
+        fps=fps,
+        raiz=raiz,
+        signer_id=signer_id,
+        session_id=session_id,
+        condiciones=condiciones,
+    )
+    guardado = f" (intento en {REJECTED_DIRNAME}/{ruta.name})" if ruta else ""
+    return f"no se guardo: {explain(motivo)}{guardado}"
+
+
+def guardar_intento_rechazado(
+    *,
+    motivo: Rejection,
+    registro: tuple[BufferedFrame, ...],
+    label: Label,
+    config: Config,
+    fps: float,
+    raiz: Path,
+    signer_id: str,
+    session_id: str,
+    condiciones: Condiciones,
+) -> Path | None:
+    """Escribe una grabación dinámica rechazada, entera y en crudo (Paso 0).
+
+    Lo que la cámara entregó desde que se armó la grabación, huecos incluidos, con
+    el motivo y la tasa con la que la máquina de estados la delimitó. Queda en
+    `<LETRA>/rechazados/`, fuera del alcance del entrenamiento, para volver a
+    segmentarla (`lsm-capture rechazados`) cuando la tubería tolere más, sin
+    regrabarla. Un intento en el que el detector no vio ninguna mano no tiene
+    nada que reprocesar y no se escribe: devuelve `None`.
+    """
+    mano = next(
+        (b.slot.handedness for b in registro if isinstance(b.slot, RawFrame)), None
+    )
+    if mano is None:
+        return None
+    return write_rejected_attempt(
+        raiz,
+        RejectedAttempt(
+            label=label.value,
+            signer_id=signer_id,
+            session_id=session_id,
+            timestamp=now(),
+            handedness=mano,
+            light_level=condiciones.light_level,
+            light_direction=condiciones.light_direction,
+            distance=condiciones.distance,
+            mean_luminance=sum(b.luminance for b in registro) / len(registro),
+            reason=motivo.value,
+            fps=fps,
+            segmentation=config.segmentation.model_dump(mode="json"),
+            frames=tuple(b.slot for b in registro),
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1090,6 +1193,44 @@ def _cmd_marcar_truncadas(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rechazados(args: argparse.Namespace) -> int:
+    """Vuelve a segmentar los intentos rechazados con la configuración de hoy.
+
+    No escribe nada: dice, por letra y por el motivo con que se rechazó cada
+    intento, cuántos saldrían ahora como un trazo aceptable (Paso 0). Cada
+    intento se reprocesa con la tasa con la que se grabó, la que la máquina usó
+    para delimitarlo.
+    """
+    config = load_config(args.config)
+    raiz: Path = args.raiz
+    #: (letra, motivo original) → [intentos, rescatados]
+    tabla: dict[tuple[str, str], list[int]] = {}
+    ahora: dict[str, int] = {}
+    for ruta in iter_rejected_attempt_paths(raiz):
+        intento = read_rejected_attempt(ruta)
+        resultado = resegment_attempt(intento.frames, config, intento.fps)
+        fila = tabla.setdefault((intento.label, intento.reason), [0, 0])
+        fila[0] += 1
+        if isinstance(resultado, Rejection):
+            ahora[resultado.value] = ahora.get(resultado.value, 0) + 1
+        else:
+            fila[1] += 1
+    if not tabla:
+        print(f"no hay intentos rechazados en {raiz}")
+        return 0
+    total = sum(f[0] for f in tabla.values())
+    rescatados = sum(f[1] for f in tabla.values())
+    print(f"{total} intentos rechazados; {rescatados} dan hoy un trazo aceptable")
+    print(f"  {'letra':8s} {'motivo original':24s} {'intentos':>8s} {'trazo hoy':>9s}")
+    for (letra, motivo), (n, ok) in sorted(tabla.items()):
+        print(f"  {letra:8s} {motivo:24s} {n:8d} {ok:9d}")
+    if ahora:
+        print("los que siguen rechazados, por el motivo de hoy:")
+        for motivo, n in sorted(ahora.items(), key=lambda kv: -kv[1]):
+            print(f"  {motivo:24s} {n:5d}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # Argumentos
 # --------------------------------------------------------------------------- #
@@ -1286,6 +1427,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     truncadas.set_defaults(func=_cmd_marcar_truncadas)
+
+    rechazados = subcomandos.add_parser(
+        "rechazados",
+        help=(
+            "vuelve a segmentar los intentos dinámicos rechazados con la "
+            "configuración actual y dice cuántos darían hoy un trazo aceptable"
+        ),
+    )
+    rechazados.set_defaults(func=_cmd_rechazados)
 
     return parser
 

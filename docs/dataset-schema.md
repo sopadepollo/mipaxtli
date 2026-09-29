@@ -178,6 +178,44 @@ criterio. No es una muestra —vive en la raíz, fuera de
 las listadas y lo anota en la procedencia (`excluded_truncated`). Lo escribe
 `lsm-capture marcar-truncadas`.
 
+#### Los intentos dinámicos rechazados
+
+`data/raw/<firmante>/<sesión>/<LETRA>/rechazados/003.json` (Paso 0, ADR 0024).
+Cuando `lsm-capture grabar` rechaza una dinámica —tope de `dynamic_max_ms`, trazo
+cortado por un hueco largo, exceso de relleno, trazo demasiado largo o corto—
+guarda **todo** lo que la cámara entregó desde que ESPACIO armó la grabación, con
+el motivo. No es una muestra y tiene su propio esquema:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "REJECTED_ATTEMPT",
+  "capture_spec_version": 2,
+  "segmentation_spec_version": 7,
+  "label": "X", "signer_id": "s03", "session_id": "2026-09-29-dinamicas",
+  "timestamp": "…", "handedness": "RIGHT",
+  "light_level": "INDOOR", "light_direction": "FRONTAL", "distance": "MEDIUM",
+  "mean_luminance": 0.31,
+  "rejection": "STROKE_INTERRUPTED",
+  "fps": 28.7,
+  "segmentation": { "... la sección segmentation de config.yaml al rechazar ..." },
+  "frames": ["... el flujo entero, huecos incluidos ..."]
+}
+```
+
+- **El entrenamiento no los ve.** Viven un nivel por debajo de las muestras, así
+  que `iter_sample_paths` —y con él `load_corpus`, `lsm-train`, `lsm-eval`— no los
+  alcanza, y `read_sample` rechaza su esquema. El contador del preview tampoco los
+  cuenta.
+- **`fps`** es la tasa con la que la máquina de estados convirtió sus umbrales al
+  delimitar. Re-segmentar con otra daría otros cortes.
+- **Para qué**: `lsm-capture rechazados` los vuelve a pasar por la captura
+  (`lsm.capture.resegment_attempt`, la misma máquina y la misma evaluación) con la
+  configuración de hoy y dice cuántos darían un trazo aceptable. Cuando la tubería
+  tolere más, se recuperan sin regrabar.
+- Un intento en el que el detector no vio ninguna mano no se escribe: no hay nada
+  que reprocesar.
+
 ### Disposición en `data/raw/`
 
 ```
@@ -191,7 +229,9 @@ data/raw/
         └── <LABEL>/
             ├── 001.json          # una muestra
             ├── 001.mp4           # video hermano, SOLO con consentimiento
-            └── 002.json
+            ├── 002.json
+            └── rechazados/       # intentos dinámicos rechazados; NO son muestras
+                └── 001.json
 ```
 
 `pruebas/` guarda lo que graba `lsm-capture grabar --sesion-prueba`: sesiones para

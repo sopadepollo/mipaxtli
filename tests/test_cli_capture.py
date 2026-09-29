@@ -63,6 +63,7 @@ from lsm.synthetic import (
 from lsm.types import (
     HANDEDNESS_CONVENTION,
     Distance,
+    FrameSlot,
     InvalidFrame,
     InvalidReason,
     LightDirection,
@@ -761,3 +762,134 @@ def test_una_calibracion_registrada_queda_legible(tmp_path: Path) -> None:
     assert vigente is not None
     assert vigente.width == 1280
     assert vigente.confirmado_por == "quien grabó"
+
+
+# --------------------------------------------------------------------------- #
+# Intentos dinámicos rechazados (Paso 0)
+# --------------------------------------------------------------------------- #
+
+
+def _intento(config: Config, *, hueco: int) -> tuple[BufferedFrame, ...]:
+    """Una mano quieta, un trazo, `hueco` cuadros sin mano y un reposo."""
+    from lsm.segmentation import FrameThresholds
+    from lsm.synthetic import to_frame
+
+    umbrales = FrameThresholds.from_config(config, 30.0)
+    base = canonical_hand()
+    quieta = [to_frame(translated(base, 400.0, 400.0), width=1280, height=720)] * 10
+    trazo = [
+        to_frame(translated(base, 400.0 + 12.0 * i, 400.0), width=1280, height=720)
+        for i in range(1, 21)
+    ]
+    sin_mano = [InvalidFrame(reason=InvalidReason.NO_HAND)] * hueco
+    reposo = [trazo[-1]] * (umbrales.motion_confirm_low_frames + 5)
+    slots: tuple[FrameSlot, ...] = (
+        *quieta,
+        *trazo[:15],
+        *sin_mano,
+        *trazo[15:],
+        *reposo,
+    )
+    return tuple(BufferedFrame(slot=slot, luminance=0.3) for slot in slots)
+
+
+def test_un_intento_rechazado_se_guarda_fuera_del_dataset(tmp_path: Path) -> None:
+    """El intento entero, en crudo y con el motivo, en `<LETRA>/rechazados/`:
+    ni `iter_sample_paths` ni el contador de la sesión lo ven."""
+    from lsm.cli.capture import guardar_intento_rechazado
+    from lsm.io.dataset import (
+        count_samples,
+        iter_rejected_attempt_paths,
+        iter_sample_paths,
+        read_rejected_attempt,
+    )
+
+    config = Config()
+    registro = _intento(config, hueco=8)
+
+    ruta = guardar_intento_rechazado(
+        motivo=Rejection.STROKE_INTERRUPTED,
+        registro=registro,
+        label=Label.J,
+        config=config,
+        fps=29.5,
+        raiz=tmp_path,
+        signer_id="s01",
+        session_id="2026-09-29-dinamicas",
+        condiciones=CONDICIONES,
+    )
+
+    assert ruta is not None
+    assert ruta.parent.name == "rechazados"
+    assert list(iter_sample_paths(tmp_path)) == []
+    assert count_samples(tmp_path, "s01", "2026-09-29-dinamicas") == {"J": 0}
+    assert list(iter_rejected_attempt_paths(tmp_path)) == [ruta]
+    leido = read_rejected_attempt(ruta)
+    assert leido.reason == "STROKE_INTERRUPTED"
+    assert leido.fps == 29.5
+    assert leido.frames == tuple(b.slot for b in registro)
+    assert leido.segmentation["dynamic_max_gap_ms"] == (
+        config.segmentation.dynamic_max_gap_ms
+    )
+
+
+def test_un_intento_sin_ninguna_mano_no_se_guarda(tmp_path: Path) -> None:
+    from lsm.cli.capture import guardar_intento_rechazado
+
+    vacio = (
+        BufferedFrame(slot=InvalidFrame(reason=InvalidReason.NO_HAND), luminance=0.1),
+    )
+
+    assert (
+        guardar_intento_rechazado(
+            motivo=Rejection.STROKE_NOT_CLOSED,
+            registro=vacio,
+            label=Label.J,
+            config=Config(),
+            fps=30.0,
+            raiz=tmp_path,
+            signer_id="s01",
+            session_id="2026-09-29-dinamicas",
+            condiciones=CONDICIONES,
+        )
+        is None
+    )
+
+
+def test_rechazados_dice_cuantos_intentos_darian_hoy_un_trazo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Un hueco de ocho cuadros corta el trazo con el relleno de 150 ms; con un
+    relleno más largo el mismo intento, sin regrabar, sale entero."""
+    from lsm.cli.capture import guardar_intento_rechazado
+
+    config = Config()
+    guardar_intento_rechazado(
+        motivo=Rejection.STROKE_INTERRUPTED,
+        registro=_intento(config, hueco=8),
+        label=Label.J,
+        config=config,
+        fps=30.0,
+        raiz=tmp_path,
+        signer_id="s01",
+        session_id="2026-09-29-dinamicas",
+        condiciones=CONDICIONES,
+    )
+
+    assert main(["--raiz", str(tmp_path), "rechazados"]) == 0
+    assert "1 intentos rechazados; 0 dan hoy un trazo aceptable" in (
+        capsys.readouterr().out
+    )
+
+    tolerante = tmp_path / "tolerante.yaml"
+    tolerante.write_text(
+        "segmentation:\n  dynamic_max_gap_ms: 300.0\n"
+        "  dynamic_max_interpolated_fraction: 0.5\n",
+        encoding="utf-8",
+    )
+    assert (
+        main(["--config", str(tolerante), "--raiz", str(tmp_path), "rechazados"]) == 0
+    )
+    assert "1 intentos rechazados; 1 dan hoy un trazo aceptable" in (
+        capsys.readouterr().out
+    )

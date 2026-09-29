@@ -192,6 +192,18 @@ cerró incluido. Si en `capture.dynamic_max_ms` (6 s) la máquina no entrega un
 trazo cerrado, no se guarda nada y el preview dice por qué («no se cerro el
 trazo: deten la mano al terminar», o «trazo demasiado largo»). `r` cancela.
 
+**Un intento rechazado no se pierde** (Paso 0, ADR 0024): se guarda entero, en
+crudo y con el motivo, en `<LETRA>/rechazados/`, que el entrenamiento no lee. El
+preview lo dice («intento en rechazados/003.json»). Para saber cuántos saldrían
+enteros con la configuración de hoy, sin cámara:
+
+```bash
+uv run lsm-capture rechazados
+```
+
+No escribe nada: re-segmenta cada intento con la misma máquina y la misma
+evaluación que la captura, y cuenta por letra y motivo.
+
 La barra de calidad dice si la ventana serviría *ahora mismo*, y mide cosas
 opuestas según el modo:
 
