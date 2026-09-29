@@ -486,7 +486,14 @@ porque los tres casos se comportan distinto y no basta con probar uno:
 
 ## 6. Velocidad y estabilidad — contrato de segmentación
 
-**`SEGMENTATION_SPEC_VERSION = 5`** (`src/lsm/segmentation.py`).
+**`SEGMENTATION_SPEC_VERSION = 6`** (`src/lsm/segmentation.py`).
+
+> **v6** — `docs/adr/0019-cierre-del-trazo-y-cascada.md`. La velocidad del §6.1
+> se divide entre el **tamaño de palma** `m` y no entre la escala del paso 4, que
+> se colapsa con la palma de canto (en la X queda en 0.17 del tamaño real). El
+> cierre de DYNAMIC_CANDIDATE mide el reposo con su propia ventana (§6.1.2,
+> `closing_window_ms`), y tras un `DYNAMIC_TOO_LONG` puede nacer otra racha a los
+> `motion_exhausted_ms` (§6.7). La escala del paso 4 y las features no cambian.
 
 > **v5** — `docs/adr/0017-diagnostico-de-tracking.md`. La velocidad con la que
 > **decide la máquina** deja de ser la del último par de cuadros y pasa a medirse
@@ -530,13 +537,24 @@ las §1 a §5. Los valores esperados viajan en los `sequence_cases` de
 
 Entrada: dos frames válidos y consecutivos de la misma secuencia. Sea `q_t` el
 conjunto de puntos del frame `t` **tras el paso 2** —relación de aspecto corregida,
-`y` invertida y lateralidad canonizada— y `s_t` la escala del paso 4 de ese frame.
+`y` invertida y lateralidad canonizada— y `m_t` su **tamaño de palma** (v6):
 
 ```
+P     = ( (0,5), (0,9), (0,13), (0,17), (5,17) )     # en este orden
+m_t   = max_{(a,b) ∈ P} ‖ q_{t,a} - q_{t,b} ‖₂        # en 2D
 d_t   = ( Σ_i ‖ q_{t,i} - q_{t-1,i} ‖₂ ) / 21      # i ascendente, en 2D: z se ignora
-s_par = ( s_{t-1} + s_t ) / 2
-v_t   = d_t / s_par
+m_par = ( m_{t-1} + m_t ) / 2
+v_t   = d_t / m_par
 ```
+
+- **Por qué la palma y no la escala del paso 4** (v6, ADR 0019). La escala del
+  paso 4 es un solo segmento, muñeca → nudillo 9, y cuando apunta a la cámara su
+  proyección se encoge: en la X quieta quedó en 0.17 del tamaño de la mano y la
+  velocidad salió 30 veces mayor que en una estática. La palma es
+  aproximadamente plana, y dentro de ella muñeca → nudillo 9 y nudillo 5 →
+  nudillo 17 son casi perpendiculares: al girarla no pueden encogerse las dos a
+  la vez. En las estáticas `s/m` está entre 0.80 y 1.00, así que su velocidad
+  apenas cambia. Como `P` incluye muñeca → nudillo 9, `m_t ≥ s_t`.
 
 - `‖·‖₂` es la norma euclidiana en el plano XY. `z` se ignora por la misma razón
   que en el paso 4: es ruido.
@@ -583,7 +601,30 @@ en el buffer no hay `w_t`.
 - `velocity_window_ms ≤ buffer_ms`, validado: el buffer tiene que guardar el
   cuadro contra el que se mide.
 
+### 6.1.2 La velocidad con la que se cierra un trazo (v6)
+
+Dentro de DYNAMIC_CANDIDATE, el reposo que cuenta para `motion_confirm_low_ms`
+—el que cierra el trazo— se mide con la misma fórmula del §6.1.1 pero con su
+propia ventana, `k_c = frames_from_ms(closing_window_ms, fps)`:
+
+```
+c_t = v(B[t - min(k_c, |B| - 1)], B[t]) / min(k_c, |B| - 1)
+```
+
+y un frame del candidato cuenta como movimiento si `c_t ≥ motion_threshold`. Todo
+lo demás —arrancar una racha, pasar a candidato, `moving`, `still_run` y STABLE—
+sigue con `w_t` del §6.1.1. Si `closing_window_ms` y `velocity_window_ms` dan los
+mismos cuadros, `c_t = w_t`.
+
+**Por qué una ventana aparte.** Con 100 ms la X quieta no pasa de 618 ms de
+reposo seguido, y el trazo necesita 667: nunca cierra. Con 150 ms, 1501 ms
+(ADR 0019). El precio de una ventana más larga es arrastre: tras una parada en
+seco el cierre sigue viendo movimiento hasta `k_c - 1` cuadros.
+
 ### 6.2 Por qué la escala del par y no otra
+
+(Hasta la v5 el divisor era la escala del paso 4, `s`; desde la v6 es el tamaño de
+palma `m`, §6.1. Lo que sigue vale igual para `m`.)
 
 Las tres opciones —`s_t`, `s_{t-1}` o la `s̄` de la ventana— dan números distintos
 en cuanto la mano se acerca o se aleja de la cámara, así que la paridad depende de
@@ -783,7 +824,11 @@ siendo el mismo trazo):
   El remuestreo (§3.2) lo hace el clasificador. Viaja con `WindowOrigin.DYNAMIC`.
 - **Largo máximo**: se compara el número de frames del trazo, contados desde su
   frame de partida, con `motion_max_frames`, con `>`. Tras descartar por largo no
-  nace otra racha hasta que `low_run ≥ motion_confirm_low`.
+  nace otra racha hasta que ocurra lo primero de: `low_run ≥ motion_confirm_low`,
+  un frame inválido, o `motion_exhausted_frames` cuadros desde el rechazo (v6).
+  La tercera vía existe porque la primera es la condición que acaba de fallar: en
+  la X y la Q, que no llegan a reposar, bloqueaba los intentos siguientes
+  (ADR 0019).
 - **Tras emitir una dinámica**, además del `pending_repeat` de siempre, un
   cerrojo impide que TRACKING promueva a STABLE hasta que un frame supere
   `velocity_threshold` o se pierda la mano: la pose en que termina una dinámica

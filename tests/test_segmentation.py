@@ -77,6 +77,7 @@ CONFIG = Config.model_validate(
             # Un cuadro: la velocidad del §6.1 entre pares consecutivos. Estos
             # tests son de la lógica de la máquina; la ventana tiene los suyos.
             "velocity_window_ms": _ms(1),
+            "closing_window_ms": _ms(1),
             # El camino dinámico, apartado de estos tests: el tránsito más largo
             # que usan son 12 frames de viaje, y 20 frames móviles no los
             # alcanza ninguno. Los tests del camino dinámico llevan su propia
@@ -770,6 +771,7 @@ DYNAMIC_CONFIG = Config.model_validate(
             # Un cuadro: la velocidad del §6.1 entre pares consecutivos. Estos
             # tests son de la lógica de la máquina; la ventana tiene los suyos.
             "velocity_window_ms": _ms(1),
+            "closing_window_ms": _ms(1),
             "motion_threshold_per_s": 0.025 * FPS,
             "motion_min_ms": _ms(4),
             "motion_confirm_low_ms": _ms(4),
@@ -1035,19 +1037,59 @@ def test_la_pose_final_de_una_dinamica_no_se_emite_como_estatica() -> None:
 
 
 def test_un_candidato_demasiado_largo_se_descarta_sin_clasificar() -> None:
-    """Movimiento que no para: se descarta al pasar `motion_max`, y mientras la
-    mano siga moviéndose no nace otro candidato — si no, alguien gesticulando
-    entraría y saldría de DYNAMIC_CANDIDATE sin fin."""
-    agitada = trazo((10.0, 0.0, 3 * DYNAMIC_UMBRALES.motion_max_frames))
+    """Movimiento que no para: se descarta al pasar `motion_max` sin clasificar.
+
+    Tras el rechazo no nace otro candidato durante `motion_exhausted_ms`
+    (v6, ADR 0019): alguien gesticulando sin parar produce como mucho un rechazo
+    por cada `motion_max + motion_exhausted`, y ninguno llega al clasificador.
+    Hasta la v5 no nacía ninguno más mientras la mano no reposara, y en la X y
+    la Q —que nunca reposan del todo— eso bloqueaba los intentos siguientes.
+    """
+    total = 3 * DYNAMIC_UMBRALES.motion_max_frames
+    agitada = trazo((10.0, 0.0, total))
     clasificador = PorOrigen()
 
     events = run_dynamic(agitada, clasificador)
 
-    rechazos = [e.reason for e in events if isinstance(e, WindowRejected)]
-    assert rechazos == [RejectionReason.DYNAMIC_TOO_LONG]
+    rechazos = [e for e in events if isinstance(e, WindowRejected)]
+    assert {e.reason for e in rechazos} == {RejectionReason.DYNAMIC_TOO_LONG}
+    ciclo = (
+        DYNAMIC_UMBRALES.motion_max_frames + DYNAMIC_UMBRALES.motion_exhausted_frames
+    )
+    assert 1 <= len(rechazos) <= -(-total // ciclo)
     assert clasificador.calls == []
-    entradas = [t for t in transitions(events) if t[1] is State.DYNAMIC_CANDIDATE]
-    assert len(entradas) == 1
+    entradas = [
+        e.frame_index
+        for e in events
+        if isinstance(e, StateChanged) and e.current is State.DYNAMIC_CANDIDATE
+    ]
+    for rechazo, siguiente in zip(rechazos, entradas[1:], strict=False):
+        assert (
+            siguiente - rechazo.frame_index >= DYNAMIC_UMBRALES.motion_exhausted_frames
+        )
+
+
+def test_tras_un_demasiado_largo_la_espera_fija_deja_nacer_otro_trazo() -> None:
+    """La tercera salida de la cascada (v6): sin reposo y sin hueco, a los
+    `motion_exhausted_ms` del rechazo la mano puede volver a empezar un trazo."""
+    agitada = trazo(
+        (10.0, 0.0, DYNAMIC_UMBRALES.motion_max_frames + 2),
+        (
+            0.0,
+            10.0,
+            DYNAMIC_UMBRALES.motion_exhausted_frames
+            + 3 * DYNAMIC_UMBRALES.motion_min_frames,
+        ),
+    )
+
+    events = run_dynamic(agitada, PorOrigen())
+
+    entradas = [
+        e
+        for e in events
+        if isinstance(e, StateChanged) and e.current is State.DYNAMIC_CANDIDATE
+    ]
+    assert len(entradas) == 2
 
 
 def test_un_hueco_descarta_el_trazo_entero() -> None:
@@ -1075,3 +1117,35 @@ def test_los_umbrales_del_camino_dinamico_se_convierten_a_cuadros() -> None:
     assert umbrales.motion_min_frames == 10
     assert umbrales.motion_confirm_low_frames == 20  # 667 ms, v5 provisional
     assert umbrales.motion_max_frames == 120
+
+
+def test_el_cierre_mira_su_propia_ventana_y_el_resto_la_suya() -> None:
+    """v6 (§6.1.2): con `closing_window_ms` más larga que `velocity_window_ms`, el
+    cierre de un trazo que para en seco llega `closing - velocity` cuadros más
+    tarde; sin candidato, nada cambia."""
+    corta = Config.model_validate(
+        {
+            "segmentation": {
+                **DYNAMIC_CONFIG.segmentation.model_dump(),
+                "closing_window_ms": _ms(1),
+            }
+        }
+    )
+    larga = Config.model_validate(
+        {
+            "segmentation": {
+                **DYNAMIC_CONFIG.segmentation.model_dump(),
+                "velocity_window_ms": _ms(1),
+                "closing_window_ms": _ms(3),
+            }
+        }
+    )
+    frames = trazo((10.0, 0.0, 8))
+    flujo = [*frames, *quieta_tras(frames, 10)]
+
+    def cierre(config: Config) -> int:
+        eventos = list(run_segmentation(iter(flujo), config, PorOrigen(), fps=FPS))
+        (trazo_entregado,) = [e for e in eventos if isinstance(e, WindowDynamic)]
+        return trazo_entregado.frame_index
+
+    assert cierre(larga) - cierre(corta) == 2

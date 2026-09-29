@@ -187,6 +187,13 @@ class SegmentationConfig(_Section):
     #: demás umbrales en milisegundos, y no puede exceder `buffer_ms`.
     velocity_window_ms: float = Field(default=100.0, gt=0.0, le=2000.0)
 
+    #: Ventana de la velocidad **con la que se cierra un trazo**, en ms (§6.1.2,
+    #: v6): dentro de DYNAMIC_CANDIDATE, el reposo que cuenta para
+    #: `motion_confirm_low_ms` se mide contra el cuadro de hace esto. 150 y no
+    #: 100: con 100 ms la X quieta no pasa de 618 ms de reposo seguido y nunca
+    #: cierra; con 150, 1501 ms (ADR 0019). No puede exceder `buffer_ms`.
+    closing_window_ms: float = Field(default=150.0, gt=0.0, le=2000.0)
+
     #: Cuánta quietud continuada hace falta para pasar de TRACKING a STABLE, en
     #: milisegundos. Es además el **piso** de la ventana que se clasifica.
     stable_ms: float = Field(default=167.0, gt=0.0, le=60000.0)
@@ -263,6 +270,14 @@ class SegmentationConfig(_Section):
     #: vivo la K no se parte, se propone bajarlo hacia 400.
     motion_confirm_low_ms: float = Field(default=667.0, gt=0.0, le=60000.0)
 
+    #: Tras un `DYNAMIC_TOO_LONG`, cuánto tiempo pasa como mucho antes de que
+    #: pueda nacer otra racha, en ms (v6, ADR 0019). Sin esta salida solo lo
+    #: permitían el reposo confirmado —la misma condición que acababa de fallar—
+    #: o un cuadro sin mano; en la X y la Q eso bloqueaba los intentos
+    #: siguientes. **1000, PROVISIONAL**: los intentos de X y Q con lámpara
+    #: iban separados 2.5–3.5 s.
+    motion_exhausted_ms: float = Field(default=1000.0, gt=0.0, le=60000.0)
+
     #: Duración máxima de un candidato dinámico, en milisegundos, contada desde
     #: el primer frame del trazo. Por encima se descarta sin clasificar y se
     #: vuelve a TRACKING: nadie tarda eso en trazar una letra, y lo que sí dura
@@ -301,6 +316,13 @@ class SegmentationConfig(_Section):
 
     @model_validator(mode="after")
     def _coherencia_entre_umbrales(self) -> SegmentationConfig:
+        if self.closing_window_ms > self.buffer_ms:
+            msg = (
+                f"closing_window_ms ({self.closing_window_ms}) excede buffer_ms "
+                f"({self.buffer_ms}): el buffer no guarda el cuadro contra el que "
+                "se mide el cierre"
+            )
+            raise ValueError(msg)
         if self.velocity_window_ms > self.buffer_ms:
             msg = (
                 f"velocity_window_ms ({self.velocity_window_ms}) excede buffer_ms "

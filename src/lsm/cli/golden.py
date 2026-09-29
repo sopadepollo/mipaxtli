@@ -367,6 +367,22 @@ def sequence_cases() -> tuple[SequenceCase, ...]:
             ).frames,
         ),
         SequenceCase(
+            id="velocity_foreshortened_palm",
+            description=(
+                "La mano desplazándose con el nudillo del medio casi sobre la "
+                "muñeca: la palma de canto, como en la X."
+            ),
+            validates=(
+                "§6.1 (SEGMENTATION_SPEC_VERSION 6): la velocidad se divide entre "
+                "el tamaño de palma, no entre la escala del paso 4. Con la escala "
+                "del paso 4 las `velocities` de este caso salen ~5 veces mayores."
+            ),
+            stream=moving_sequence(
+                _with_middle_mcp_at(hand, 20.0),
+                tuple((6.0 * i, 0.0) for i in range(8)),
+            ).frames,
+        ),
+        SequenceCase(
             id="too_few_source_frames",
             description="Dos frames: por debajo de `dtw.min_source_frames`.",
             validates=(

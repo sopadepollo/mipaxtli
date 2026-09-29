@@ -739,3 +739,48 @@ def test_la_velocidad_se_mide_en_unidades_de_mano_y_no_en_pixeles() -> None:
     for a, b in zip(far.velocities, near.velocities, strict=True):
         assert a == pytest.approx(b, abs=TOL)
     assert far.velocities[0] > 0.0
+
+
+def _palma_de_canto(
+    points: tuple[tuple[float, float, float], ...],
+) -> tuple[tuple[float, float, float], ...]:
+    """El nudillo del medio casi sobre la muñeca: la palma girada de canto, como
+    en la X. Los demás nudillos no se mueven."""
+    mutated = list(points)
+    wrist = points[0]
+    mutated[9] = (wrist[0] + 15.0, wrist[1], points[9][2])
+    return tuple(mutated)
+
+
+def test_el_tamano_de_palma_nunca_es_menor_que_la_escala_del_paso_4() -> None:
+    """Incluye muñeca → nudillo 9, que es la escala del paso 4. En la mano
+    canónica es ese mismo segmento: por eso los golden previos no cambiaron."""
+    from lsm.features import palm_size, reference_scale, translate_to_origin
+
+    mano = canonical_hand()
+    de_canto = _palma_de_canto(mano)
+
+    assert palm_size(mano) == pytest.approx(reference_scale(translate_to_origin(mano)))
+    assert palm_size(de_canto) >= reference_scale(translate_to_origin(de_canto))
+    # Con el nudillo 9 sobre la muñeca manda otro segmento (muñeca → nudillo
+    # del índice): el tamaño cambia unos puntos porcentuales, no se colapsa.
+    assert palm_size(de_canto) == pytest.approx(palm_size(mano), rel=0.05)
+
+
+def test_la_velocidad_no_se_dispara_con_la_palma_de_canto() -> None:
+    """El mismo desplazamiento en píxeles da casi la misma velocidad aunque el
+    nudillo del medio quede sobre la muñeca (SEGMENTATION_SPEC_VERSION 6, ADR
+    0019). Con la escala del paso 4 como divisor salía ~6 veces mayor."""
+    offsets = ((0.0, 0.0), (20.0, 0.0), (40.0, 0.0))
+    normal = extract_sequence_features(
+        moving_sequence(canonical_hand(), offsets), CONFIG
+    )
+    de_canto = extract_sequence_features(
+        moving_sequence(_palma_de_canto(canonical_hand()), offsets), CONFIG
+    )
+    assert isinstance(normal, SequenceFeatures)
+    assert isinstance(de_canto, SequenceFeatures)
+
+    for a, b in zip(normal.velocities, de_canto.velocities, strict=True):
+        assert a == pytest.approx(b, rel=0.05)
+    assert normal.velocities[0] > 0.0

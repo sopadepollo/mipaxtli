@@ -311,6 +311,8 @@ def escribir_diagnostico(
             config.segmentation.velocity_threshold_per_s
         ),
         "segmentation.velocity_window_ms": config.segmentation.velocity_window_ms,
+        "segmentation.closing_window_ms": config.segmentation.closing_window_ms,
+        "segmentation.motion_exhausted_ms": config.segmentation.motion_exhausted_ms,
         "segmentation.motion_min_ms": config.segmentation.motion_min_ms,
         "segmentation.motion_confirm_low_ms": config.segmentation.motion_confirm_low_ms,
         "capture.camera_fps (pedidos)": config.capture.camera_fps,

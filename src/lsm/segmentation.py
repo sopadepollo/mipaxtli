@@ -156,7 +156,13 @@ from lsm.types import FrameSlot, Prediction, RawFrame, Sequence, WindowOrigin
 #: cuadros que los separan. El temblor de MediaPipe es por cuadro: entre pares
 #: consecutivos, por segundo, crecía con la tasa. `velocity_threshold_per_s`
 #: pasa a 0.55, fijado con la prueba de reposo.
-SEGMENTATION_SPEC_VERSION: Final = 5
+#:
+#: **v6** (ADR 0019): la velocidad del §6.1 se divide entre el **tamaño de
+#: palma**, no entre la escala del paso 4, que se colapsa con la palma de canto.
+#: El cierre de DYNAMIC_CANDIDATE se mide con su propia ventana
+#: (`closing_window_ms`, 150 ms), y tras un `DYNAMIC_TOO_LONG` puede nacer otra
+#: racha a los `motion_exhausted_ms` aunque la mano no haya reposado.
+SEGMENTATION_SPEC_VERSION: Final = 6
 
 
 def window_velocity(
@@ -235,6 +241,10 @@ class FrameThresholds:
     #: Cuántos cuadros atrás está el cuadro contra el que se mide la velocidad
     #: (v5, `velocity_window_ms`).
     velocity_window_frames: int
+    #: La ventana del cierre del trazo (v6, `closing_window_ms`).
+    closing_window_frames: int
+    #: La espera máxima tras un `DYNAMIC_TOO_LONG` (v6, `motion_exhausted_ms`).
+    motion_exhausted_frames: int
 
     @classmethod
     def from_config(cls, config: Config, fps: float) -> FrameThresholds:
@@ -257,6 +267,8 @@ class FrameThresholds:
             velocity_threshold=settings.velocity_threshold_per_s / fps,
             motion_threshold=settings.motion_threshold_per_s / fps,
             velocity_window_frames=frames_from_ms(settings.velocity_window_ms, fps),
+            closing_window_frames=frames_from_ms(settings.closing_window_ms, fps),
+            motion_exhausted_frames=frames_from_ms(settings.motion_exhausted_ms, fps),
         )
 
 
@@ -498,6 +510,9 @@ def run_segmentation(
     #: mano repose: sin esto, alguien gesticulando entraría y saldría de
     #: DYNAMIC_CANDIDATE una y otra vez.
     exhausted = False
+    #: Cuadro en que se puso `exhausted`: a los `motion_exhausted_frames` se
+    #: quita solo (v6), sin esperar el reposo que acababa de faltar.
+    exhausted_at = 0
     #: Tras emitir una dinámica, su pose final no es una letra nueva: la J acaba
     #: en la mano de la I, la LL en la de la L. Mientras la mano no se mueva, el
     #: camino estático no promueve a STABLE. Se libera como `pending_repeat`.
@@ -584,6 +599,20 @@ def run_segmentation(
         if moving:
             pending_repeat = ""
             dynamic_lock = False
+        if (
+            state is State.DYNAMIC_CANDIDATE
+            and velocity is not None
+            and thresholds.closing_window_frames != thresholds.velocity_window_frames
+        ):
+            # El cierre del trazo (§6.1.2, v6): dentro del candidato, el reposo
+            # que lo cierra se mide con su propia ventana. Solo cambia `motion`:
+            # `moving`, y con él `still_run` y STABLE, siguen con `velocity`.
+            cierre = window_velocity(buffer, thresholds.closing_window_frames, config)
+            motion = cierre is not None and cierre >= thresholds.motion_threshold
+        if exhausted and index - exhausted_at >= thresholds.motion_exhausted_frames:
+            # Tercera salida de la cascada (v6): una espera fija que no depende
+            # del reposo que acaba de faltar ni de que la mano se vaya.
+            exhausted = False
 
         # La racha de movimiento también avanza en todos los estados salvo IDLE:
         # un trazo que empieza durante el cooldown de la letra anterior sigue
@@ -649,6 +678,7 @@ def run_segmentation(
                 state = State.TRACKING
                 stroke.reset()
                 exhausted = low_run < thresholds.motion_confirm_low_frames
+                exhausted_at = index
                 continue
 
             if low_run < thresholds.motion_confirm_low_frames:

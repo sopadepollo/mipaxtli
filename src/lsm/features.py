@@ -187,6 +187,36 @@ def reference_scale(points: Points3) -> float:
     return math.sqrt(x * x + y * y)
 
 
+#: Los segmentos del tamaño de palma (`feature-spec.md` §6.1, v6): muñeca →
+#: los cuatro nudillos, y nudillo del índice → nudillo del meñique.
+PALM_SEGMENTS: Final[tuple[tuple[int, int], ...]] = (
+    (LandmarkIndex.WRIST, LandmarkIndex.INDEX_MCP),
+    (LandmarkIndex.WRIST, LandmarkIndex.MIDDLE_MCP),
+    (LandmarkIndex.WRIST, LandmarkIndex.RING_MCP),
+    (LandmarkIndex.WRIST, LandmarkIndex.PINKY_MCP),
+    (LandmarkIndex.INDEX_MCP, LandmarkIndex.PINKY_MCP),
+)
+
+
+def palm_size(points: Points3) -> float:
+    """Tamaño de palma: la mayor distancia 2D entre los `PALM_SEGMENTS`.
+
+    El divisor de la velocidad del §6.1 desde `SEGMENTATION_SPEC_VERSION` 6. La
+    escala del paso 4 —muñeca → nudillo 9— se colapsa cuando ese segmento apunta
+    a la cámara (en la X queda en 0.17 del tamaño real, ADR 0019); la palma es
+    aproximadamente plana y muñeca → nudillo 9 y nudillo 5 → nudillo 17 son casi
+    perpendiculares, así que al girarla no pueden encogerse los dos a la vez.
+    Como incluye muñeca → nudillo 9, nunca es menor que la escala del paso 4.
+
+    Invariante a traslaciones: sirve igual sobre los puntos del paso 2 o del 3.
+    Los segmentos se recorren en el orden de `PALM_SEGMENTS`.
+    """
+    return max(
+        math.hypot(points[a][0] - points[b][0], points[a][1] - points[b][1])
+        for a, b in PALM_SEGMENTS
+    )
+
+
 def apply_scale(points: Points3, scale: float) -> Points3:
     """Paso 4 (división). Tras esto, ‖p_9‖₂ = 1 en el plano XY."""
     return tuple((x / scale, y / scale, z / scale) for x, y, z in points)
@@ -252,6 +282,8 @@ class _FrameGeometry:
     scale: float
     #: Puntos tras el paso 2, sin trasladar ni escalar. Base de la velocidad.
     canonical: Points3
+    #: Tamaño de palma de esos puntos: el divisor de la velocidad (§6.1, v6).
+    palm: float
 
 
 def _frame_geometry(frame: RawFrame) -> _FrameGeometry | InvalidReason:
@@ -271,6 +303,7 @@ def _frame_geometry(frame: RawFrame) -> _FrameGeometry | InvalidReason:
         wrist=(wrist_x, wrist_y),
         scale=scale,
         canonical=step_2,
+        palm=palm_size(step_2),
     )
 
 
@@ -532,8 +565,10 @@ def _velocities(geometries: tuple[_FrameGeometry, ...]) -> tuple[float, ...]:
     el desplazamiento de la mano por el encuadre como el cambio de configuración de
     los dedos. Ver el §6 para la consecuencia de eso en las señas dinámicas.
 
-    La escala divisora es la **media del par**, `(s_{t-1} + s_t) / 2`, y no la `s̄`
-    de la ventana. La diferencia importa: con `s̄`, el mismo par de frames da
+    El divisor es el **tamaño de palma** (`palm_size`) desde la
+    `SEGMENTATION_SPEC_VERSION` 6, no la `s` del paso 4, que se colapsa con la
+    palma de canto (ADR 0019). Es la **media del par**, `(m_{t-1} + m_t) / 2`, y
+    no la media de la ventana. La diferencia importa: con `s̄`, el mismo par de frames da
     velocidades distintas según qué otros frames haya en el buffer en ese momento,
     así que una implementación incremental —que es la natural en TypeScript:
     guardar el frame anterior y calcular al llegar el siguiente— no coincidiría con
@@ -542,7 +577,7 @@ def _velocities(geometries: tuple[_FrameGeometry, ...]) -> tuple[float, ...]:
     """
     return tuple(
         mean_displacement(previous.canonical, current.canonical)
-        / ((previous.scale + current.scale) / 2.0)
+        / ((previous.palm + current.palm) / 2.0)
         for previous, current in pairwise(geometries)
     )
 

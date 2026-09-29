@@ -56,6 +56,7 @@ from lsm.features import (
     correct_aspect_and_orientation,
     extract_sequence_features,
     mean_displacement,
+    palm_size,
     reference_scale,
     smooth_sequence,
     translate_to_origin,
@@ -324,10 +325,11 @@ def velocity_between(
     """La velocidad del §6.1 entre dos frames cualesquiera, en unidades de mano.
 
     Con `landmarks=None` es exactamente la de `extract_sequence_features` sobre el
-    par: el mismo suavizado del §4, los pasos 1 y 2 y la escala del paso 4 de
-    cada frame. Con una lista de índices, el desplazamiento medio se toma solo
-    sobre esos puntos; la escala sigue siendo la de la mano entera, para que las
-    dos medidas estén en la misma unidad. `None` si la escala es degenerada.
+    par: el mismo suavizado del §4, los pasos 1 y 2, y el tamaño de palma de
+    cada frame como divisor (v6). Con una lista de índices, el desplazamiento
+    medio se toma solo sobre esos puntos; el divisor sigue siendo el de la mano
+    entera, para que las dos medidas estén en la misma unidad. `None` si la escala
+    del paso 4 es degenerada, como en la tubería.
     """
     suavizados = smooth_sequence(
         FrameSequence(frames=(before, after)), config.smoothing.alpha
@@ -337,10 +339,9 @@ def velocity_between(
         paso_2 = canonicalize_handedness(
             correct_aspect_and_orientation(f.points(), f.aspect_ratio), f.handedness
         )
-        escala = reference_scale(translate_to_origin(paso_2))
-        if escala < MIN_SCALE:
+        if reference_scale(translate_to_origin(paso_2)) < MIN_SCALE:
             return None
-        geometria.append((paso_2, escala))
+        geometria.append((paso_2, palm_size(paso_2)))
     (a, s_a), (b, s_b) = geometria
     if landmarks is not None:
         a = tuple(a[i] for i in landmarks)

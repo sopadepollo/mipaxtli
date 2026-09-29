@@ -167,6 +167,11 @@ segmentation:
   # pesa lo mismo a cualquier tasa. No puede exceder buffer_ms.
   velocity_window_ms: 100.0
 
+  # (v6) La ventana de la velocidad con la que se CIERRA un trazo: dentro de
+  # DYNAMIC_CANDIDATE, el reposo de motion_confirm_low_ms se mide contra el
+  # cuadro de hace esto. Con 100 ms la X quieta no cerraba nunca (ADR 0019).
+  closing_window_ms: 150.0
+
   # Cuánta quietud continuada hace falta para pasar de TRACKING a STABLE.
   # Subirlo reduce emisiones espurias durante el viaje de una letra a otra;
   # bajarlo hace el deletreo más ágil.
@@ -266,6 +271,10 @@ segmentation:
   # (v5) PROVISIONAL, 667 (era 400): ver motion_threshold_per_s. Si en vivo la
   # K no se parte, se propone bajarlo hacia 400.
   motion_confirm_low_ms: 667.0
+
+  # (v6) Tras un trazo DYNAMIC_TOO_LONG, a lo sumo este tiempo antes de que pueda
+  # nacer otro, aunque la mano no haya reposado. PROVISIONAL (ADR 0019).
+  motion_exhausted_ms: 1000.0
 
   # Candidato que dura más que esto se descarta sin clasificar. Las muestras
   # grabadas duran 3 s de trazo continuo (tope de captura), así que el límite

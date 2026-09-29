@@ -1,6 +1,9 @@
 # ADR 0019 — El cierre del trazo en X y Q, y la cascada tras un «demasiado largo»
 
-- **Estado:** **propuesta**, sin implementar.
+- **Estado:** **implementada** el 2026-09-28 (SEGMENTATION_SPEC_VERSION 6), con
+  dos cambios respecto de la propuesta: la escala de palma en **toda** la
+  velocidad, y `motion_exhausted_ms` = 1000 provisional. Ver «Lo que se
+  implementó».
 - **Fecha:** 2026-09-28
 - **Datos:** `data/diagnostico/2026-09-28-193646-habitual/` (prueba de reposo
   ampliada: estática, K, X y Q, 10 s cada una, 28–29 fps, commit `017ad4c`) y
@@ -172,7 +175,60 @@ pasar `segmentation.motion_exhausted_ms` desde el rechazo, lo que ocurra antes.
   trazo. Ese hueco no debe limpiar `exhausted`: la vía 2 quedaría solo para los
   huecos que no se cosen. Se decide con el Bloque 2.
 
-## Verificación al implementar
+## Lo que se implementó
+
+Decidido el 2026-09-28, sobre la propuesta:
+
+1. **La escala de palma en toda la velocidad**, no solo en el cierre (decisión
+   abierta 1). Una sola definición del §6.1 es más fácil de replicar en
+   TypeScript, y evita que la X y la Q quietas arranquen rachas con una
+   velocidad inflada. Es el divisor de `v_t` (`features.palm_size`), así que lo
+   usan igual la máquina, el aviso de mano (`hand_check.py`) y el diagnóstico.
+2. **La ventana de 150 ms solo para el cierre**; el resto sigue con 100 ms.
+3. **`motion_exhausted_ms` = 1000**, provisional.
+
+### Por qué 150 ms solo en el cierre
+
+La prueba de reposo pasada por la máquina de estados (cada postura quieta, a su
+tasa medida) y el replay de Fase 5 (sección 4 de `lsm-eval-dinamico`, LOSO):
+
+| | v5 | **v6: palma, 100 ms, cierre 150** | v6: palma, 150 ms en todo |
+|---|---|---|---|
+| reposo X: entradas a candidato / trazos entregados / demasiado largos | 1 / 0 / 1, y bloqueada después | 3 / 1 / 1 | 2 / 0 / 1 |
+| reposo Q | 1 / 0 / 1 | 1 / 1 / 0 | 0 / 0 / 0 |
+| reposo estática y K | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| replay: trazos enteros / partidos / perdidos | 620 / 2 / 0 | 611 / 11 / 0 | 610 / 9 / 3 |
+| replay: dinámicas acertadas | 253 | 248 | 239 |
+| replay: estáticas, 1.ª letra correcta | 0.927 | 0.927 | 0.927 |
+| replay: estáticas que entran a candidato | 128 | 124 | 127 |
+
+- 150 ms en todo quita los dos trazos espurios de la X y la Q quietas, pero
+  cuesta 9 dinámicas acertadas más y pierde 3 trazos del dataset. Con 100 ms
+  esos dos trazos llegan al clasificador dinámico, que los rechaza o emite; en
+  el replay de las estáticas, 1 de 2585 emitió algo por el camino dinámico.
+- **La v5 no tenía trazos espurios en reposo porque estaba bloqueada**: la X
+  entraba a candidato una vez, acababa en «demasiado largo» y no volvía a
+  admitir otra racha. Es la cascada.
+
+### Verificación
+
+- **Eval de Fase 2 idéntico**: accuracy 0.9261, macro 0.9201, UNKNOWN 0.0573.
+- **Las estáticas no cambian en el replay**: 1.ª letra correcta 0.9269 con
+  camino dinámico y 0.9273 sin él, igual que en la v5.
+- **Las dinámicas del replay pierden un poco**: 611 trazos enteros contra 620 y
+  248 aciertos contra 253. Por letra (enteros / partidos / acierto): Ñ 96 / 4 /
+  27, J 100 / 0 / 92, K 118 / 3 / 70, Q 100 / 0 / 11, X 99 / 2 / 2, Z 98 / 2 /
+  46. La escala de palma baja la velocidad de los trazos de X, Ñ y Q, donde
+  `s` era menor que la palma, y la ventana del cierre añade arrastre. Es el
+  mismo replay contra grabaciones a ~16 fps del ADR 0017: la referencia sigue
+  siendo el diagnóstico en vivo.
+- **Golden**: las `velocities` de los casos existentes no cambian, porque en la
+  mano sintética canónica muñeca → nudillo 9 es justamente el segmento más largo
+  y `m = s`. Por eso se añadió el caso `velocity_foreshortened_palm`, con el
+  nudillo 9 casi sobre la muñeca: sin él, una implementación en TypeScript con
+  el divisor viejo pasaría los golden.
+
+## Verificación al implementar (plan original)
 
 1. Tests sintéticos: una mano quieta con `s` colapsada cierra el trazo con `c_t` y
    no con `w_t`; un tramo lento hecho solo con los dedos sigue contando como

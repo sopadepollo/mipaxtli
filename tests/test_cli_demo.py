@@ -135,12 +135,17 @@ VIAJE = UMBRALES.buffer_size
 #: `velocity_window_frames` (§6.1): tras una parada en seco la mano sigue
 #: «moviéndose» `ARRASTRE` frames más, que también suman.
 ARRASTRE = UMBRALES.velocity_window_frames - 1
+#: Lo mismo para el cierre del trazo, que desde la v6 mira su propia ventana
+#: (`closing_window_ms`): dentro del candidato, tras una parada en seco, la mano
+#: sigue «moviéndose» `ARRASTRE_CIERRE` frames.
+ARRASTRE_CIERRE = UMBRALES.closing_window_frames - 1
 VIAJE_CORTO = UMBRALES.motion_min_frames - 2 - ARRASTRE
 
 #: Frames de mano quieta por letra, sumados término a término:
 #:
-#: - `motion_confirm_low_frames + 1 + ARRASTRE`: los primeros frames quietos
-#:   gastan todavía la velocidad del viaje —uno, más los de la ventana—; los
+#: - `motion_confirm_low_frames + 1 + ARRASTRE_CIERRE`: los primeros frames
+#:   quietos gastan todavía la velocidad del viaje —uno, más los de la ventana
+#:   del cierre, porque `VIAJE` es un candidato—; los
 #:   siguientes son la espera hasta la primera clasificación. Como `VIAJE` es un
 #:   candidato dinámico, esa espera es el reposo que lo cierra
 #:   —`motion_confirm_low_frames`— y no `stable_frames`: la letra sale en el
@@ -157,7 +162,7 @@ VIAJE_CORTO = UMBRALES.motion_min_frames - 2 - ARRASTRE
 #: esa propiedad, que es la mitad del criterio. Uno más largo solo acumula más
 #: rechazos por `REPEATED_LETTER`, ninguna emisión de más.
 QUIETO = (
-    (UMBRALES.motion_confirm_low_frames + 1 + ARRASTRE)
+    (UMBRALES.motion_confirm_low_frames + 1 + ARRASTRE_CIERRE)
     + UMBRALES.emit_cooldown_frames
     + UMBRALES.stable_frames
     + 1
@@ -459,7 +464,12 @@ def test_un_transito_largo_pasa_por_el_camino_dinamico_y_la_letra_sale_igual() -
     assert emitidas(stream) == ["S", "A"]
     assert RejectionReason.LOW_CONFIDENCE in rechazos(stream)
     emision_a = [e for e in stream if isinstance(e, LetterEmitted)][1]
-    assert len(emision_a.window) == UMBRALES.motion_confirm_low_frames + 1
+    # La ventana estática es la quietud contada desde que `w_t` dejó de ver
+    # movimiento; el candidato se cerró `ARRASTRE_CIERRE - ARRASTRE` frames más
+    # tarde, porque su cierre mira una ventana más larga (v6).
+    assert len(emision_a.window) == (
+        UMBRALES.motion_confirm_low_frames + 1 + ARRASTRE_CIERRE - ARRASTRE
+    )
 
 
 def test_la_letra_segura_sale_rapido_y_la_dudosa_espera() -> None:
