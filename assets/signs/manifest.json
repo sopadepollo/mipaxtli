@@ -109,7 +109,7 @@
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },
-      "trayectoria": "movimientos horizontales"
+      "trayectoria": "movimientos horizontales hacia la derecha"
     },
     "DOBLE_R": {
       "archivo": "DOBLE_R.gif",
@@ -131,7 +131,7 @@
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },
-      "trayectoria": "movimientos horizontales"
+      "trayectoria": "movimientos horizontales hacia la derecha"
     },
     "E": {
       "archivo": "E.png",
@@ -157,7 +157,7 @@
     },
     "ENIE": {
       "archivo": "ENIE.gif",
-      "descripcion": "Mano cerrada, se ponen los dedos índice y medio sobre el pulgar. Se mueve la muñeca a los lados",
+      "descripcion": "Puño con índice y medio sobre el pulgar (forma de N)",
       "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
@@ -175,7 +175,7 @@
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },
-      "trayectoria": "rotacion de ida y vuelta"
+      "trayectoria": "La muñeca gira a los lados, ida y vuelta, empezando hacia afuera (con la derecha, hacia tu derecha)"
     },
     "F": {
       "archivo": "F.png",
@@ -267,7 +267,7 @@
     },
     "J": {
       "archivo": "J.gif",
-      "descripcion": "Mano cerrada, el dedo meñique bien estirado señalando hacia arriba y la palma a un lado dibuja una j en el aire",
+      "descripcion": "Puño, meñique extendido hacia arriba, palma de lado",
       "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
@@ -285,11 +285,11 @@
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },
-      "trayectoria": "dibuja una j en el aire"
+      "trayectoria": "Con el meñique se traza una \"j\": primero hacia abajo, luego la curva"
     },
     "K": {
       "archivo": "K.gif",
-      "descripcion": "Se cierra la mano con los dedos índice, medio y pulgar estirados. La yema del pulgar se pone entre el índice y el medio. Se mueve la muñeca hacia arriba",
+      "descripcion": "Puño con índice, medio y pulgar extendidos; la yema del pulgar entre índice y medio",
       "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
@@ -307,7 +307,7 @@
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },
-      "trayectoria": "se mueve la muneca hacia arriba"
+      "trayectoria": "La muñeca se mueve hacia arriba"
     },
     "L": {
       "archivo": "L.png",
@@ -421,7 +421,7 @@
     },
     "Q": {
       "archivo": "Q.gif",
-      "descripcion": "Mano cerrada, se ponen los dedos índice y pulgar en posición de garra. La palma mira hacia abajo, y se mueve la muñeca hacia los lados",
+      "descripcion": "Índice y pulgar en gancho, palma hacia abajo",
       "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
@@ -439,7 +439,7 @@
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },
-      "trayectoria": "rotacion de ida y vuelta"
+      "trayectoria": "La muñeca gira a los lados, ida y vuelta, empezando hacia afuera"
     },
     "R": {
       "archivo": "R.png",
@@ -575,7 +575,7 @@
     },
     "X": {
       "archivo": "X.gif",
-      "descripcion": "Mano cerrada, el índice y el pulgar en posición de garra y la palma dirigida a un lado, se realiza un movimiento al frente y de regreso",
+      "descripcion": "Índice y pulgar en gancho, demás dedos en puño; mano de frente",
       "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
@@ -593,7 +593,7 @@
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },
-      "trayectoria": "movimiento al frente y de regreso"
+      "trayectoria": "Desplazamiento corto primero al frente (alejándose del cuerpo, hacia la cámara) y de regreso"
     },
     "Y": {
       "archivo": "Y.png",
@@ -619,7 +619,7 @@
     },
     "Z": {
       "archivo": "Z.gif",
-      "descripcion": "Mano cerrada, el dedo índice estirado y la palma al frente, se dibuja una letra z en el aire",
+      "descripcion": "Puño con índice extendido, palma al frente",
       "duracion_ms": 5000,
       "es_dinamica": true,
       "fuente": {
@@ -637,7 +637,7 @@
         "resultado": "coincide",
         "revisor": "Claude Opus 5 — revisión contra la descripción del glosario, no validación por persona usuaria de LSM"
       },
-      "trayectoria": "dibuja una letra z en el aire"
+      "trayectoria": "Se traza una \"z\" como si escribieras en un pizarrón frente a ti: arriba de izquierda a derecha, diagonal hacia abajo a la izquierda, abajo de izquierda a derecha"
     }
   },
   "schema_version": 1

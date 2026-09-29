@@ -217,11 +217,10 @@ _LETTERS: Final = (
         Label.J,
         "J",
         dinamica=True,
-        descripcion=(
-            "Mano cerrada, el dedo meñique bien estirado señalando hacia "
-            "arriba y la palma a un lado dibuja una j en el aire"
+        descripcion="Puño, meñique extendido hacia arriba, palma de lado",
+        trayectoria=(
+            'Con el meñique se traza una "j": primero hacia abajo, luego la curva'
         ),
-        trayectoria="dibuja una j en el aire",
         confundible=(Label.I, Label.Y),
         pagina=16,
     ),
@@ -230,11 +229,10 @@ _LETTERS: Final = (
         "K",
         dinamica=True,
         descripcion=(
-            "Se cierra la mano con los dedos índice, medio y pulgar "
-            "estirados. La yema del pulgar se pone entre el índice y el "
-            "medio. Se mueve la muñeca hacia arriba"
+            "Puño con índice, medio y pulgar extendidos; la yema del pulgar "
+            "entre índice y medio"
         ),
-        trayectoria="se mueve la muneca hacia arriba",
+        trayectoria="La muñeca se mueve hacia arriba",
         confundible=(Label.P,),
         pagina=16,
     ),
@@ -257,7 +255,7 @@ _LETTERS: Final = (
             "una letra l. La palma mira al frente y se hacen movimientos "
             "horizontales"
         ),
-        trayectoria="movimientos horizontales",
+        trayectoria="movimientos horizontales hacia la derecha",
         confundible=(Label.E, Label.A, Label.L),
         pagina=16,
     ),
@@ -284,11 +282,11 @@ _LETTERS: Final = (
         Label.ENIE,
         "Ñ",
         dinamica=True,
-        descripcion=(
-            "Mano cerrada, se ponen los dedos índice y medio sobre el "
-            "pulgar. Se mueve la muñeca a los lados"
+        descripcion="Puño con índice y medio sobre el pulgar (forma de N)",
+        trayectoria=(
+            "La muñeca gira a los lados, ida y vuelta, empezando hacia afuera "
+            "(con la derecha, hacia tu derecha)"
         ),
-        trayectoria="rotacion de ida y vuelta",
         confundible=(Label.N, Label.Q, Label.X),
         pagina=17,
     ),
@@ -315,12 +313,8 @@ _LETTERS: Final = (
         Label.Q,
         "Q",
         dinamica=True,
-        descripcion=(
-            "Mano cerrada, se ponen los dedos índice y pulgar en posición "
-            "de garra. La palma mira hacia abajo, y se mueve la muñeca "
-            "hacia los lados"
-        ),
-        trayectoria="rotacion de ida y vuelta",
+        descripcion="Índice y pulgar en gancho, palma hacia abajo",
+        trayectoria="La muñeca gira a los lados, ida y vuelta, empezando hacia afuera",
         confundible=(Label.ENIE, Label.X),
         pagina=17,
     ),
@@ -342,7 +336,7 @@ _LETTERS: Final = (
             "Mano cerrada, se alargan y entrelazan los dedos índice y "
             "medio. La palma mira al frente y hace movimientos horizontales"
         ),
-        trayectoria="movimientos horizontales",
+        trayectoria="movimientos horizontales hacia la derecha",
         confundible=(Label.U, Label.D, Label.R),
         pagina=18,
     ),
@@ -400,12 +394,11 @@ _LETTERS: Final = (
         Label.X,
         "X",
         dinamica=True,
-        descripcion=(
-            "Mano cerrada, el índice y el pulgar en posición de garra y la "
-            "palma dirigida a un lado, se realiza un movimiento al frente y "
-            "de regreso"
+        descripcion="Índice y pulgar en gancho, demás dedos en puño; mano de frente",
+        trayectoria=(
+            "Desplazamiento corto primero al frente (alejándose del cuerpo, "
+            "hacia la cámara) y de regreso"
         ),
-        trayectoria="movimiento al frente y de regreso",
         confundible=(Label.Q, Label.ENIE),
         pagina=19,
     ),
@@ -422,11 +415,12 @@ _LETTERS: Final = (
         Label.Z,
         "Z",
         dinamica=True,
-        descripcion=(
-            "Mano cerrada, el dedo índice estirado y la palma al frente, se "
-            "dibuja una letra z en el aire"
+        descripcion="Puño con índice extendido, palma al frente",
+        trayectoria=(
+            'Se traza una "z" como si escribieras en un pizarrón frente a ti: '
+            "arriba de izquierda a derecha, diagonal hacia abajo a la "
+            "izquierda, abajo de izquierda a derecha"
         ),
-        trayectoria="dibuja una letra z en el aire",
         pagina=19,
     ),
 )
