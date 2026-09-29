@@ -184,6 +184,14 @@ mitad de las muestras.
 En el preview: **ESPACIO** guarda, `n`/`p` cambian de letra, `m` alterna entre
 estática y dinámica, `r` descarta la grabación en curso, `q` sale.
 
+**Una dinámica no se cierra con la tecla** (Bloque 4, ADR 0023). ESPACIO la
+**arma**; desde ahí haz la letra y **detén la mano al terminar**. La delimita la
+misma máquina de estados que usa la demo: la muestra empieza donde empieza el
+trazo que la máquina entregaría y termina cuando lo entrega, con el reposo que lo
+cerró incluido. Si en `capture.dynamic_max_ms` (6 s) la máquina no entrega un
+trazo cerrado, no se guarda nada y el preview dice por qué («no se cerro el
+trazo: deten la mano al terminar», o «trazo demasiado largo»). `r` cancela.
+
 La barra de calidad dice si la ventana serviría *ahora mismo*, y mide cosas
 opuestas según el modo:
 
@@ -219,6 +227,23 @@ No necesita cámara. Relee `data/raw`, re-deriva las features de cada muestra y
 comprueba que coinciden con las que se anotaron al grabar. Es la garantía de que
 guardar landmarks crudos sirve para algo: si cambia la normalización, el dataset
 se re-deriva con un comando en vez de volver a citar a tres personas.
+
+La σ solo se compara en las muestras que la anotaron con la versión actual del
+contrato de features (esquema v4, `feature_spec_version`): las anteriores se
+revisan en todo lo demás —huecos, extracción— y se cuentan aparte.
+
+**Dinámicas truncadas** (Bloque 4). Las dinámicas grabadas antes del Bloque 4
+se cortaban en un tope de cuadros y muchas acaban con el trazo en marcha. Para
+dejarlas fuera del entrenamiento y la evaluación sin borrarlas:
+
+```bash
+uv run lsm-capture marcar-truncadas
+```
+
+Escribe `data/raw/truncadas.json` con las que acaban en movimiento y por qué;
+`lsm-train`, `lsm-eval` y `lsm-eval-dinamico` las excluyen al cargar. Borrar el
+archivo las devuelve. Conviene marcarlas **después** de grabar las dinámicas
+nuevas: con las 822 de hoy quedarían entre 20 y 38 por letra.
 
 ---
 

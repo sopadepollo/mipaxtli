@@ -41,6 +41,7 @@ from lsm.types import (
     InvalidFrame,
     InvalidReason,
     Landmark,
+    RawFrame,
     SampleKind,
     Sequence,
 )
@@ -362,18 +363,18 @@ def test_la_sigma_no_decide_en_las_dinamicas() -> None:
 
 
 def test_una_grabacion_dinamica_pasada_de_frames_se_rechaza() -> None:
-    """El tope existe porque una grabación dinámica se cierra a mano y olvidarse
-    es fácil. Una estática no lo tiene: sale del buffer circular y mide lo que
-    mide."""
+    """El tope de una dinámica es `dynamic_max_ms` a la tasa nominal (Bloque 4).
+    Una estática no lo tiene: sale del buffer circular y mide lo que mide."""
+    from lsm.segmentation import frames_from_ms
+
     config = Config()
-    frames = dinamica_realista(config.capture.dynamic_max_frames + 1)
+    tope = frames_from_ms(config.capture.dynamic_max_ms, config.capture.camera_fps)
+    frames = dinamica_realista(tope + 1)
 
     quality = evaluate_window(frames, SampleKind.DYNAMIC, config)
 
     assert quality.rejection is Rejection.TOO_MANY_FRAMES
-    assert maximum_frames(SampleKind.DYNAMIC, config) == (
-        config.capture.dynamic_max_frames
-    )
+    assert maximum_frames(SampleKind.DYNAMIC, config) == tope
     assert maximum_frames(SampleKind.STATIC, config) is None
 
 
@@ -514,3 +515,80 @@ def test_un_landmark_fuera_del_encuadre_no_se_recorta() -> None:
     x, y = preview_position(fuera, 1000, 500, mirrored=False)
 
     assert (x, y) == (1400, -100)
+
+
+# --------------------------------------------------------------------------- #
+# Bloque 4: la dinámica la delimita la máquina de estados
+# --------------------------------------------------------------------------- #
+
+
+def _trazo_y_reposo(movimiento: int, reposo: int) -> list[RawFrame]:
+    """Una mano quieta, que se mueve `movimiento` cuadros y se detiene."""
+    from lsm.synthetic import canonical_hand, to_frame, translated
+
+    base = canonical_hand()
+    quieta_antes = [
+        to_frame(translated(base, 400.0, 400.0), width=1280, height=720)
+    ] * 10
+    trazo = [
+        to_frame(translated(base, 400.0 + 12.0 * i, 400.0), width=1280, height=720)
+        for i in range(1, movimiento + 1)
+    ]
+    quieta = [trazo[-1]] * reposo
+    return [*quieta_antes, *trazo, *quieta]
+
+
+def test_la_muestra_dinamica_es_el_trazo_de_la_maquina_mas_su_reposo() -> None:
+    from lsm.capture import DelimitedStroke, delimit_dynamic_stroke
+    from lsm.segmentation import FrameThresholds
+
+    config = Config()
+    fps = float(config.capture.camera_fps)
+    umbrales = FrameThresholds.from_config(config, fps)
+    flujo = _trazo_y_reposo(
+        movimiento=20, reposo=umbrales.motion_confirm_low_frames + 10
+    )
+
+    trazo = delimit_dynamic_stroke(iter(flujo), config, fps)
+
+    assert isinstance(trazo, DelimitedStroke)
+    # Empieza en el frame de partida del movimiento (el último quieto, índice 9)
+    # y se entrega tras el reposo que lo cierra.
+    assert trazo.start == 9
+    assert trazo.end > trazo.start + trazo.stroke_frames
+    assert trazo.stroke_frames >= 20
+
+
+def test_si_la_mano_no_se_detiene_la_dinamica_no_se_guarda() -> None:
+    """Se acaba el flujo —el tope de tiempo— con el trazo en marcha: nunca más
+    un trazo truncado (Bloque 4)."""
+    from lsm.capture import delimit_dynamic_stroke
+
+    config = Config()
+    flujo = _trazo_y_reposo(movimiento=30, reposo=0)
+
+    assert (
+        delimit_dynamic_stroke(iter(flujo), config, 30.0) is Rejection.STROKE_NOT_CLOSED
+    )
+
+
+def test_un_trazo_que_no_termina_nunca_se_rechaza_por_largo() -> None:
+    from lsm.capture import delimit_dynamic_stroke
+    from lsm.segmentation import FrameThresholds
+
+    config = Config()
+    umbrales = FrameThresholds.from_config(config, 30.0)
+    flujo = _trazo_y_reposo(movimiento=umbrales.motion_max_frames + 20, reposo=0)
+
+    assert (
+        delimit_dynamic_stroke(iter(flujo), config, 30.0) is Rejection.STROKE_TOO_LONG
+    )
+
+
+def test_una_dinamica_que_acaba_en_movimiento_es_truncada() -> None:
+    from lsm.capture import is_truncated
+
+    config = Config()
+
+    assert is_truncated(tuple(_trazo_y_reposo(movimiento=20, reposo=0)), config)
+    assert not is_truncated(tuple(_trazo_y_reposo(movimiento=20, reposo=20)), config)

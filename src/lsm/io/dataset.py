@@ -55,10 +55,23 @@ from lsm.types import (
 #: dataset de la Fase 1—, con `handedness_source = DETECTED`: ahí `handedness`
 #: es la etiqueta de MediaPipe, que la captura exigía constante en toda la
 #: muestra.
-SAMPLE_SCHEMA_VERSION: Final = 3
+#:
+#: **v4** (Bloque 4, ADR 0023): `stroke_frames`. Una dinámica grabada desde el
+#: Bloque 4 guarda el trazo que entregó la máquina de estados **y el reposo que
+#: lo cerró**; `stroke_frames` dice cuántos frames del principio son el trazo, que
+#: es lo que se entrena. `null` en las estáticas y en las dinámicas anteriores.
+SAMPLE_SCHEMA_VERSION: Final = 4
 
 #: Versiones que se leen. Solo la actual se escribe.
-READABLE_SAMPLE_SCHEMAS: Final = frozenset({2, 3})
+READABLE_SAMPLE_SCHEMAS: Final = frozenset({2, 3, 4})
+
+#: Manifiesto de las dinámicas grabadas antes del Bloque 4 que terminan con la
+#: mano todavía en movimiento (`lsm-capture marcar-truncadas`). Vive en la raíz
+#: del dataset, fuera de `<firmante>/<sesion>/<letra>/`, así que no es una
+#: muestra. Las listadas no se borran: se excluyen del entrenamiento y la
+#: evaluación al cargar el corpus.
+TRUNCATED_MANIFEST: Final = "truncadas.json"
+TRUNCATED_MANIFEST_VERSION: Final = 1
 
 
 class HandSource(StrEnum):
@@ -156,6 +169,13 @@ class SampleMetadata:
     #: Nombre del archivo de video junto a la muestra, o `None`. Solo se rellena
     #: con consentimiento explícito por escrito (`ARQUITECTURA.md` §4.11).
     video: str | None = None
+    #: Esquema v4 (Bloque 4): frames del principio del flujo que son el trazo,
+    #: sin el reposo que lo cerró. Solo en dinámicas grabadas desde el Bloque 4.
+    stroke_frames: int | None = None
+    #: Esquema v4: con qué `FEATURE_SPEC_VERSION` se calcularon `dispersion` y
+    #: `arc_length`. `None` en las muestras anteriores, que no lo anotaban: su σ
+    #: no se puede comparar con la de otra versión del contrato.
+    feature_spec_version: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,12 +206,19 @@ class StoredSample:
         `gaps`. Sin política, o en una estática, cualquier hueco sigue siendo un
         error.
         """
-        runs = split_valid_runs(self.frames)
+        # Bloque 4: lo que se entrena de una dinámica es el trazo, sin el reposo
+        # que lo cerró; el reposo queda en el archivo para reproducirla.
+        flujo = (
+            self.frames[: self.metadata.stroke_frames]
+            if self.metadata.stroke_frames is not None
+            else self.frames
+        )
+        runs = split_valid_runs(flujo)
         interpolados = 0
-        if len(runs) == 1 and len(runs[0]) == len(self.frames):
+        if len(runs) == 1 and len(runs[0]) == len(flujo):
             secuencia = runs[0]
         elif gaps is not None and self.metadata.kind is SampleKind.DYNAMIC:
-            reconstruida = fill_gaps(self.frames, gaps)
+            reconstruida = fill_gaps(flujo, gaps)
             if isinstance(reconstruida, GapRejected):
                 msg = (
                     f"la muestra dinámica {self.metadata.label} de "
@@ -205,7 +232,7 @@ class StoredSample:
         else:
             msg = (
                 f"la muestra {self.metadata.label} de {self.metadata.signer_id} "
-                f"tiene huecos: {len(self.frames)} frames en {len(runs)} secuencias "
+                f"tiene huecos: {len(flujo)} frames en {len(runs)} secuencias "
                 "válidas. Una muestra interrumpida no se puede coser ni recortar "
                 "sin mentir; hay que regrabarla."
             )
@@ -324,6 +351,8 @@ def write_sample(root: Path, sample: StoredSample, index: int | None = None) -> 
         "handedness_convention": str(meta.handedness_convention),
         "handedness_source": str(meta.handedness_source),
         "video": meta.video,
+        "stroke_frames": meta.stroke_frames,
+        "feature_spec_version": meta.feature_spec_version,
         "frames": frames_to_json(sample.frames),
     }
 
@@ -374,6 +403,10 @@ def read_sample(path: Path) -> StoredSample:
             else HandSource.DETECTED
         ),
         video=payload.get("video"),
+        stroke_frames=payload.get("stroke_frames") if version >= 4 else None,
+        feature_spec_version=(
+            payload.get("feature_spec_version") if version >= 4 else None
+        ),
     )
     return StoredSample(metadata=metadata, frames=frames_from_json(payload["frames"]))
 
@@ -533,3 +566,48 @@ def now() -> datetime:
     hace al depurar por qué una tanda salió peor que otra.
     """
     return datetime.now(UTC).astimezone()
+
+
+# --------------------------------------------------------------------------- #
+# Manifiesto de dinámicas truncadas (Bloque 4)
+# --------------------------------------------------------------------------- #
+
+
+def write_truncated_manifest(
+    root: Path, entries: dict[str, float], criterion: dict[str, Any]
+) -> Path:
+    """Escribe el manifiesto: ruta relativa → velocidad final medida.
+
+    Se reescribe entero cada vez: el criterio es determinista sobre los mismos
+    archivos, así que volver a marcar da lo mismo.
+    """
+    destino = root / TRUNCATED_MANIFEST
+    payload = {
+        "schema_version": TRUNCATED_MANIFEST_VERSION,
+        "criterion": criterion,
+        "samples": [
+            {"path": ruta, "final_velocity_per_s": velocidad}
+            for ruta, velocidad in sorted(entries.items())
+        ],
+    }
+    temporal = destino.with_suffix(".json.tmp")
+    temporal.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    temporal.replace(destino)
+    return destino
+
+
+def read_truncated_manifest(root: Path) -> frozenset[str]:
+    """Las rutas relativas marcadas como truncadas, o ninguna si no hay manifiesto."""
+    ruta = root / TRUNCATED_MANIFEST
+    if not ruta.exists():
+        return frozenset()
+    payload: Any = json.loads(ruta.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != TRUNCATED_MANIFEST_VERSION:
+        msg = (
+            f"{ruta}: schema_version {payload.get('schema_version')} incompatible; "
+            f"este código lee la {TRUNCATED_MANIFEST_VERSION}"
+        )
+        raise DatasetError(msg)
+    return frozenset(entrada["path"] for entrada in payload["samples"])

@@ -28,19 +28,30 @@ from lsm.config import Config
 from lsm.features import (
     ExtractionRejected,
     extract_sequence_features,
+    pair_velocity,
     reference_scales,
     scale_to_pixels,
     split_valid_runs,
 )
 from lsm.gaps import GapPolicy, GapRejected, fill_gaps
+from lsm.segmentation import (
+    RejectionReason,
+    WindowDynamic,
+    WindowRejected,
+    frames_from_ms,
+    run_segmentation,
+)
 from lsm.types import (
     FrameSlot,
     FrameStream,
     Handedness,
     Landmark,
+    Prediction,
+    RawFrame,
     SampleKind,
     Sequence,
     TrajectoryChannel,
+    WindowOrigin,
 )
 
 #: Versión del criterio de aceptación de una muestra.
@@ -75,6 +86,11 @@ class Rejection(StrEnum):
     #: La trayectoria no recorrió lo suficiente. Solo aplica a dinámicas: es el
     #: espejo de `UNSTABLE`, y rechaza a la que **no** se movió.
     TRAJECTORY_TOO_SHORT = "TRAJECTORY_TOO_SHORT"
+    #: Se alcanzó `capture.dynamic_max_ms` sin que la máquina de estados
+    #: entregara el trazo cerrado (Bloque 4): la mano no se detuvo al terminar.
+    STROKE_NOT_CLOSED = "STROKE_NOT_CLOSED"
+    #: La máquina descartó el trazo por pasar de `motion_max_ms` (Bloque 4).
+    STROKE_TOO_LONG = "STROKE_TOO_LONG"
 
 
 #: Qué hacer ante cada rechazo, en palabras de quien está frente a la cámara.
@@ -93,6 +109,8 @@ _INSTRUCCIONES: Final[dict[Rejection, str]] = {
     Rejection.DEGENERATE_SCALE: "mano degenerada: alejala un poco de la camara",
     Rejection.TOO_MANY_FRAMES: "grabacion demasiado larga: repite el trazo mas corto",
     Rejection.TRAJECTORY_TOO_SHORT: "falta recorrido: marca el trazo de la letra",
+    Rejection.STROKE_NOT_CLOSED: "no se cerro el trazo: deten la mano al terminar",
+    Rejection.STROKE_TOO_LONG: "trazo demasiado largo: hazlo de una vez y detente",
 }
 
 
@@ -226,15 +244,15 @@ def minimum_frames(kind: SampleKind, config: Config) -> int:
 
 
 def maximum_frames(kind: SampleKind, config: Config) -> int | None:
-    """Tope de frames del modo, o `None` si no lo hay.
+    """Tope de frames de una muestra, o `None` si el modo no tiene.
 
-    Una estática no tiene tope: se guarda la cola del buffer circular, que por
-    construcción mide `static_frames`. Una dinámica sí, porque la graba una
-    persona pulsando una tecla y olvidarse de cerrarla es lo más fácil del mundo.
+    Una estática no lo necesita: su ventana tiene el tamaño que por construcción
+    mide `static_frames`. Una dinámica sí: desde el Bloque 4 es el tope de tiempo
+    de la grabación, `dynamic_max_ms`, a la tasa nominal.
     """
     if kind is SampleKind.STATIC:
         return None
-    return config.capture.dynamic_max_frames
+    return frames_from_ms(config.capture.dynamic_max_ms, config.capture.camera_fps)
 
 
 def evaluate_window(
@@ -398,3 +416,86 @@ def preview_position(
     """
     x = 1.0 - landmark.x if mirrored else landmark.x
     return (round(x * width), round(landmark.y * height))
+
+
+# --------------------------------------------------------------------------- #
+# Bloque 4 — la muestra dinámica la delimita la máquina de estados
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class DelimitedStroke:
+    """Dónde está, en el flujo, el trazo que entregó la máquina de estados.
+
+    `start` es el primer frame del trazo y `end` el frame en que la máquina lo
+    entregó (DYNAMIC_EMIT), los dos incluidos. Entre `start + stroke_frames` y
+    `end` está el reposo que lo cerró: se guarda con la muestra para que
+    reproducirla cierre el trazo sola, sin fabricar ningún reposo (Bloque 4).
+    """
+
+    start: int
+    end: int
+    #: Frames del trazo propiamente dicho: lo que recibe el clasificador.
+    stroke_frames: int
+
+
+def _ningun_clasificador(_window: Sequence, _origin: WindowOrigin) -> Prediction:
+    """La captura no reconoce letras: solo quiere saber dónde está el trazo."""
+    return Prediction.unknown()
+
+
+def delimit_dynamic_stroke(
+    stream: Iterable[FrameSlot], config: Config, fps: float
+) -> DelimitedStroke | Rejection:
+    """El primer trazo que la máquina de estados entregaría en este flujo.
+
+    Es **la misma** máquina que usa la demo (`run_segmentation`), con la misma
+    tasa, así que el trazo guardado es exactamente el segmento que el
+    clasificador va a recibir en vivo (Bloque 4). Consume `stream` perezosamente
+    y se detiene en cuanto hay trazo: en vivo, `stream` es la cámara, y termina
+    cuando se acaba el tiempo de la grabación.
+
+    - un trazo entregado → `DelimitedStroke`;
+    - la máquina lo descartó por largo → `STROKE_TOO_LONG`;
+    - `stream` se acabó sin trazo → `STROKE_NOT_CLOSED`.
+
+    Un candidato interrumpido por un hueco largo no rechaza: la grabación sigue
+    y quien firma puede volver a hacer la letra antes del tope.
+    """
+    for evento in run_segmentation(stream, config, _ningun_clasificador, fps=fps):
+        if isinstance(evento, WindowDynamic):
+            return DelimitedStroke(
+                start=evento.start_frame_index,
+                end=evento.frame_index,
+                stroke_frames=len(evento.window.frames),
+            )
+        if (
+            isinstance(evento, WindowRejected)
+            and evento.reason is RejectionReason.DYNAMIC_TOO_LONG
+        ):
+            return Rejection.STROKE_TOO_LONG
+    return Rejection.STROKE_NOT_CLOSED
+
+
+def final_velocity(frames: FrameStream, config: Config) -> float | None:
+    """La velocidad de cierre (§6.1.2) del último frame, en unidades de mano por
+    segundo a la tasa nominal: si la mano seguía moviéndose al cortar.
+
+    `None` si el flujo no tiene frames válidos suficientes para medirla.
+    """
+    fps = float(config.capture.camera_fps)
+    k = frames_from_ms(config.segmentation.closing_window_ms, fps)
+    validos = [f for f in frames if isinstance(f, RawFrame)]
+    if len(validos) <= k:
+        return None
+    velocidad = pair_velocity(validos[-1 - k], validos[-1], config)
+    return None if velocidad is None else velocidad / k * fps
+
+
+def is_truncated(frames: FrameStream, config: Config) -> bool:
+    """Una dinámica grabada antes del Bloque 4 que acaba con la mano en marcha."""
+    velocidad = final_velocity(frames, config)
+    return (
+        velocidad is not None
+        and velocidad >= config.segmentation.motion_threshold_per_s
+    )

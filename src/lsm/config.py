@@ -627,10 +627,18 @@ class CaptureConfig(_Section):
     #: de mano sostenida, que es lo que se le pide a quien graba.
     static_frames: int = Field(default=24, ge=2, le=300)
 
-    #: Límites de una muestra dinámica. El mínimo evita guardar un trazo cortado;
-    #: el máximo impide que una grabación olvidada crezca sin fin.
+    #: Frames mínimos del trazo de una muestra dinámica: evita guardar uno cortado.
     dynamic_min_frames: int = Field(default=12, ge=2, le=300)
-    dynamic_max_frames: int = Field(default=90, ge=2, le=1000)
+
+    #: Tope de una grabación dinámica, en milisegundos (Bloque 4). Desde que se
+    #: arma con ESPACIO, la máquina de estados tiene este tiempo para entregar el
+    #: trazo cerrado; si no, la muestra se **rechaza**. Hasta el Bloque 4 era un
+    #: tope en cuadros (`dynamic_max_frames`, 90 = 3 s) que **congelaba** la
+    #: grabación, y así se guardaron trazos truncados: 529 de las 822 dinámicas
+    #: terminan con la mano en movimiento (ADR 0023). Tiene que caber un trazo
+    #: de `motion_max_ms` más el reposo que lo cierra: con uno más corto, la
+    #: captura dirá «no se cerro el trazo» de trazos que aún podían cerrarse.
+    dynamic_max_ms: float = Field(default=6000.0, gt=0.0, le=60000.0)
 
     #: Longitud de arco mínima de la trayectoria τ (`feature-spec.md` §3.1) para
     #: aceptar una muestra **dinámica**, en unidades de mano.
@@ -661,11 +669,12 @@ class CaptureConfig(_Section):
 
     @model_validator(mode="after")
     def _coherencia_de_la_captura(self) -> CaptureConfig:
-        if self.dynamic_min_frames > self.dynamic_max_frames:
+        tope = self.dynamic_max_ms * self.camera_fps / 1000.0
+        if self.dynamic_min_frames > tope:
             msg = (
-                f"dynamic_min_frames ({self.dynamic_min_frames}) excede "
-                f"dynamic_max_frames ({self.dynamic_max_frames}): ninguna "
-                "grabación dinámica podría aceptarse"
+                f"dynamic_min_frames ({self.dynamic_min_frames}) excede el tope "
+                f"dynamic_max_ms ({self.dynamic_max_ms} ms a {self.camera_fps} fps):"
+                " ninguna grabación dinámica podría aceptarse"
             )
             raise ValueError(msg)
         return self

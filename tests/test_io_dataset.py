@@ -397,3 +397,30 @@ def test_una_estatica_con_hueco_sigue_siendo_un_error_con_politica() -> None:
 def test_sin_politica_una_dinamica_con_hueco_sigue_siendo_un_error() -> None:
     with pytest.raises(DatasetError, match="huecos"):
         muestra(frames=_con_un_hueco(), kind=SampleKind.DYNAMIC).to_sample()
+
+
+def test_una_dinamica_con_stroke_frames_entrena_solo_el_trazo(tmp_path: Path) -> None:
+    """Bloque 4: el reposo que cerró el trazo se guarda, pero no se entrena."""
+    frames = still_sequence(canonical_hand(), length=30).frames
+    guardada = muestra(frames=frames, kind=SampleKind.DYNAMIC, stroke_frames=18)
+
+    releida = read_sample(write_sample(tmp_path, guardada))
+
+    assert releida.metadata.stroke_frames == 18
+    assert len(releida.frames) == 30
+    assert len(releida.to_sample().sequence.frames) == 18
+
+
+def test_el_manifiesto_de_truncadas_las_deja_fuera_del_corpus(tmp_path: Path) -> None:
+    from lsm.io.corpus import load_corpus
+    from lsm.io.dataset import write_truncated_manifest
+
+    rutas = [write_sample(tmp_path, muestra()) for _ in range(3)]
+    marcada = rutas[1].relative_to(tmp_path).as_posix()
+    write_truncated_manifest(tmp_path, {marcada: 1.5}, {"rule": "test"})
+
+    corpus = load_corpus(tmp_path, ("A",), allow_synthetic=False, repo=tmp_path)
+
+    assert len(corpus.samples) == 2
+    assert corpus.provenance.excluded_truncated == 1
+    assert rutas[1].exists()  # no se borra

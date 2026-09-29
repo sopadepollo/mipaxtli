@@ -143,6 +143,8 @@ grabó**, y sirven para auditar el dataset sin volver a procesarlo:
 | `handedness_source` | Esquema v3 (ADR 0017): `DECLARED` si `handedness` es la mano declarada con `--mano`; `DETECTED` en las muestras v2, donde es la etiqueta de MediaPipe, constante en toda la muestra. Desde la v3 `handedness` es la mano **declarada** y cada frame guarda aparte lo que dijo el detector en `detected_handedness`. |
 | `handedness_convention` | Legado de la v2. Qué mano nombra `handedness`: `SIGNER` (la anatómica de quien firma) o `IMAGE` (la de la imagen espejada). Es la promesa semántica; `handedness_swapped` es cómo se llegó a ella. |
 | `video` | Nombre del archivo de video hermano, o `null`. **Nunca se rellena sin consentimiento registrado.** |
+| `stroke_frames` | Esquema v4 (Bloque 4, ADR 0023). En una dinámica grabada desde el Bloque 4, cuántos frames del principio de `frames` son el **trazo** que la máquina de estados entregó; los siguientes son el reposo que lo cerró. Se entrena solo el trazo; el reposo se guarda para que reproducir la muestra cierre el trazo sin fabricar nada. `null` en las estáticas y en las dinámicas anteriores. |
+| `feature_spec_version` | Esquema v4. Con qué `FEATURE_SPEC_VERSION` se calcularon `dispersion` y `arc_length`. `null` en las anteriores. `lsm-capture verificar` solo compara la σ cuando coincide con la actual. |
 
 `video: null` se escribe explícitamente y no se omite: una clave que falta se
 confunde con un archivo truncado.
@@ -166,6 +168,15 @@ Es lo que protegerá a la Fase 7 de MediaPipe JS, y hace falta porque **los gold
 vectors no cubren esto**: reciben la lateralidad ya resuelta como entrada, así que
 el test de paridad pasaría en verde con la app web reconociendo cada seña al revés.
 Ver `docs/adr/0007-cierre-de-captura.md`.
+
+#### El manifiesto de truncadas
+
+`data/raw/truncadas.json` (Bloque 4) lista las dinámicas anteriores al Bloque 4
+que acaban con la mano todavía en movimiento, con la velocidad final medida y el
+criterio. No es una muestra —vive en la raíz, fuera de
+`<firmante>/<sesion>/<letra>/`— y no modifica ninguna: `load_corpus` deja fuera
+las listadas y lo anota en la procedencia (`excluded_truncated`). Lo escribe
+`lsm-capture marcar-truncadas`.
 
 ### Disposición en `data/raw/`
 

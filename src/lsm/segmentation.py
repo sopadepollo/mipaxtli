@@ -401,6 +401,9 @@ class WindowDynamic:
     window: Sequence
     #: Frames de `window` rellenados por interpolación (Bloque 2).
     interpolated_frames: int = 0
+    #: Índice, en el flujo, del primer frame de `window` (Bloque 4). Con él la
+    #: captura guarda exactamente el tramo que el clasificador recibe.
+    start_frame_index: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,6 +461,8 @@ class _Stroke:
     end: int = 0
     #: Por frame, si se rellenó por interpolación (Bloque 2).
     filled: list[bool] = field(default_factory=list)
+    #: Índice, en el flujo, del frame de partida del trazo (Bloque 4).
+    start_index: int = 0
 
     @property
     def active(self) -> bool:
@@ -466,9 +471,10 @@ class _Stroke:
     def __len__(self) -> int:
         return len(self.frames)
 
-    def start(self, origin: RawFrame) -> None:
+    def start(self, origin: RawFrame, index: int) -> None:
         self.frames = [origin]
         self.filled = [False]
+        self.start_index = index
         self.moving = 0
         self.end = 1
 
@@ -707,7 +713,9 @@ def run_segmentation(
                     # El trazo arranca en el frame ANTERIOR al primer par en
                     # movimiento: ese es el punto de partida del recorrido, y
                     # sin él τ tendría su origen ya desplazado.
-                    stroke.start(buffer[-2])
+                    # `buffer[-2]` es el frame anterior del flujo: fuera de
+                    # un candidato no hay huecos rellenados que desplacen índices.
+                    stroke.start(buffer[-2], index - 1)
                 if stroke.active:
                     stroke.add(frame, moving=True, filled=relleno)
             else:
@@ -769,6 +777,7 @@ def run_segmentation(
 
             trazo = stroke.trace()
             interpolados = stroke.interpolated()
+            inicio_trazo = stroke.start_index
             stroke.reset()
             if interpolados > politica.max_fraction * len(trazo.frames):
                 # Demasiado reconstruido (Bloque 2): como el trazo demasiado
@@ -790,7 +799,10 @@ def run_segmentation(
                 current=State.DYNAMIC_EMIT,
             )
             yield WindowDynamic(
-                frame_index=index, window=trazo, interpolated_frames=interpolados
+                frame_index=index,
+                window=trazo,
+                interpolated_frames=interpolados,
+                start_frame_index=inicio_trazo,
             )
 
             prediction = classify(trazo, WindowOrigin.DYNAMIC)

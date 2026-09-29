@@ -36,6 +36,9 @@ from __future__ import annotations
 
 import argparse
 import math
+import time
+from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -45,13 +48,21 @@ from lsm.capture import (
     FrameBuffer,
     Rejection,
     WindowQuality,
+    delimit_dynamic_stroke,
     evaluate_window,
     explain,
+    final_velocity,
+    is_truncated,
+    maximum_frames,
     minimum_frames,
 )
 from lsm.cli import AYUDA_MANO, MANOS, MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
-from lsm.features import ExtractionRejected, extract_sequence_features
+from lsm.features import (
+    FEATURE_SPEC_VERSION,
+    ExtractionRejected,
+    extract_sequence_features,
+)
 from lsm.gaps import GapPolicy
 from lsm.hand_check import HandMismatchWatcher, input_looks_unmirrored
 from lsm.io.calibration import (
@@ -79,6 +90,7 @@ from lsm.io.dataset import (
     save_consent,
     trial_root,
     write_sample,
+    write_truncated_manifest,
 )
 from lsm.io.glossary import DEFAULT_GLOSSARY, is_validated
 from lsm.io.hands import HandDetector, build_detector
@@ -311,31 +323,24 @@ def _bucle(
     # cuadros que la ventana estática, y recortar aquí dejaría el video de una J
     # empezando a media seña.
     cuadros_maximos = max(
-        config.capture.static_frames, config.capture.dynamic_max_frames
+        config.capture.static_frames,
+        maximum_frames(SampleKind.DYNAMIC, config) or 0,
     )
     imagenes: list[Any] = []
     ventana = "captura LSM"
+    # La tasa real, para que la máquina de estados que delimita las dinámicas
+    # convierta sus umbrales como en la demo (Bloque 4).
+    marcas: deque[float] = deque(maxlen=31)
 
     while True:
         frame = camera.read()
+        marcas.append(time.perf_counter())
         slot = detector.detect(frame.rgb)
         buffer.push(slot, frame.mean_luminance)
 
         if guarda_video:
             imagenes.append(frame.bgr.copy())
             del imagenes[: max(0, len(imagenes) - cuadros_maximos)]
-
-        # Se deja de acumular en el tope en vez de seguir creciendo: una grabación
-        # olvidada llegaría a `TOO_MANY_FRAMES` y ya no se podría guardar, así que
-        # congelarla deja la muestra utilizable en vez de obligar a repetirla. El
-        # mensaje avisa de que lo que venga después ya no entra.
-        tope_dinamico = config.capture.dynamic_max_frames
-        if sesion.grabando is not None and len(sesion.grabando) < tope_dinamico:
-            sesion.grabando.append(
-                BufferedFrame(slot=slot, luminance=frame.mean_luminance)
-            )
-            if len(sesion.grabando) >= tope_dinamico:
-                sesion.mensaje = "tope de frames alcanzado: ESPACIO para guardar"
 
         quality = _calidad(buffer, sesion, config)
         aviso_mano = vigia.observe(slot)
@@ -362,6 +367,26 @@ def _bucle(
         elif tecla in _REHACER:
             sesion.grabando = None
             sesion.mensaje = "grabación descartada"
+        elif tecla in _GUARDAR and sesion.kind is SampleKind.DYNAMIC:
+            seguir = _grabar_dinamica(
+                camera=camera,
+                detector=detector,
+                config=config,
+                sesion=sesion,
+                vigia=vigia,
+                ventana=ventana,
+                guarda_video=guarda_video,
+                imagenes=imagenes,
+                cuadros_maximos=cuadros_maximos,
+                fps=_tasa(marcas, config),
+                raiz=raiz,
+                signer_id=signer_id,
+                session_id=session_id,
+                condiciones=condiciones,
+            )
+            buffer.clear()
+            if not seguir:
+                break
         elif tecla in _GUARDAR:
             _al_pulsar_guardar(
                 sesion=sesion,
@@ -385,8 +410,6 @@ def _calidad(buffer: FrameBuffer, sesion: _Sesion, config: Config) -> WindowQual
     que saldría de pulsar la tecla en este instante, que es la información que
     quien graba necesita antes de pulsarla.
     """
-    if sesion.grabando is not None:
-        return evaluate_window(tuple(sesion.grabando), SampleKind.DYNAMIC, config)
     return evaluate_window(
         buffer.tail(minimum_frames(sesion.kind, config)), sesion.kind, config
     )
@@ -404,22 +427,12 @@ def _al_pulsar_guardar(
     condiciones: Condiciones,
     camera_fps: int,
 ) -> None:
-    """ESPACIO: en estática guarda; en dinámica arranca o cierra la grabación.
+    """ESPACIO en estática: guarda lo que la mano acaba de sostener.
 
-    La asimetría es la del gesto que se está grabando. Una estática ya está ahí:
-    la mano lleva un segundo quieta y lo que se guarda es lo que acaba de pasar.
-    Una dinámica hay que delimitarla, porque su principio y su final son parte de
-    la seña y solo quien firma sabe dónde están.
+    Las dinámicas no pasan por aquí desde el Bloque 4: las delimita la máquina
+    de estados (`_grabar_dinamica`).
     """
-    if sesion.kind is SampleKind.DYNAMIC and sesion.grabando is None:
-        sesion.grabando = []
-        sesion.mensaje = "grabando: ESPACIO para cerrar, r para descartar"
-        return
-
-    if sesion.grabando is not None:
-        frames = tuple(sesion.grabando)
-    else:
-        frames = buffer.tail(minimum_frames(sesion.kind, config))
+    frames = buffer.tail(minimum_frames(sesion.kind, config))
 
     resultado = guardar_muestra(
         frames=frames,
@@ -453,6 +466,118 @@ def _al_pulsar_guardar(
     buffer.clear()
 
 
+def _tasa(marcas: deque[float], config: Config) -> float:
+    """Cuadros por segundo de los últimos cuadros, o la nominal si no hay aún."""
+    if len(marcas) < 2 or marcas[-1] <= marcas[0]:
+        return float(config.capture.camera_fps)
+    return (len(marcas) - 1) / (marcas[-1] - marcas[0])
+
+
+def _grabar_dinamica(
+    *,
+    camera: Camera,
+    detector: HandDetector,
+    config: Config,
+    sesion: _Sesion,
+    vigia: HandMismatchWatcher,
+    ventana: str,
+    guarda_video: bool,
+    imagenes: list[Any],
+    cuadros_maximos: int,
+    fps: float,
+    raiz: Path,
+    signer_id: str,
+    session_id: str,
+    condiciones: Condiciones,
+) -> bool:
+    """Graba una dinámica delimitada por la máquina de estados (Bloque 4).
+
+    ESPACIO la arma. Desde ahí, la **misma** máquina que usa la demo, con la tasa
+    medida, decide dónde empieza el trazo y dónde termina: la muestra es lo que
+    el clasificador recibiría en vivo, más el reposo que lo cerró. Si en
+    `capture.dynamic_max_ms` no entrega un trazo cerrado, la muestra se rechaza:
+    nunca más se guarda un trazo truncado. `r` cancela y `q` sale.
+
+    Devuelve `False` si se pidió salir.
+    """
+    import cv2
+
+    registro: list[BufferedFrame] = []
+    buffer_local = FrameBuffer(capacity=config.capture.static_frames)
+    estado = {"salir": False, "cancelada": False}
+    inicio = time.perf_counter()
+    tope_s = config.capture.dynamic_max_ms / 1000.0
+    sesion.grabando = registro
+    sesion.mensaje = "grabando: haz la letra y deten la mano al terminar (r cancela)"
+
+    def fuente() -> Iterator[FrameSlot]:
+        while time.perf_counter() - inicio < tope_s:
+            frame = camera.read()
+            slot = detector.detect(frame.rgb)
+            registro.append(BufferedFrame(slot=slot, luminance=frame.mean_luminance))
+            buffer_local.push(slot, frame.mean_luminance)
+            if guarda_video:
+                imagenes.append(frame.bgr.copy())
+                del imagenes[: max(0, len(imagenes) - cuadros_maximos)]
+            calidad = evaluate_window(
+                buffer_local.tail(minimum_frames(SampleKind.DYNAMIC, config)),
+                SampleKind.DYNAMIC,
+                config,
+            )
+            aviso = vigia.observe(slot)
+            cv2.imshow(
+                ventana,
+                _dibujar(frame.bgr, slot, calidad, sesion, config, guarda_video, aviso),
+            )
+            tecla = cv2.waitKey(1) & 0xFF
+            if tecla in _SALIR:
+                estado["salir"] = True
+                return
+            if tecla in _REHACER:
+                estado["cancelada"] = True
+                return
+            yield slot
+
+    resultado = delimit_dynamic_stroke(fuente(), config, fps)
+    sesion.grabando = None
+    if estado["salir"]:
+        return False
+    if estado["cancelada"]:
+        sesion.mensaje = "grabacion descartada"
+        return True
+    if isinstance(resultado, Rejection):
+        sesion.mensaje = f"no se guardo: {explain(resultado)}"
+        return True
+
+    frames = tuple(registro[resultado.start : resultado.end + 1])
+    guardada = guardar_muestra(
+        frames=frames,
+        kind=SampleKind.DYNAMIC,
+        label=sesion.label,
+        config=config,
+        raiz=raiz,
+        signer_id=signer_id,
+        session_id=session_id,
+        condiciones=condiciones,
+        con_video=guarda_video,
+        stroke_frames=resultado.stroke_frames,
+    )
+    if isinstance(guardada, Rejection):
+        sesion.mensaje = f"no se guardo: {explain(guardada)}"
+        return True
+    if guarda_video and guardada.video is not None:
+        _guardar_video(
+            guardada.video, imagenes[-len(frames) :], config.capture.camera_fps
+        )
+    etiqueta = sesion.label.value
+    sesion.guardadas[etiqueta] = sesion.guardadas.get(etiqueta, 0) + 1
+    sesion.mensaje = (
+        f"guardada {guardada.path.name}: trazo de {resultado.stroke_frames} frames "
+        f"+ {len(frames) - resultado.stroke_frames} de reposo"
+    )
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class Guardada:
     """Una muestra que sí se escribió, y con qué números."""
@@ -474,6 +599,7 @@ def guardar_muestra(
     session_id: str,
     condiciones: Condiciones,
     con_video: bool = False,
+    stroke_frames: int | None = None,
 ) -> Guardada | Rejection:
     """Evalúa una ventana y, si sirve, la escribe. El paso que importa de verdad.
 
@@ -487,7 +613,10 @@ def guardar_muestra(
     ese test no existiría y la única forma de comprobar la fase sería sentarse
     delante de una webcam.
     """
-    quality = evaluate_window(frames, kind, config)
+    # Bloque 4: de una dinámica delimitada por la máquina se evalúa el trazo,
+    # que es lo que se entrena; el reposo que lo cerró se guarda sin juzgarlo.
+    evaluada = frames if stroke_frames is None else frames[:stroke_frames]
+    quality = evaluate_window(evaluada, kind, config)
     if quality.rejection is not None:
         return quality.rejection
 
@@ -528,6 +657,8 @@ def guardar_muestra(
             # esta muestra dentro de seis meses. Ver `SampleMetadata`.
             handedness_swapped=config.hands.mediapipe_reports_mirrored_handedness,
             video=nombre_video,
+            stroke_frames=stroke_frames,
+            feature_spec_version=FEATURE_SPEC_VERSION,
         ),
         frames=tuple(buffered.slot for buffered in frames),
     )
@@ -848,6 +979,10 @@ def _cmd_verificar(args: argparse.Namespace) -> int:
 
     revisadas = 0
     problemas: list[str] = []
+    #: Muestras cuya σ anotada es de otra versión del contrato de features: la
+    #: re-derivada no tiene por qué coincidir (desde FEATURE_SPEC 3 la escala del
+    #: paso 4 cambió). Se revisa todo lo demás de ellas.
+    otra_version = 0
 
     for ruta in iter_sample_paths(raiz):
         try:
@@ -869,6 +1004,9 @@ def _cmd_verificar(args: argparse.Namespace) -> int:
             continue
 
         revisadas += 1
+        if almacenada.metadata.feature_spec_version != FEATURE_SPEC_VERSION:
+            otra_version += 1
+            continue
         sigma = extraccion.static.dispersion
         anotada = almacenada.metadata.dispersion
         if not math.isclose(sigma, anotada, rel_tol=SIGMA_REL_TOL, abs_tol=0.0):
@@ -880,6 +1018,12 @@ def _cmd_verificar(args: argparse.Namespace) -> int:
             )
 
     print(f"{revisadas} muestras releídas desde {raiz}")
+    if otra_version:
+        print(
+            f"  {otra_version} anotaron su σ con otra versión del contrato de features "
+            f"(o no la anotaron): se revisan huecos y extracción, no la σ. La "
+            f"actual es la {FEATURE_SPEC_VERSION}."
+        )
     if problemas:
         print(f"{len(problemas)} problemas:")
         for problema in problemas:
@@ -887,8 +1031,62 @@ def _cmd_verificar(args: argparse.Namespace) -> int:
         return 1
     if revisadas == 0:
         print("no hay muestras que verificar todavía")
-    else:
+    elif otra_version == revisadas:
+        print("ninguna con σ comparable; todas se pueden procesar")
+    elif otra_version == 0:
         print("todas re-derivan las mismas features que al grabarse")
+    else:
+        print(
+            f"las {revisadas - otra_version} comparables re-derivan las mismas "
+            "features que al grabarse"
+        )
+    return 0
+
+
+def _cmd_marcar_truncadas(args: argparse.Namespace) -> int:
+    """Marca las dinámicas grabadas antes del Bloque 4 que acaban en movimiento.
+
+    Hasta el Bloque 4 la captura cortaba las dinámicas en un tope de cuadros, y
+    muchas quedaron con el trazo en marcha: el modelo entrenaba con trazos que
+    el clasificador nunca recibe en vivo. Aquí no se borra nada: se escribe el
+    manifiesto `truncadas.json` en la raíz del dataset, y `load_corpus` deja
+    fuera lo que liste. Borrar el manifiesto las devuelve.
+
+    Criterio: la velocidad de cierre (§6.1.2) del último frame supera
+    `motion_threshold_per_s`. Las dinámicas con `stroke_frames` —grabadas desde
+    el Bloque 4— se cerraron por construcción y no se miran.
+    """
+    config = load_config(args.config)
+    raiz: Path = args.raiz
+    marcadas: dict[str, float] = {}
+    revisadas = 0
+    por_letra: dict[str, list[int]] = {}
+    for ruta in iter_sample_paths(raiz):
+        almacenada = read_sample(ruta)
+        meta = almacenada.metadata
+        if meta.kind is not SampleKind.DYNAMIC or meta.stroke_frames is not None:
+            continue
+        revisadas += 1
+        fila = por_letra.setdefault(meta.label, [0, 0])
+        fila[1] += 1
+        if is_truncated(almacenada.frames, config):
+            velocidad = final_velocity(almacenada.frames, config)
+            marcadas[ruta.relative_to(raiz).as_posix()] = float(velocidad or 0.0)
+            fila[0] += 1
+
+    criterio = {
+        "rule": "final closing velocity >= segmentation.motion_threshold_per_s",
+        "motion_threshold_per_s": config.segmentation.motion_threshold_per_s,
+        "closing_window_ms": config.segmentation.closing_window_ms,
+        "fps": config.capture.camera_fps,
+    }
+    destino = write_truncated_manifest(raiz, marcadas, criterio)
+    print(
+        f"{len(marcadas)} de {revisadas} dinámicas sin delimitar acaban en movimiento"
+    )
+    for letra, (n, total) in sorted(por_letra.items()):
+        print(f"  {letra:8s} {n:4d} de {total:4d}")
+    print(f"manifiesto: {destino} (bórralo para volver a incluirlas)")
     return 0
 
 
@@ -1079,6 +1277,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="relee el dataset y comprueba que las features se re-derivan igual",
     )
     verificar.set_defaults(func=_cmd_verificar)
+
+    truncadas = subcomandos.add_parser(
+        "marcar-truncadas",
+        help=(
+            "marca las dinámicas grabadas antes del Bloque 4 que acaban con la "
+            "mano en movimiento, para excluirlas sin borrarlas"
+        ),
+    )
+    truncadas.set_defaults(func=_cmd_marcar_truncadas)
 
     return parser
 

@@ -1152,9 +1152,10 @@ def replay_sample(
 ) -> ReplayOutcome:
     """Pasa una muestra por `run_segmentation`, con la mano quieta al final.
 
-    La quietud final no es un adorno: las grabaciones dinámicas terminan con la
-    mano todavía en movimiento (la captura corta en `dynamic_max_frames`), y sin
-    reposo el candidato nunca se cerraría. Se repite el último frame, que es lo
+    La quietud final no es un adorno: `Sample.sequence` de una dinámica es el
+    **trazo**, sin el reposo que lo cerró (desde el Bloque 4 por construcción:
+    `stroke_frames`; antes, porque la captura cortaba en un tope de cuadros), y
+    sin reposo el candidato nunca se cerraría. Se repite el último frame, que es lo
     que hace quien termina un trazo: detenerse donde acabó. A la tasa nominal,
     que es la de la grabación.
     """

@@ -40,7 +40,7 @@ from typing import Any, Final
 from lsm.capture import CAPTURE_SPEC_VERSION
 from lsm.features import FEATURE_SPEC_VERSION
 from lsm.gaps import GapPolicy
-from lsm.io.dataset import iter_sample_paths, read_sample
+from lsm.io.dataset import iter_sample_paths, read_sample, read_truncated_manifest
 from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.synthetic import synthetic_dynamic_samples, synthetic_samples
 from lsm.types import Sample
@@ -79,6 +79,8 @@ class Provenance:
     #: contenedor sin `.git`, y no es un error: la huella del contenido ya
     #: identifica los datos, esto identifica el código que los leyó.
     git_commit: str | None
+    #: Dinámicas truncadas que se dejaron fuera por el manifiesto (Bloque 4).
+    excluded_truncated: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -90,6 +92,7 @@ class Provenance:
             "sessions": list(self.sessions),
             "labels": list(self.labels),
             "git_commit": self.git_commit,
+            "excluded_truncated": self.excluded_truncated,
             "feature_spec_version": FEATURE_SPEC_VERSION,
             "segmentation_spec_version": SEGMENTATION_SPEC_VERSION,
             "capture_spec_version": CAPTURE_SPEC_VERSION,
@@ -169,8 +172,10 @@ def _describe(
     synthetic: bool,
     fingerprint: str,
     repo: Path,
+    excluded_truncated: int = 0,
 ) -> Provenance:
     return Provenance(
+        excluded_truncated=excluded_truncated,
         source=source,
         synthetic=synthetic,
         fingerprint=fingerprint,
@@ -205,7 +210,11 @@ def load_corpus(
     Fase 2 —y su huella— sigan siendo exactamente los de antes.
     """
     repo = repo or Path.cwd()
-    paths = list(iter_sample_paths(root))
+    # Bloque 4: las dinámicas truncadas del manifiesto quedan fuera, sin borrarse.
+    # La huella se calcula sobre lo que sí entra: es otro corpus.
+    truncadas = read_truncated_manifest(root)
+    todas = list(iter_sample_paths(root))
+    paths = [p for p in todas if p.relative_to(root).as_posix() not in truncadas]
 
     if paths:
         # `gaps`: las dinámicas con huecos cortos se reconstruyen (Bloque 2).
@@ -218,6 +227,7 @@ def load_corpus(
                 synthetic=False,
                 fingerprint=_fingerprint_of_files(paths, root),
                 repo=repo,
+                excluded_truncated=len(todas) - len(paths),
             ),
         )
 

@@ -445,24 +445,13 @@ def flujo_desde_dataset(raiz: Path, config: Config) -> Iterator[Any]:
     hueco = frames_from_ms(
         config.spelling.space_after_absent_ms, config.capture.camera_fps
     )
-    # Antes del hueco, la mano se detiene donde acabó: es lo que hace quien
-    # termina una seña antes de bajar la mano. Sin este reposo las dinámicas
-    # no saldrían nunca: las grabaciones terminan con el trazo en marcha (la
-    # captura corta en `dynamic_max_frames`), el hueco llegaba en pleno
-    # movimiento y la máquina descartaba el trazo como interrumpido. Ver el
-    # ADR 0015.
-    reposo = (
-        frames_from_ms(
-            config.segmentation.motion_confirm_low_ms, config.capture.camera_fps
-        )
-        + 1
-    )
+    # Sin reposo fabricado (Bloque 4): una dinámica grabada desde el Bloque 4
+    # trae el reposo que la cerró, así que se cierra sola. Las grabadas antes
+    # acaban con el trazo en marcha y aquí salen interrumpidas: eso es lo que
+    # son, y fabricarles un reposo escondía el problema (ADR 0023).
     for ruta in sorted(iter_sample_paths(raiz)):
         frames = read_sample(ruta).frames
         yield from frames
-        if frames and not isinstance(frames[-1], InvalidFrame):
-            for _ in range(reposo):
-                yield frames[-1]
         for _ in range(hueco):
             yield InvalidFrame(reason=InvalidReason.NO_HAND, detail="entre muestras")
 

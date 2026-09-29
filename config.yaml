@@ -422,7 +422,11 @@ capture:
   # no puede bajar de dtw.min_source_frames, que config.py valida—; el máximo
   # impide que una grabación olvidada crezca sin fin.
   dynamic_min_frames: 12
-  dynamic_max_frames: 90
+  # (Bloque 4, ADR 0023) Tope de una grabación dinámica, en ms: desde que se
+  # arma, la máquina de estados tiene este tiempo para entregar el trazo
+  # cerrado; si no, la muestra se RECHAZA. Antes era un tope en cuadros que
+  # congelaba la grabación y guardaba trazos truncados.
+  dynamic_max_ms: 6000.0
 
   # Longitud de arco mínima de la trayectoria (feature-spec.md §3.1) para aceptar
   # una muestra DINÁMICA, en unidades de mano.
