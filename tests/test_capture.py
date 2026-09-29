@@ -203,26 +203,47 @@ def test_una_ventana_corta_se_rechaza_por_frames_y_no_por_otra_cosa() -> None:
     assert quality.dispersion is None
 
 
-def test_un_hueco_en_la_ventana_la_rechaza() -> None:
-    """Si el detector perdió la mano a mitad, la muestra no describe una seña
-    continua y coserla inventaría un movimiento que nadie ejecutó."""
-    config = Config()
-    frames = quieta(config)
-    con_hueco = (
-        *frames[:5],
-        BufferedFrame(slot=InvalidFrame(reason=InvalidReason.NO_HAND), luminance=LUZ),
-        *frames[5:],
+def _con_hueco(
+    frames: tuple[BufferedFrame, ...], largo: int
+) -> tuple[BufferedFrame, ...]:
+    hueco = BufferedFrame(
+        slot=InvalidFrame(reason=InvalidReason.NO_HAND), luminance=LUZ
     )
+    return (*frames[:5], *(hueco,) * largo, *frames[5:])
 
-    quality = evaluate_window(con_hueco, SampleKind.STATIC, config)
+
+def test_un_hueco_largo_en_la_ventana_la_rechaza() -> None:
+    """Si el detector perdió la mano más de `stable_max_gap_ms`, la muestra no
+    describe una seña continua y coserla inventaría lo que nadie ejecutó."""
+    config = Config()
+
+    quality = evaluate_window(_con_hueco(quieta(config), 4), SampleKind.STATIC, config)
 
     assert quality.rejection is Rejection.HAS_GAPS
 
 
-def test_un_hueco_al_final_tambien_la_rechaza() -> None:
-    """No basta con probar el hueco en medio: los tres sitios se comportan
-    distinto en `split_valid_runs`, y solo este deja una única secuencia válida —
-    más corta que la ventana."""
+def test_un_parpadeo_del_detector_en_una_estatica_se_rellena() -> None:
+    """Paso 4 (ADR 0029): un hueco de hasta `stable_max_gap_ms` en una estática
+    se rellena, como en vivo en STABLE, y la muestra se acepta."""
+    config = Config()
+
+    quality = evaluate_window(_con_hueco(quieta(config), 1), SampleKind.STATIC, config)
+
+    assert quality.accepted
+
+
+def test_sin_relleno_estatico_cualquier_hueco_la_rechaza() -> None:
+    """Con `stable_max_gap_ms: 0` (la regla de antes del Paso 4)."""
+    config = Config.model_validate({"segmentation": {"stable_max_gap_ms": 0.0}})
+
+    quality = evaluate_window(_con_hueco(quieta(config), 1), SampleKind.STATIC, config)
+
+    assert quality.rejection is Rejection.HAS_GAPS
+
+
+def test_un_hueco_al_final_se_recorta() -> None:
+    """Los huecos del borde no se rellenan: se recortan, y la muestra queda con
+    los frames válidos."""
     config = Config()
     frames = (
         *quieta(config),
@@ -231,7 +252,7 @@ def test_un_hueco_al_final_tambien_la_rechaza() -> None:
 
     quality = evaluate_window(frames, SampleKind.STATIC, config)
 
-    assert quality.rejection is Rejection.HAS_GAPS
+    assert quality.accepted
 
 
 def test_una_estatica_temblorosa_se_rechaza_por_sigma() -> None:

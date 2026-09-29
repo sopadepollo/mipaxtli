@@ -22,6 +22,7 @@ from lsm.gaps import GapPolicy
 from lsm.segmentation import (
     EvidenceAccumulated,
     FrameThresholds,
+    GapResolved,
     HandAcquired,
     HandLost,
     LetterEmitted,
@@ -80,6 +81,10 @@ CONFIG = Config.model_validate(
             "emit_cooldown_ms": _ms(3),
             "reject_cooldown_ms": _ms(2),
             "missing_to_idle_ms": _ms(2),
+            # Sin sostener huecos fuera del trazo (Paso 4): estos tests son de la
+            # máquina de antes. El relleno ampliado tiene los suyos al final.
+            "tracking_max_gap_ms": 0.0,
+            "stable_max_gap_ms": 0.0,
             "min_confidence": 0.6,
             "high_confidence": 0.9,
             "velocity_threshold_per_s": 0.02 * FPS,
@@ -1267,3 +1272,76 @@ def test_fuera_del_candidato_un_hueco_sigue_interrumpiendo() -> None:
     ]
     # Tras el hueco la ventana estable tiene que volver a llenarse desde cero.
     assert len(estables) >= 1
+
+
+# --------------------------------------------------------------------------- #
+# Paso 4 (ADR 0029): el hueco se sostiene también en TRACKING y en STABLE
+# --------------------------------------------------------------------------- #
+
+#: La máquina del camino dinámico con el sostén fuera del trazo: dos cuadros en
+#: TRACKING y uno en STABLE.
+SOSTEN_CONFIG = Config.model_validate(
+    {
+        "plausibility": {"enabled": False},
+        "segmentation": {
+            **DYNAMIC_CONFIG.segmentation.model_dump(),
+            "tracking_max_gap_ms": _ms(2),
+            "stable_max_gap_ms": _ms(1),
+        },
+    }
+)
+
+
+def _huecos(events: list[SegmentationEvent]) -> list[GapResolved]:
+    return [e for e in events if isinstance(e, GapResolved)]
+
+
+def test_un_parpadeo_en_stable_no_reinicia_la_ventana() -> None:
+    """Un cuadro sin mano con la ventana estable: se sostiene, se rellena y la
+    máquina sigue en STABLE en vez de volver a TRACKING y esperar otra vez."""
+    events = run_dynamic(
+        [*still_frames(6), *missing_frames(1), *still_frames(4)],
+        PorOrigen(stable=UNSURE_A),
+        SOSTEN_CONFIG,
+    )
+
+    assert _huecos(events) == [
+        GapResolved(
+            frame_index=7, state=State.STABLE, frames=1, implausible=0, filled=True
+        )
+    ]
+    assert (State.STABLE, State.TRACKING) not in transitions(events)
+    assert not any(isinstance(e, HandLost) for e in events)
+
+
+def test_un_hueco_mas_largo_que_el_limite_de_stable_se_procesa_como_siempre() -> None:
+    events = run_dynamic(
+        [*still_frames(6), *missing_frames(2), *still_frames(4)],
+        PorOrigen(stable=UNSURE_A),
+        SOSTEN_CONFIG,
+    )
+
+    huecos = _huecos(events)
+    assert [(h.state, h.frames, h.filled) for h in huecos] == [(State.STABLE, 2, False)]
+    assert (State.STABLE, State.IDLE) in transitions(events)
+
+
+def test_perder_la_mano_al_arrancar_el_trazo_ya_no_lo_mata() -> None:
+    """En TRACKING, antes de llegar a candidato: el trazo se sostiene y se
+    entrega entero, con los rellenados contados."""
+    frames = trazo((10.0, 0.0, 12))
+    flujo = [*frames[:3], *missing_frames(2), *frames[5:], *quieta_tras(frames, 8)]
+    clasificador = PorOrigen()
+
+    con_sosten = run_dynamic(flujo, clasificador, SOSTEN_CONFIG)
+    sin_sosten = run_dynamic(flujo, PorOrigen())
+
+    trazos = [e for e in con_sosten if isinstance(e, WindowDynamic)]
+    assert len(trazos) == 1
+    assert trazos[0].interpolated_frames == 2
+    assert [h.state for h in _huecos(con_sosten)] == [State.TRACKING]
+    assert [e for e in sin_sosten if isinstance(e, WindowDynamic)] == [] or all(
+        len(e.window) < len(trazos[0].window)
+        for e in sin_sosten
+        if isinstance(e, WindowDynamic)
+    )

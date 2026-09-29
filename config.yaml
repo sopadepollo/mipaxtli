@@ -318,14 +318,19 @@ segmentation:
   # nacer otro, aunque la mano no haya reposado. PROVISIONAL (ADR 0019).
   motion_exhausted_ms: 1000.0
 
-  # (Bloque 2, ADR 0021) Dentro de un trazo dinámico, un hueco de como mucho
-  # este tiempo se rellena interpolando los landmarks crudos. El 48% de los
-  # huecos dentro de un trazo en vivo dura <= 100 ms; el resto, cientos de ms.
-  # PROVISIONAL.
-  dynamic_max_gap_ms: 150.0
+  # (Bloque 2, ADR 0021; Paso 4, ADR 0029) Hueco más largo que la máquina
+  # sostiene y rellena interpolando los landmarks crudos, según el estado en que
+  # empieza. MEDIDOS (ADR 0026): en el trazo y en TRACKING, cada 50 ms más
+  # recupera 4–8 puntos hasta 200 ms y 0–3 después (con 200 se rellenan el 64% de
+  # los huecos de la X, el 61% de la Ñ y el 51% de la Q). En la pose sostenida
+  # los huecos llegan al 31–36% a 100 ms y luego la distribución queda plana.
+  # tracking y stable a 0 no sostienen nada (la máquina de antes del Paso 4).
+  dynamic_max_gap_ms: 200.0
+  tracking_max_gap_ms: 200.0
+  stable_max_gap_ms: 100.0
 
-  # Si más de esta fracción del trazo (o de la muestra dinámica) es
-  # interpolada, se rechaza. PROVISIONAL.
+  # Si más de esta fracción del trazo, de la ventana estable o de la muestra es
+  # interpolada, el trazo se rechaza y la ventana estable espera a crecer.
   dynamic_max_interpolated_fraction: 0.25
 
   # Candidato que dura más que esto se descarta sin clasificar. Las muestras

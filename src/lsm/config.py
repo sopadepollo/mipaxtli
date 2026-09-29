@@ -361,15 +361,29 @@ class SegmentationConfig(_Section):
     #: iban separados 2.5–3.5 s.
     motion_exhausted_ms: float = Field(default=1000.0, gt=0.0, le=60000.0)
 
-    #: Hueco más largo que se rellena por interpolación dentro de un trazo
-    #: dinámico, en ms (Bloque 2, ADR 0021). En los diagnósticos en vivo los
-    #: huecos dentro de un trazo son bimodales: el 48% dura ≤ 100 ms (1–3
-    #: cuadros) y el resto se va a cientos de ms (p75 770 ms). 150 cubre 3
-    #: cuadros aun a 22 fps; más largo inventaría trayectoria. PROVISIONAL.
-    dynamic_max_gap_ms: float = Field(default=150.0, gt=0.0, le=2000.0)
+    #: Hueco más largo que se sostiene y se rellena por interpolación dentro de
+    #: un trazo dinámico, en ms (Bloque 2, ADR 0021; Paso 4, ADR 0029). MEDIDO
+    #: (ADR 0026): de los huecos que empiezan dentro del trazo de X, Ñ y Q, cada
+    #: 50 ms más recupera 4–8 puntos hasta 200 ms y 0–3 después; con 200 se
+    #: rellenan el 64% (X), 61% (Ñ) y 51% (Q). Era 150, provisional.
+    dynamic_max_gap_ms: float = Field(default=200.0, gt=0.0, le=2000.0)
 
-    #: Fracción máxima de frames interpolados en un trazo o una muestra
-    #: dinámica; por encima se rechaza (Bloque 2). PROVISIONAL.
+    #: Lo mismo en TRACKING, antes de que el trazo llegue a candidato: perder la
+    #: mano al arrancar el trazo mataba la seña (Paso 4). MEDIDO: los huecos que
+    #: empiezan en TRACKING en X, Ñ y Q tienen el mismo codo, 0.52 / 0.58 / 0.61
+    #: a 150 / 200 / 250 ms. 0 no sostiene nada: el relleno solo en el trazo,
+    #: como hasta el Paso 4 (interruptor de la ablación).
+    tracking_max_gap_ms: float = Field(default=200.0, ge=0.0, le=2000.0)
+
+    #: Lo mismo en STABLE, más corto: un parpadeo del detector no reinicia la
+    #: ventana estable, pero no se inventa una pose (Paso 4). MEDIDO: los huecos
+    #: de la pose sostenida tras un trazo llegan al 31–36% a 100 ms y luego la
+    #: distribución queda plana hasta ~450 ms. 0 no sostiene nada.
+    stable_max_gap_ms: float = Field(default=100.0, ge=0.0, le=2000.0)
+
+    #: Fracción máxima de frames interpolados en un trazo, una ventana estable o
+    #: una muestra; por encima el trazo se rechaza y la ventana estable espera a
+    #: crecer (Bloque 2, Paso 4).
     dynamic_max_interpolated_fraction: float = Field(default=0.25, ge=0.0, lt=1.0)
 
     #: Duración máxima de un candidato dinámico, en milisegundos, contada desde

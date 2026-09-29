@@ -87,11 +87,17 @@ MediaPipe Hands entrega 21 landmarks por mano, cada uno con `(x, y, z)`:
   dactilológico de LSM es monomanual.
 - Si no se detecta ninguna mano, el frame se marca **inválido**. Los frames
   inválidos no se interpolan: interrumpen la secuencia.
-- **Excepción, solo en el camino dinámico** (SEGMENTATION_SPEC_VERSION 7, ADR
-  0021). Dentro de DYNAMIC_CANDIDATE, y en las muestras dinámicas guardadas, una
-  racha de frames inválidos de como mucho `segmentation.dynamic_max_gap_ms` entre
-  dos frames válidos se rellena interpolando los **landmarks crudos** —antes del
-  paso 1—:
+- **Excepción: los huecos cortos se rellenan** (SEGMENTATION_SPEC_VERSION 7, ADR
+  0021; ampliada en el Paso 4, ADR 0029, que entra con el bloque de tolerancia en
+  la versión siguiente). Una racha de frames inválidos —sin mano, score bajo o
+  `IMPLAUSIBLE` (§0.4)— entre dos frames válidos se rellena interpolando los
+  **landmarks crudos** —antes del paso 1— si dura como mucho el límite del estado
+  en que empieza: `segmentation.dynamic_max_gap_ms` en DYNAMIC_CANDIDATE,
+  `tracking_max_gap_ms` en TRACKING y `stable_max_gap_ms` en STABLE (0 = no se
+  rellena); en IDLE y EMIT, nunca. En las muestras guardadas, el límite es el del
+  trazo en una dinámica y el de STABLE en una estática. En vivo, mientras el hueco
+  está abierto la máquina **sostiene** el último frame válido: no cuenta ausencia
+  ni decide nada, y va hasta ese límite por detrás:
 
   ```
   n       = frames del hueco
@@ -110,10 +116,13 @@ MediaPipe Hands entrega 21 landmarks por mano, cada uno con `(x, y, z)`:
   - en una muestra, los inválidos del principio y del final no se rellenan: se
     recortan;
   - si los frames interpolados superan `segmentation.dynamic_max_interpolated_fraction`
-    de la secuencia resultante (con `>`), la secuencia se rechaza.
+    de la secuencia resultante (con `>`), la secuencia se rechaza; en vivo, un
+    trazo así se descarta y una ventana estable así no se clasifica todavía
+    (espera a crecer, sin cooldown).
 
-  En el camino estático no cambia nada. La implementación es `lsm.gaps` y los
-  casos normativos son los `gap_cases` de `golden_features.json`.
+  La implementación es `lsm.gaps` (relleno) y `segmentation.run_segmentation`
+  (sostén); los casos normativos son los `gap_cases` de `golden_features.json`,
+  que se amplían con el sostén al regenerarse al cerrar el bloque.
 
 > **Nota — desde la v2 solo afecta a `detected_handedness`**, que es diagnóstico:
 > la etiqueta ya no llega al paso 2. Se conserva el texto porque la etiqueta sigue

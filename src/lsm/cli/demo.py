@@ -51,6 +51,7 @@ from lsm.one_euro import OneEuroFilter, OneEuroParams
 from lsm.segmentation import (
     EvidenceAccumulated,
     FrameThresholds,
+    GapResolved,
     LetterEmitted,
     RejectionReason,
     SegmentationEvent,
@@ -258,10 +259,19 @@ def anotar_evento(diagnostico: Diagnostico, evento: SegmentationEvent) -> None:
     tipo: str | None = None
     etiqueta: str | None = None
     interpolados = 0
+    implausibles = 0
     match evento:
-        case WindowDynamic(interpolated_frames=n):
+        case WindowDynamic(interpolated_frames=n, implausible_frames=m):
             tipo = "WindowDynamic"
             interpolados = n
+            implausibles = m
+        case GapResolved(state=estado, frames=n, implausible=m, filled=relleno):
+            # Paso 4: el hueco que la máquina sostuvo, en qué estado y si se
+            # rellenó (`label`: «STABLE/relleno», «TRACKING/cortado»...).
+            tipo = "GapResolved"
+            etiqueta = f"{estado.value}/{'relleno' if relleno else 'cortado'}"
+            interpolados = n
+            implausibles = m
         case WindowRejected(reason=reason) if reason in (
             RejectionReason.DYNAMIC_INTERRUPTED,
             RejectionReason.DYNAMIC_TOO_LONG,
@@ -283,6 +293,7 @@ def anotar_evento(diagnostico: Diagnostico, evento: SegmentationEvent) -> None:
         prompt=registro.prompt if registro else None,
         repetition=registro.repetition if registro else None,
         interpolated=interpolados,
+        implausible=implausibles,
     )
 
 

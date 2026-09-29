@@ -390,10 +390,22 @@ def test_una_dinamica_con_un_hueco_corto_se_reconstruye_con_politica() -> None:
     assert len(convertida.sequence.frames) == 24
 
 
-def test_una_estatica_con_hueco_sigue_siendo_un_error_con_politica() -> None:
-    """El camino estático no cambia (Bloque 2, punto 9)."""
+def test_una_estatica_con_un_hueco_largo_sigue_siendo_un_error() -> None:
+    """Más largo que `stable_max_gap_ms` no se rellena (Paso 4)."""
+    frames = still_sequence(canonical_hand(), length=24).frames
+    hueco = InvalidFrame(reason=InvalidReason.NO_HAND)
     with pytest.raises(DatasetError, match="huecos"):
-        muestra(frames=_con_un_hueco()).to_sample(_preprocesado())
+        muestra(frames=(*frames[:10], *(hueco,) * 4, *frames[14:])).to_sample(
+            _preprocesado()
+        )
+
+
+def test_una_estatica_con_un_parpadeo_se_rellena() -> None:
+    """Paso 4 (ADR 0029): como en vivo en STABLE."""
+    convertida = muestra(frames=_con_un_hueco()).to_sample(_preprocesado())
+
+    assert convertida.interpolated_frames == 1
+    assert len(convertida.sequence.frames) == 24
 
 
 def test_un_cuadro_imposible_de_una_dinamica_se_rellena_y_se_cuenta() -> None:

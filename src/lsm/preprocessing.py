@@ -5,8 +5,9 @@ Una muestra en disco es el flujo tal como salió del detector, huecos incluidos
 trazo en vivo antes de llegar al clasificador, en el mismo orden:
 
 1. el filtro de plausibilidad (§0.4): los cuadros imposibles pasan a huecos;
-2. el relleno de huecos (§0.3): solo en las dinámicas; en una estática,
-   cualquier hueco sigue siendo un error;
+2. el relleno de huecos (§0.3): en una dinámica con el límite del trazo, en
+   una estática con el de STABLE (Paso 4); sin límite, cualquier hueco de una
+   estática sigue siendo un error;
 3. el filtro One Euro (§4), desde el primer frame de la secuencia resultante.
 
 Este módulo es ese recorrido, en un solo sitio, para que el entrenamiento, la
@@ -43,14 +44,29 @@ class Preprocessing:
     gaps: GapPolicy
     one_euro: OneEuroParams
     fps: float
+    #: El relleno de una estática, con `segmentation.stable_max_gap_ms` (Paso 4).
+    #: `None` si ese límite es 0: cualquier hueco de una estática es un error.
+    static_gaps: GapPolicy | None = None
 
     @classmethod
     def from_config(cls, config: Config, fps: float) -> Preprocessing:
+        # Import local: `segmentation` importa este módulo a través de `gaps`.
+        from lsm.segmentation import frames_from_ms
+
+        estable = config.segmentation.stable_max_gap_ms
         return cls(
             plausibility=PlausibilityParams.from_config(config),
             gaps=GapPolicy.from_config(config, fps),
             one_euro=OneEuroParams.from_config(config),
             fps=fps,
+            static_gaps=(
+                None
+                if estable == 0.0
+                else GapPolicy(
+                    max_gap_frames=frames_from_ms(estable, fps),
+                    max_fraction=config.segmentation.dynamic_max_interpolated_fraction,
+                )
+            ),
         )
 
 
@@ -64,6 +80,8 @@ def preprocessing_record(config: Config) -> dict[str, Any]:
         "plausibility": PlausibilityParams.from_config(config).to_json(),
         "one_euro": OneEuroParams.from_config(config).to_json(),
         "dynamic_max_gap_ms": config.segmentation.dynamic_max_gap_ms,
+        "tracking_max_gap_ms": config.segmentation.tracking_max_gap_ms,
+        "stable_max_gap_ms": config.segmentation.stable_max_gap_ms,
         "dynamic_max_interpolated_fraction": (
             config.segmentation.dynamic_max_interpolated_fraction
         ),
@@ -78,6 +96,8 @@ def config_from_record(record: dict[str, Any]) -> dict[str, Any]:
         "smoothing": dict(record["one_euro"]),
         "segmentation": {
             "dynamic_max_gap_ms": record["dynamic_max_gap_ms"],
+            "tracking_max_gap_ms": record["tracking_max_gap_ms"],
+            "stable_max_gap_ms": record["stable_max_gap_ms"],
             "dynamic_max_interpolated_fraction": record[
                 "dynamic_max_interpolated_fraction"
             ],
@@ -110,13 +130,13 @@ def reconstruct(
 ) -> Reconstructed | NotReconstructed:
     """Plausibilidad, relleno y One Euro sobre un flujo guardado, con estado nuevo.
 
-    Una estática no pasa por la plausibilidad: sin relleno en el camino
-    estático, un solo cuadro invalidado la haría ilegible. En el dataset de hoy
-    le pasaría a 1 de 2900 muestras (ADR 0027).
+    Sin relleno estático (`static_gaps` en `None`) una estática no pasa por la
+    plausibilidad: un solo cuadro invalidado la haría ilegible (ADR 0027).
     """
+    politica = pre.gaps if kind is SampleKind.DYNAMIC else pre.static_gaps
     filtrado = (
         tuple(filter_stream(stream, pre.plausibility, pre.fps))
-        if kind is SampleKind.DYNAMIC
+        if politica is not None
         else stream
     )
     if all(isinstance(slot, RawFrame) for slot in filtrado):
@@ -128,7 +148,7 @@ def reconstruct(
             interpolated=0,
             implausible=0,
         )
-    if kind is not SampleKind.DYNAMIC:
+    if politica is None:
         huecos = sum(1 for s in filtrado if not isinstance(s, RawFrame))
         implausibles = sum(1 for s in filtrado if is_implausible(s))
         return NotReconstructed(
@@ -138,7 +158,7 @@ def reconstruct(
                 f"({implausibles} por plausibilidad)"
             ),
         )
-    relleno = fill_gaps(filtrado, pre.gaps)
+    relleno = fill_gaps(filtrado, politica)
     if isinstance(relleno, GapRejected):
         return NotReconstructed(
             reason="GAP",

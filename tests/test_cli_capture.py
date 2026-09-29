@@ -337,9 +337,11 @@ def test_una_ventana_inestable_no_llega_al_dataset(tmp_path: Path) -> None:
 def test_una_ventana_con_huecos_no_llega_al_dataset(tmp_path: Path) -> None:
     config = Config()
     limpias = repeticion(config, 0)
+    # Más largo que `stable_max_gap_ms` (100 ms, 3 cuadros): no se rellena.
     con_hueco = (
         *limpias[:5],
-        BufferedFrame(slot=InvalidFrame(reason=InvalidReason.NO_HAND), luminance=0.4),
+        *[BufferedFrame(slot=InvalidFrame(reason=InvalidReason.NO_HAND), luminance=0.4)]
+        * 4,
         *limpias[5:],
     )
 

@@ -412,6 +412,27 @@ class WindowDynamic:
 
 
 @dataclass(frozen=True, slots=True)
+class GapResolved:
+    """Se cerró un hueco que la máquina sostuvo (Paso 4, ADR 0029).
+
+    Mientras dura un hueco corto en TRACKING, STABLE o DYNAMIC_CANDIDATE la
+    máquina **sostiene** el último cuadro válido: no cuenta ausencia ni decide
+    nada. Si la mano vuelve a tiempo, los cuadros sostenidos se sustituyen por
+    interpolación (`filled`); si no, el hueco se procesa como siempre. Llega en
+    el cuadro que lo resuelve, antes que cualquier otro evento de ese cuadro.
+    """
+
+    frame_index: int
+    #: El estado de la máquina cuando empezó el hueco.
+    state: State
+    #: Cuadros sostenidos.
+    frames: int
+    #: De ellos, los que invalidó la plausibilidad (§0.4).
+    implausible: int
+    filled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class LetterEmitted:
     """Una letra con confianza suficiente. Lo único que llega al texto."""
 
@@ -420,8 +441,8 @@ class LetterEmitted:
     window: Sequence
     #: De qué camino salió. Lo usa la demo para decir qué clasificador habló.
     origin: WindowOrigin = WindowOrigin.STABLE
-    #: Frames de `window` rellenados por interpolación (Bloque 2). Siempre 0 en
-    #: el camino estático, que no interpola.
+    #: Frames de `window` rellenados por interpolación (Bloque 2; en el camino
+    #: estático desde el Paso 4).
     interpolated_frames: int = 0
     #: De los rellenados, los que sustituyen a un cuadro implausible (§0.4).
     implausible_frames: int = 0
@@ -438,6 +459,7 @@ SegmentationEvent: TypeAlias = (
     | WindowRejected
     | EvidenceAccumulated
     | LetterEmitted
+    | GapResolved
 )
 
 #: El clasificador entra inyectado para que este módulo no dependa de
@@ -548,6 +570,9 @@ def run_segmentation(
     # no dependen de ella —scores y confianzas— y se leen tal cual.
     settings = config.segmentation
     buffer: deque[RawFrame] = deque(maxlen=thresholds.buffer_size)
+    #: Por frame del buffer: (rellenado, sustituye a un implausible). Paso 4: la
+    #: ventana estable también puede llevar rellenados.
+    marcas: deque[tuple[bool, bool]] = deque(maxlen=thresholds.buffer_size)
 
     state = State.IDLE
     missing = 0
@@ -595,16 +620,30 @@ def run_segmentation(
     suavizado = OneEuroFilter(OneEuroParams.from_config(config))
     paso_ms = 1000.0 / thresholds.fps
 
-    def con_huecos_rellenos() -> Iterator[tuple[int, FrameSlot, bool, bool]]:
-        """El flujo, con los huecos cortos de un candidato ya rellenos.
+    #: Hueco más largo que se sostiene, en cuadros, según el estado en que
+    #: empieza (Paso 4, ADR 0029). En IDLE y EMIT no se sostiene.
+    def _limite(ms: float) -> int:
+        return 0 if ms == 0.0 else frames_from_ms(ms, thresholds.fps)
 
-        Si se pierde la mano dentro de DYNAMIC_CANDIDATE, los frames inválidos
-        se **retienen** sin procesar. Si la mano vuelve antes de pasar
-        `max_gap_frames` y se puede interpolar (`gaps.can_bridge`), se ceden
-        los frames interpolados —con el índice de los que reemplazan— y después
-        el real; si no, se ceden los inválidos tal cual y la máquina corta el
-        trazo como siempre. El precio es latencia: mientras hay un hueco abierto
-        en un trazo, la máquina va hasta `max_gap_frames` cuadros por detrás.
+    limites = {
+        State.DYNAMIC_CANDIDATE: politica.max_gap_frames,
+        State.TRACKING: _limite(settings.tracking_max_gap_ms),
+        State.STABLE: _limite(settings.stable_max_gap_ms),
+    }
+    #: Los huecos sostenidos que el generador cerró, para cederlos como eventos.
+    resueltos: list[GapResolved] = []
+
+    def con_huecos_rellenos() -> Iterator[tuple[int, FrameSlot, bool, bool]]:
+        """El flujo, con los huecos cortos ya rellenos (Bloque 2, Paso 4).
+
+        Si se pierde la mano en TRACKING, STABLE o DYNAMIC_CANDIDATE, los frames
+        inválidos se **sostienen**: se retienen sin procesar, y la máquina se
+        queda en el último cuadro válido. Si la mano vuelve antes de pasar el
+        límite del estado en que empezó el hueco y se puede interpolar
+        (`gaps.can_bridge`), se ceden los frames interpolados —con el índice de
+        los que reemplazan— y después el real; si no, se ceden los inválidos tal
+        cual y la máquina procesa el hueco como siempre. Mientras hay un hueco
+        abierto la máquina va hasta ese límite por detrás.
 
         Lee `state` en cada paso: el cuerpo del bucle ya procesó el cuadro
         anterior cuando se le pide el siguiente. Cede `(índice, slot, relleno,
@@ -612,17 +651,34 @@ def run_segmentation(
         invalidó la plausibilidad.
         """
         retenidos: list[tuple[int, FrameSlot]] = []
+        limite = 0
+        estado_hueco = State.IDLE
         ultimo: RawFrame | None = None
+
+        def cerrar(indice: int, *, relleno: bool) -> None:
+            resueltos.append(
+                GapResolved(
+                    frame_index=indice,
+                    state=estado_hueco,
+                    frames=len(retenidos),
+                    implausible=sum(1 for _, x in retenidos if is_implausible(x)),
+                    filled=relleno,
+                )
+            )
+
         for i, s in enumerate(stream):
             usable = _usable_frame(s, settings.min_detection_score)
             if usable is None:
-                if retenidos or (
-                    state is State.DYNAMIC_CANDIDATE and ultimo is not None
-                ):
+                if not retenidos and ultimo is not None and limites.get(state, 0):
+                    limite = limites[state]
+                    estado_hueco = state
+                if retenidos or limite:
                     retenidos.append((i, s))
-                    if len(retenidos) > politica.max_gap_frames:
+                    if len(retenidos) > limite:
+                        cerrar(i, relleno=False)
                         yield from ((k, x, False, False) for k, x in retenidos)
                         retenidos = []
+                        limite = 0
                         ultimo = None
                     continue
                 ultimo = None
@@ -630,6 +686,7 @@ def run_segmentation(
                 continue
             if retenidos:
                 if ultimo is not None and can_bridge(ultimo, usable):
+                    cerrar(i, relleno=True)
                     rellenos = interpolate_frames(
                         ultimo,
                         usable,
@@ -639,13 +696,19 @@ def run_segmentation(
                     for (k, x), relleno in zip(retenidos, rellenos, strict=True):
                         yield k, relleno, True, is_implausible(x)
                 else:
+                    cerrar(i, relleno=False)
                     yield from ((k, x, False, False) for k, x in retenidos)
                 retenidos = []
+                limite = 0
             ultimo = usable
             yield i, s, False, False
+        if retenidos:
+            cerrar(retenidos[-1][0], relleno=False)
         yield from ((k, x, False, False) for k, x in retenidos)
 
     for index, slot, relleno, implausible in con_huecos_rellenos():
+        while resueltos:
+            yield resueltos.pop(0)
         frame = _usable_frame(slot, settings.min_detection_score)
         if frame is None:
             suavizado.reset()
@@ -663,6 +726,7 @@ def run_segmentation(
             # curso se descarta entero: coserlo inventaría un movimiento que
             # nadie observó.
             buffer.clear()
+            marcas.clear()
             stable_run = 0
             low_run = 0
             still_run = 0
@@ -696,6 +760,7 @@ def run_segmentation(
 
         missing = 0
         buffer.append(frame)
+        marcas.append((relleno, implausible))
 
         if state is State.IDLE:
             yield HandAcquired(frame_index=index)
@@ -720,6 +785,7 @@ def run_segmentation(
                 frame_index=index, reason=RejectionReason.EXTRACTION_FAILED
             )
             buffer.clear()
+            marcas.clear()
             stable_run = 0
             low_run = 0
             still_run = 0
@@ -949,6 +1015,7 @@ def run_segmentation(
                 frame_index=index, reason=RejectionReason.EXTRACTION_FAILED
             )
             buffer.clear()
+            marcas.clear()
             stable_run = 0
             if state is State.STABLE:
                 yield StateChanged(
@@ -958,6 +1025,9 @@ def run_segmentation(
             continue
 
         dispersion = window_features.static.dispersion
+        rellenados = list(marcas)[-len(window) :]
+        interpolados_ventana = sum(1 for r, _ in rellenados if r)
+        implausibles_ventana = sum(1 for _, i in rellenados if i)
 
         if state is State.TRACKING:
             yield StateChanged(
@@ -973,6 +1043,11 @@ def run_segmentation(
 
         if suppressed > 0:
             suppressed -= 1
+            continue
+
+        if interpolados_ventana > politica.max_fraction * len(window):
+            # Demasiado reconstruida para clasificarla todavía (Paso 4): no es
+            # un rechazo ni cuesta cooldown; la ventana crece y se vuelve a mirar.
             continue
 
         if dispersion > config.quality.max_dispersion:
@@ -1015,12 +1090,21 @@ def run_segmentation(
             )
             continue
 
-        yield LetterEmitted(frame_index=index, prediction=prediction, window=window)
+        yield LetterEmitted(
+            frame_index=index,
+            prediction=prediction,
+            window=window,
+            interpolated_frames=interpolados_ventana,
+            implausible_frames=implausibles_ventana,
+        )
         yield StateChanged(frame_index=index, previous=State.STABLE, current=State.EMIT)
         state = State.EMIT
         cooldown = thresholds.emit_cooldown_frames
         stable_run = 0
         pending_repeat = prediction.label
+
+    # Un hueco sostenido que el flujo dejó abierto al acabarse.
+    yield from resueltos
 
 
 def _stable_window(

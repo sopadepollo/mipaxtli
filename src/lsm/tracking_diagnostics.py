@@ -149,8 +149,11 @@ class SessionEvent:
     label: str | None = None
     prompt: str | None = None
     repetition: int | None = None
-    #: Frames interpolados del trazo, para `WindowDynamic` (Bloque 2).
+    #: Frames interpolados del trazo, para `WindowDynamic` (Bloque 2); para
+    #: `GapResolved`, los cuadros que se sostuvieron (Paso 4).
     interpolated: int = 0
+    #: De ellos, los que invalidó la plausibilidad (§0.4).
+    implausible: int = 0
 
 
 @dataclass
@@ -304,6 +307,7 @@ class TrackingRecorder:
         prompt: str | None = None,
         repetition: int | None = None,
         interpolated: int = 0,
+        implausible: int = 0,
     ) -> None:
         self.events.append(
             SessionEvent(
@@ -313,6 +317,7 @@ class TrackingRecorder:
                 prompt=prompt,
                 repetition=repetition,
                 interpolated=interpolated,
+                implausible=implausible,
             )
         )
 
@@ -1395,6 +1400,7 @@ def report_to_json(
                 "prompt": e.prompt,
                 "repetition": e.repetition,
                 "interpolated": e.interpolated,
+                "implausible": e.implausible,
             }
             for e in events
         ],
