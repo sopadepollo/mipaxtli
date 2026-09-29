@@ -59,7 +59,7 @@ from lsm.types import (
 #: **v2** (ADR 0017): el paso 2 espeja según la mano **declarada** de la sesión,
 #: no según la etiqueta del detector cuadro a cuadro. Las cuentas son las mismas;
 #: cambia de dónde sale la entrada, y un modelo v1 se entrenó con la otra.
-FEATURE_SPEC_VERSION: Final = 2
+FEATURE_SPEC_VERSION: Final = 3
 
 #: T_ref del §3.2: toda secuencia dinámica se remuestrea a esta longitud.
 RESAMPLE_LENGTH: Final = 24
@@ -218,19 +218,69 @@ def palm_size(points: Points3) -> float:
 
 
 def apply_scale(points: Points3, scale: float) -> Points3:
-    """Paso 4 (división). Tras esto, ‖p_9‖₂ = 1 en el plano XY."""
+    """Paso 4 (división). Desde la v3 `scale` es el tamaño de palma."""
     return tuple((x / scale, y / scale, z / scale) for x, y, z in points)
 
 
+def palm_axis_angle(points: Points3) -> float:
+    """θ del paso 5: el ángulo de muñeca → nudillo 9, `atan2(y_9, x_9)`."""
+    x9, y9, _ = points[LandmarkIndex.MIDDLE_MCP]
+    return math.atan2(y9, x9)
+
+
 def rotate_to_axis(points: Points3) -> Points3:
-    """Paso 5: alinea el eje de la palma con +Y. Tolera muñecas inclinadas.
+    """Paso 5 con el ángulo del propio frame. Ver `rotate_by`."""
+    return rotate_by(points, palm_axis_angle(points))
+
+
+def rotation_reliability(
+    ratios: tuple[float, ...], off: float, on: float
+) -> tuple[bool, ...]:
+    """Paso 5 (v3): qué frames tienen la palma lo bastante de frente.
+
+    `ratios` es `s_t / m_t` por frame. Histéresis: se empieza fiable; un frame
+    con ratio `< off` apaga, uno con ratio `≥ on` enciende, y en medio se
+    conserva el estado del frame anterior.
+    """
+    fiable = True
+    estados: list[bool] = []
+    for ratio in ratios:
+        if ratio < off:
+            fiable = False
+        elif ratio >= on:
+            fiable = True
+        estados.append(fiable)
+    return tuple(estados)
+
+
+def held_angles(
+    angles: tuple[float, ...], reliable: tuple[bool, ...]
+) -> tuple[float, ...] | None:
+    """Paso 5 (v3): el ángulo de cada frame, sostenido en los no fiables.
+
+    Un frame fiable usa el suyo. Uno no fiable usa el del último fiable
+    anterior; si no hay ninguno antes, el del primero fiable después. `None` si
+    no hay ninguno: la secuencia se rechaza (`PALM_EDGE_ON`).
+    """
+    if not any(reliable):
+        return None
+    primero = angles[reliable.index(True)]
+    salida: list[float] = []
+    actual = primero
+    for angle, fiable in zip(angles, reliable, strict=True):
+        if fiable:
+            actual = angle
+        salida.append(actual)
+    return tuple(salida)
+
+
+def rotate_by(points: Points3, theta: float) -> Points3:
+    """Paso 5: gira los puntos para que el ángulo `theta` quede sobre +Y.
 
     `z` no se modifica. Los senos y cosenos se calculan una sola vez, fuera del
     bucle: recalcularlos por punto daría los mismos bits, pero esto deja claro
     que el ángulo es uno solo para todo el frame.
     """
-    x9, y9, _ = points[LandmarkIndex.MIDDLE_MCP]
-    theta = math.atan2(y9, x9)
     phi = math.pi / 2 - theta
     cos_phi = math.cos(phi)
     sin_phi = math.sin(phi)
@@ -253,7 +303,8 @@ def drop_z(points: Points3) -> Points2:
 def flatten(points: Points2) -> FeatureVector:
     """Paso 7: aplana a ℝ⁴², por índice ascendente y `x` antes que `y`.
 
-    Se conservan las componentes constantes (`p_0 = (0,0)`, `p_9 = (0,1)`):
+    Se conservan las componentes constantes (`p_0 = (0,0)`, y `p_9.x = 0` en los
+    frames fiables del paso 5; desde la v3 `p_9.y = s/m` ya no es constante):
     aportan distancia cero en cualquier métrica y mantener los 21 índices
     alineados con la numeración de MediaPipe elimina una fuente crónica de
     errores off-by-one al depurar y al reimplementar en TypeScript.
@@ -278,7 +329,7 @@ class _FrameGeometry:
     #: Muñeca tras el paso 2, **antes** de trasladar. Es lo que alimenta el canal
     #: de trayectoria del §3.1; tomarla después del paso 3 daría siempre (0, 0).
     wrist: Point2
-    #: s_t del paso 4.
+    #: m_t: la escala del paso 4, el tamaño de palma desde la v3.
     scale: float
     #: Puntos tras el paso 2, sin trasladar ni escalar. Base de la velocidad.
     canonical: Points3
@@ -286,36 +337,70 @@ class _FrameGeometry:
     palm: float
 
 
-def _frame_geometry(frame: RawFrame) -> _FrameGeometry | InvalidReason:
-    """Aplica los pasos 1 a 7 en el orden exacto del contrato."""
+@dataclass(frozen=True, slots=True)
+class _FrameBase:
+    """Pasos 1 a 4 de un frame: lo que no depende del resto de la secuencia."""
+
+    step_2: Points3
+    step_4: Points3
+    #: m_t, el tamaño de palma: la escala del paso 4 desde la v3.
+    palm: float
+    #: s_t / m_t: qué tan de frente está la palma (1 de frente, ~0 de canto).
+    ratio: float
+
+
+def _frame_base(frame: RawFrame) -> _FrameBase | InvalidReason:
+    """Pasos 1 a 4 en el orden exacto del contrato."""
     step_1 = correct_aspect_and_orientation(frame.points(), frame.aspect_ratio)
     step_2 = canonicalize_handedness(step_1, frame.handedness)
     step_3 = translate_to_origin(step_2)
-    scale = reference_scale(step_3)
-    if scale < MIN_SCALE:
+    palm = palm_size(step_3)
+    if palm < MIN_SCALE:
         return InvalidReason.SCALE_TOO_SMALL
-    step_4 = apply_scale(step_3, scale)
-    step_5 = rotate_to_axis(step_4)
-    step_6 = drop_z(step_5)
-    wrist_x, wrist_y, _ = step_2[LandmarkIndex.WRIST]
-    return _FrameGeometry(
-        features=flatten(step_6),
-        wrist=(wrist_x, wrist_y),
-        scale=scale,
-        canonical=step_2,
-        palm=palm_size(step_2),
+    return _FrameBase(
+        step_2=step_2,
+        step_4=apply_scale(step_3, palm),
+        palm=palm,
+        ratio=reference_scale(step_3) / palm,
     )
 
 
 def _sequence_geometry(
-    sequence: Sequence,
+    sequence: Sequence, config: Config
 ) -> tuple[_FrameGeometry, ...] | ExtractionRejected:
-    geometries: list[_FrameGeometry] = []
+    """Pasos 1 a 7 de cada frame. El 5 mira la secuencia entera (v3)."""
+    bases: list[_FrameBase] = []
     for index, frame in enumerate(sequence.frames):
-        geometry = _frame_geometry(frame)
-        if isinstance(geometry, InvalidReason):
-            return ExtractionRejected(reason=geometry, frame_index=index)
-        geometries.append(geometry)
+        base = _frame_base(frame)
+        if isinstance(base, InvalidReason):
+            return ExtractionRejected(reason=base, frame_index=index)
+        bases.append(base)
+
+    fiables = rotation_reliability(
+        tuple(base.ratio for base in bases),
+        config.features.rotation_off_ratio,
+        config.features.rotation_on_ratio,
+    )
+    angulos = held_angles(
+        tuple(palm_axis_angle(base.step_4) for base in bases), fiables
+    )
+    if angulos is None:
+        return ExtractionRejected(reason=InvalidReason.PALM_EDGE_ON, frame_index=0)
+
+    geometries: list[_FrameGeometry] = []
+    for base, theta in zip(bases, angulos, strict=True):
+        step_5 = rotate_by(base.step_4, theta)
+        step_6 = drop_z(step_5)
+        wrist_x, wrist_y, _ = base.step_2[LandmarkIndex.WRIST]
+        geometries.append(
+            _FrameGeometry(
+                features=flatten(step_6),
+                wrist=(wrist_x, wrist_y),
+                scale=base.palm,
+                canonical=base.step_2,
+                palm=base.palm,
+            )
+        )
     return tuple(geometries)
 
 
@@ -607,10 +692,11 @@ def extract_sequence_features(sequence: Sequence, config: Config) -> ExtractionO
     canal de trayectoria (§3.1) → remuestreo y ponderación (§3.2, §3.3).
 
     Devuelve `ExtractionRejected` —no lanza, no devuelve `None`— cuando algún
-    frame tiene escala degenerada, e indica cuál.
+    frame tiene escala degenerada, e indica cuál, o cuando ningún frame tiene la
+    palma lo bastante de frente para fijar la rotación (`PALM_EDGE_ON`, v3).
     """
     smoothed = smooth_sequence(sequence, config.smoothing.alpha)
-    geometries = _sequence_geometry(smoothed)
+    geometries = _sequence_geometry(smoothed, config)
     if isinstance(geometries, ExtractionRejected):
         return geometries
 
@@ -624,6 +710,52 @@ def extract_sequence_features(sequence: Sequence, config: Config) -> ExtractionO
         scales=tuple(geometry.scale for geometry in geometries),
         velocities=_velocities(geometries),
         spec_version=FEATURE_SPEC_VERSION,
+    )
+
+
+def pair_velocity(before: RawFrame, after: RawFrame, config: Config) -> float | None:
+    """La velocidad del §6.1 entre dos frames cualesquiera, sin pasar por el paso 5.
+
+    El mismo suavizado del §4, los pasos 1 a 3 y el tamaño de palma: exactamente
+    la `velocities[0]` de `extract_sequence_features` sobre el par, pero sin
+    depender de que la rotación sea fiable (v3). Una mano de canto sigue teniendo
+    velocidad aunque su secuencia no se pueda clasificar. `None` si la palma es
+    degenerada en alguno de los dos.
+    """
+    suavizados = smooth_sequence(
+        Sequence(frames=(before, after)), config.smoothing.alpha
+    )
+    geometria: list[tuple[Points3, float]] = []
+    for frame in suavizados.frames:
+        step_2 = canonicalize_handedness(
+            correct_aspect_and_orientation(frame.points(), frame.aspect_ratio),
+            frame.handedness,
+        )
+        palm = palm_size(step_2)
+        if palm < MIN_SCALE:
+            return None
+        geometria.append((step_2, palm))
+    (a, m_a), (b, m_b) = geometria
+    return mean_displacement(a, b) / ((m_a + m_b) / 2.0)
+
+
+def reference_scales(sequence: Sequence) -> tuple[float, ...]:
+    """La distancia muñeca → nudillo 9 de cada frame, tras los pasos 1 a 3.
+
+    **No entra en las features desde la v3**: la escala del paso 4 es el tamaño
+    de palma. Se conserva para el metadato de distancia a la cámara
+    (`mean_scale_px`), que se calibró con ella (ADR 0020).
+    """
+    return tuple(
+        reference_scale(
+            translate_to_origin(
+                canonicalize_handedness(
+                    correct_aspect_and_orientation(f.points(), f.aspect_ratio),
+                    f.handedness,
+                )
+            )
+        )
+        for f in sequence.frames
     )
 
 

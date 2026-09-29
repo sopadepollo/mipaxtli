@@ -28,6 +28,7 @@ from lsm.config import Config
 from lsm.features import (
     ExtractionRejected,
     extract_sequence_features,
+    reference_scales,
     scale_to_pixels,
     split_valid_runs,
 )
@@ -319,7 +320,9 @@ def evaluate_window(
         )
 
     dispersion = extraction.static.dispersion
-    scale_px = _mean_scale_px(sequence, extraction.scales)
+    # El metadato de distancia sigue con muñeca → nudillo 9, con la que se
+    # calibró `Distance`; desde FEATURE_SPEC 3 no es la escala de las features.
+    scale_px = _mean_scale_px(sequence, reference_scales(sequence))
     arc = trajectory_arc_length(extraction.trajectory)
 
     rejection: Rejection | None = None

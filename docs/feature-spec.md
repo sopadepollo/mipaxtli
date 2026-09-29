@@ -1,6 +1,15 @@
-# Especificación de Features — v2
+# Especificación de Features — v3
 
-**`FEATURE_SPEC_VERSION = 2`**
+**`FEATURE_SPEC_VERSION = 3`**
+
+> **v3** (2026-09-28, `docs/adr/0020-escala-y-rotacion-con-la-palma-de-canto.md`):
+> la escala del paso 4 es el **tamaño de palma** y no la distancia muñeca →
+> nudillo 9, que se colapsa con la palma de canto (en la X quedaba en 0.17 del
+> tamaño real). El ángulo del paso 5 se **sostiene** desde el último frame
+> fiable mientras la palma está de canto, con histéresis, y una secuencia sin
+> ningún frame fiable se rechaza (`PALM_EDGE_ON`). Las estáticas no se colapsan
+> nunca (s/palma ≥ 0.702): para ellas solo cambia el divisor del paso 4.
+> Modelos v2 rechazados al cargar; hay que reentrenar.
 
 > **v2** (2026-09-26, `docs/adr/0017-diagnostico-de-tracking.md`): la lateralidad
 > que entra al paso 2 es la **mano declarada** de la sesión, no la etiqueta que el
@@ -171,29 +180,56 @@ Tras este paso `p_0 = (0, 0, 0)`.
 
 ### Paso 4 — Escala
 
-Se usa la distancia muñeca → nudillo del dedo medio como unidad. Es estable frente
-a la flexión de los dedos, a diferencia de cualquier distancia que involucre una
-punta.
+Se usa el **tamaño de palma** como unidad (v3): la mayor de las distancias 2D entre
+la muñeca y los cuatro nudillos, y entre el nudillo del índice y el del meñique.
+No involucra ninguna punta, así que es estable frente a la flexión de los dedos, y
+no se colapsa con la palma de canto: la palma es aproximadamente plana y muñeca →
+nudillo 9 y nudillo 5 → nudillo 17 son casi perpendiculares, así que al girarla no
+pueden encogerse las dos a la vez.
 
 ```
-s = sqrt(p_9.x² + p_9.y²)          # norma 2D, ignora z
+P = ( (0,5), (0,9), (0,13), (0,17), (5,17) )      # en este orden
+m = max_{(a,b) ∈ P} sqrt((p_a.x − p_b.x)² + (p_a.y − p_b.y)²)     # 2D, ignora z
 
-si s < 1e-6:
+si m < 1e-6:
     frame INVÁLIDO — descartar
 
-p_i ← p_i / s    para todo i
+p_i ← p_i / m    para todo i
+
+s = sqrt(p_9.x² + p_9.y²)       # antes de dividir: la escala de hasta la v2
+r = s / m                       # qué tan de frente está la palma; lo usa el paso 5
 ```
 
-Tras este paso `‖p_9‖₂ = 1` en el plano XY.
+Hasta la v2 la escala era `s`, muñeca → nudillo 9. Sigue calculándose porque el
+paso 5 necesita `r`, y porque el metadato de distancia a la cámara
+(`mean_scale_px`) se calibró con ella; ya no divide nada.
 
 ### Paso 5 — Rotación en el plano XY
 
 Alinea el eje de la palma con el eje +Y. Da tolerancia a la inclinación de la
 muñeca.
 
+Desde la v3 el ángulo **se decide sobre la secuencia**, porque con la palma de
+canto el de un frame suelto es ruido (40° de desviación con la mano quieta en la
+X, ADR 0020). En dos pasadas:
+
 ```
-θ = atan2(p_9.y, p_9.x)
-φ = π/2 - θ
+# 1. Qué frames son fiables, con histéresis sobre r (paso 4):
+fiable_{-1} = verdadero
+fiable_t    = falso           si r_t <  off        # features.rotation_off_ratio = 0.45
+              verdadero       si r_t ≥  on         # features.rotation_on_ratio  = 0.6
+              fiable_{t−1}    si no
+
+# 2. El ángulo de cada frame:
+θ^A_t = atan2(p_9.y, p_9.x)                        # tras el paso 4 del frame t
+θ_t   = θ^A_t                          si fiable_t
+        θ^A del último fiable anterior si no, y lo hay
+        θ^A del primer fiable posterior si no hay ninguno antes
+
+si ningún frame es fiable:
+    secuencia RECHAZADA — PALM_EDGE_ON
+
+φ_t = π/2 - θ_t
 
 para todo i:
     x' = p_i.x * cos(φ) - p_i.y * sin(φ)
@@ -203,7 +239,16 @@ para todo i:
     # p_i.z no se modifica
 ```
 
-Tras este paso `p_0 = (0, 0)` y `p_9 = (0, 1)` exactamente.
+Tras este paso `p_0 = (0, 0)`, y en los frames fiables `p_9` queda sobre el eje
++Y (en `(0, s/m)`; hasta la v2, con `m = s`, en `(0, 1)`).
+
+- **Una secuencia de un solo frame** —los casos por frame de los golden— es fiable
+  si `r ≥ off` (empieza fiable y solo `r < off` lo apaga).
+- **No se mezclan referencias**: el ángulo de un frame de canto no se reemplaza
+  por el de otra construcción (la línea de nudillos), cuyo desfase con `θ^A`
+  depende de la forma de la mano —entre 16° y 154°, ADR 0020—.
+- **La velocidad del §6.1 no pasa por aquí**: una mano de canto se sigue
+  moviendo aunque su secuencia no se pueda clasificar.
 
 ### Paso 6 — Descarte de Z
 
@@ -222,11 +267,13 @@ f = [p_0.x, p_0.y, p_1.x, p_1.y, ..., p_20.x, p_20.y]    ∈ ℝ⁴²
 
 Orden estricto: por índice de landmark ascendente, `x` antes que `y`.
 
-**Sobre los componentes constantes.** Por construcción `p_0 = (0,0)` y `p_9 = (0,1)`
-en todas las muestras. Se conservan deliberadamente: aportan distancia cero en
-cualquier métrica, no afectan al clasificador, y mantener los 21 índices alineados
-con la numeración de MediaPipe elimina una fuente crónica de errores off-by-one al
-depurar y al reimplementar en TypeScript.
+**Sobre los componentes constantes.** Por construcción `p_0 = (0,0)` en todas las
+muestras, y `p_9.x = 0` en los frames fiables del paso 5. Hasta la v2 también
+`p_9 = (0,1)`; desde la v3 `p_9.y = s/m`, que en las estáticas va de 0.80 a 1.00 y
+dice cuánto se ve de frente la palma. Se conservan deliberadamente: las
+constantes aportan distancia cero en cualquier métrica, y mantener los 21 índices
+alineados con la numeración de MediaPipe elimina una fuente crónica de errores
+off-by-one al depurar y al reimplementar en TypeScript.
 
 ---
 

@@ -52,6 +52,7 @@ from lsm.synthetic import (
     arc_offsets,
     canonical_hand,
     collapsed_scale,
+    edge_on_palm,
     fist_hand,
     mirrored_x,
     moving_sequence,
@@ -302,18 +303,37 @@ def frame_cases() -> tuple[FrameCase, ...]:
         ),
         FrameCase(
             id="scale_just_below_minimum",
-            description=f"Escala justo por debajo de MIN_SCALE ({MIN_SCALE}).",
+            description=f"Tamaño de palma justo por debajo de MIN_SCALE ({MIN_SCALE}).",
             validates="Paso 4: el umbral es estricto, no aproximado.",
-            points_px=_with_middle_mcp_at(hand, MIN_SCALE * WIDE[0] * 0.5),
+            points_px=_with_palm_at(hand, MIN_SCALE * WIDE[0] * 0.5),
+        ),
+        FrameCase(
+            id="palm_edge_on",
+            description=(
+                "El nudillo del medio sobre la muñeca y el resto de la palma "
+                "intacto: la palma de canto, como en la X."
+            ),
+            validates=(
+                "Paso 5 (v3): con un solo frame y ninguno fiable, la secuencia se "
+                "rechaza por PALM_EDGE_ON. No es escala degenerada: el tamaño de "
+                "palma sigue siendo el de la mano."
+            ),
+            points_px=edge_on_palm(hand),
         ),
     )
 
 
 def _with_middle_mcp_at(points: Points3, offset_px: float) -> Points3:
-    """Coloca p_9 a `offset_px` de la muñeca, para probar el umbral de escala."""
+    """Coloca p_9 a `offset_px` de la muñeca: la palma de canto."""
+    return edge_on_palm(points, offset_px)
+
+
+def _with_palm_at(points: Points3, offset_px: float) -> Points3:
+    """Los cuatro nudillos a `offset_px` de la muñeca: el tamaño de palma es ése."""
     mutated = list(points)
     wrist = points[0]
-    mutated[9] = (wrist[0] + offset_px, wrist[1], points[9][2])
+    for knuckle in (5, 9, 13, 17):
+        mutated[knuckle] = (wrist[0] + offset_px, wrist[1], points[knuckle][2])
     return tuple(mutated)
 
 
@@ -372,18 +392,45 @@ def sequence_cases() -> tuple[SequenceCase, ...]:
         SequenceCase(
             id="velocity_foreshortened_palm",
             description=(
-                "La mano desplazándose con el nudillo del medio casi sobre la "
-                "muñeca: la palma de canto, como en la X."
+                "La mano desplazándose de frente un cuadro y después con el "
+                "nudillo del medio casi sobre la muñeca: la palma de canto."
             ),
             validates=(
                 "§6.1 (SEGMENTATION_SPEC_VERSION 6): la velocidad se divide entre "
-                "el tamaño de palma, no entre la escala del paso 4. Con la escala "
-                "del paso 4 las `velocities` de este caso salen ~5 veces mayores."
+                "el tamaño de palma, no entre la escala del paso 4; con ella las "
+                "`velocities` de los cuadros de canto salen ~5 veces mayores. "
+                "Paso 5 (v3): los cuadros de canto sostienen el ángulo del primero."
             ),
-            stream=moving_sequence(
-                _with_middle_mcp_at(hand, 20.0),
-                tuple((6.0 * i, 0.0) for i in range(8)),
-            ).frames,
+            stream=(
+                moving_sequence(hand, ((0.0, 0.0),)).frames[0],
+                *moving_sequence(
+                    _with_middle_mcp_at(hand, 20.0),
+                    tuple((6.0 * i, 0.0) for i in range(1, 8)),
+                ).frames,
+            ),
+        ),
+        SequenceCase(
+            id="rotation_hysteresis",
+            description=(
+                "La palma pasa de frente a canto, se queda a medio girar y vuelve "
+                "de frente: s/palma ≈ 1, 0.2, 0.5, 0.5, 0.9."
+            ),
+            validates=(
+                "Paso 5 (v3): histéresis con `rotation_off_ratio` y "
+                "`rotation_on_ratio`. El 0.5 queda entre los dos cortes y conserva "
+                "el estado anterior (no fiable), así que sostiene el ángulo; el 0.9 "
+                "vuelve a usar el suyo."
+            ),
+            stream=tuple(
+                moving_sequence(pose, ((0.0, 0.0),)).frames[0]
+                for pose in (
+                    hand,
+                    _with_middle_mcp_at(hand, 20.0),
+                    _with_middle_mcp_at(hand, 50.0),
+                    _with_middle_mcp_at(hand, 50.0),
+                    _with_middle_mcp_at(hand, 90.0),
+                )
+            ),
         ),
         SequenceCase(
             id="too_few_source_frames",

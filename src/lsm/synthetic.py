@@ -149,14 +149,36 @@ def mirrored_x(points: Points3, axis_x: float | None = None) -> Points3:
 
 
 def collapsed_scale(points: Points3) -> Points3:
-    """Coloca el nudillo del dedo medio sobre la muñeca: escala degenerada.
+    """Coloca los cuatro nudillos sobre la muñeca: escala degenerada.
 
-    El paso 4 debe marcar el frame inválido en vez de dividir por ~0.
+    El paso 4 debe marcar el frame inválido en vez de dividir por ~0. Desde
+    FEATURE_SPEC 3 la escala es el tamaño de palma, así que hay que colapsar la
+    palma entera; mover solo el nudillo 9 es la palma de canto (`edge_on_palm`).
     """
     mutated = list(points)
+    wrist = points[LandmarkIndex.WRIST]
+    for knuckle in (
+        LandmarkIndex.INDEX_MCP,
+        LandmarkIndex.MIDDLE_MCP,
+        LandmarkIndex.RING_MCP,
+        LandmarkIndex.PINKY_MCP,
+    ):
+        mutated[knuckle] = (wrist[0], wrist[1], points[knuckle][2])
+    return tuple(mutated)
+
+
+def edge_on_palm(points: Points3, offset_px: float = 0.0) -> Points3:
+    """El nudillo del dedo medio casi sobre la muñeca, el resto de la palma igual.
+
+    Es la palma de canto de la X (ADR 0019, 0020): la escala muñeca → nudillo 9
+    se colapsa pero el tamaño de palma no. `offset_px` lo deja a esa distancia
+    de la muñeca, en `x`.
+    """
+    mutated = list(points)
+    wrist = points[LandmarkIndex.WRIST]
     mutated[LandmarkIndex.MIDDLE_MCP] = (
-        points[LandmarkIndex.WRIST][0],
-        points[LandmarkIndex.WRIST][1],
+        wrist[0] + offset_px,
+        wrist[1],
         points[LandmarkIndex.MIDDLE_MCP][2],
     )
     return tuple(mutated)

@@ -116,11 +116,18 @@ from typing import Final, TypeAlias
 from lsm.config import Config
 from lsm.features import (
     ExtractionRejected,
-    SequenceFeatures,
     extract_sequence_features,
+    pair_velocity,
 )
 from lsm.gaps import GapPolicy, can_bridge, interpolate_frames
-from lsm.types import FrameSlot, Prediction, RawFrame, Sequence, WindowOrigin
+from lsm.types import (
+    FrameSlot,
+    InvalidReason,
+    Prediction,
+    RawFrame,
+    Sequence,
+    WindowOrigin,
+)
 
 #: Versión del contrato de segmentación: la §6 de `docs/feature-spec.md` (cómo se
 #: mide la velocidad) y la máquina de estados de este módulo.
@@ -184,12 +191,11 @@ def window_velocity(
     if len(buffer) < 2:
         return None
     atras = min(window_frames, len(buffer) - 1)
-    features = extract_sequence_features(
-        Sequence(frames=(buffer[-1 - atras], buffer[-1])), config
-    )
-    if not isinstance(features, SequenceFeatures) or not features.velocities:
+    # Sin pasar por el paso 5 (FEATURE_SPEC 3): la mano de canto también se mueve.
+    velocidad = pair_velocity(buffer[-1 - atras], buffer[-1], config)
+    if velocidad is None:
         return None
-    return features.velocities[0] / atras
+    return velocidad / atras
 
 
 def frames_from_ms(ms: float, fps: float) -> int:
@@ -319,6 +325,9 @@ class RejectionReason(StrEnum):
     #: El trazo se cerró, pero más de `dynamic_max_interpolated_fraction` de sus
     #: frames eran interpolados (Bloque 2): se descarta sin clasificar.
     DYNAMIC_TOO_MUCH_INTERPOLATED = "DYNAMIC_TOO_MUCH_INTERPOLATED"
+    #: El tramo estable no tiene ningún frame con la palma de frente
+    #: (FEATURE_SPEC 3, paso 5): no se puede clasificar como estática.
+    PALM_EDGE_ON = "PALM_EDGE_ON"
 
 
 @dataclass(frozen=True, slots=True)
@@ -641,7 +650,13 @@ def run_segmentation(
         window = Sequence(frames=tuple(buffer))
         features = extract_sequence_features(window, config)
 
-        if isinstance(features, ExtractionRejected):
+        # Una ventana con la palma de canto (FEATURE_SPEC 3) no es un fallo
+        # estructural: no se puede clasificar como estática, pero la mano está y
+        # se mueve. Solo la escala degenerada reinicia la máquina.
+        if (
+            isinstance(features, ExtractionRejected)
+            and features.reason is not InvalidReason.PALM_EDGE_ON
+        ):
             yield WindowRejected(
                 frame_index=index, reason=RejectionReason.EXTRACTION_FAILED
             )
@@ -843,6 +858,16 @@ def run_segmentation(
         # Ver `_stable_window` y `docs/feature-spec.md` §6.4.
         window = _stable_window(buffer, stable_run, thresholds)
         window_features = extract_sequence_features(window, config)
+
+        if (
+            isinstance(window_features, ExtractionRejected)
+            and window_features.reason is InvalidReason.PALM_EDGE_ON
+        ):
+            # El tramo estable tiene la palma de canto de principio a fin
+            # (FEATURE_SPEC 3): no hay rotación con qué clasificarlo. No se
+            # reinicia nada; la mano sigue y la máquina espera otra ventana.
+            yield WindowRejected(frame_index=index, reason=RejectionReason.PALM_EDGE_ON)
+            continue
 
         if isinstance(window_features, ExtractionRejected):
             # No debería poder ocurrir —el tramo estable es un sufijo del buffer,

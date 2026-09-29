@@ -57,9 +57,7 @@ from lsm.features import (
     extract_sequence_features,
     mean_displacement,
     palm_size,
-    reference_scale,
     smooth_sequence,
-    translate_to_origin,
 )
 from lsm.types import FrameSlot, InvalidFrame, RawFrame
 from lsm.types import Sequence as FrameSequence
@@ -343,7 +341,7 @@ def velocity_between(
         paso_2 = canonicalize_handedness(
             correct_aspect_and_orientation(f.points(), f.aspect_ratio), f.handedness
         )
-        if reference_scale(translate_to_origin(paso_2)) < MIN_SCALE:
+        if palm_size(paso_2) < MIN_SCALE:
             return None
         geometria.append((paso_2, palm_size(paso_2)))
     (a, s_a), (b, s_b) = geometria

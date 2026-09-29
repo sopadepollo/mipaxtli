@@ -197,8 +197,12 @@ class InvalidReason(StrEnum):
     NO_HAND = "NO_HAND"
     #: `detection_score` por debajo del mínimo configurado.
     LOW_DETECTION_SCORE = "LOW_DETECTION_SCORE"
-    #: Paso 4: la norma de p_9 quedó por debajo de MIN_SCALE.
+    #: Paso 4: el tamaño de palma quedó por debajo de MIN_SCALE.
     SCALE_TOO_SMALL = "SCALE_TOO_SMALL"
+    #: Paso 5 (FEATURE_SPEC_VERSION 3): ningún frame de la secuencia tiene la
+    #: palma lo bastante de frente para fijar la rotación. Es de la secuencia,
+    #: no de un frame: el índice que acompaña al rechazo es 0.
+    PALM_EDGE_ON = "PALM_EDGE_ON"
 
 
 # --------------------------------------------------------------------------- #

@@ -1,7 +1,8 @@
 # ADR 0020 — Escala y rotación de las features con la palma de canto
 
-- **Estado:** **propuesta**, sin implementar. Se revisa antes de regrabar las
-  dinámicas y reconstruir plantillas.
+- **Estado:** pasos 4 y 5 **implementados** el 2026-09-28 como
+  `FEATURE_SPEC_VERSION` 3, con las decisiones de «Lo que se implementó». ρ y δ
+  del Bloque 3 quedan para la versión 4.
 - **Fecha:** 2026-09-28
 - **Datos:** la prueba de reposo ampliada `data/diagnostico/2026-09-28-193646-habitual/`
   (estática, K, X y Q, 10 s cada una) y las 3407 muestras de `data/raw`
@@ -184,3 +185,92 @@ aporta cada cambio, que es lo que pide la ablación del Bloque 3.
    distinta inclinación; sin rotar es más simple, pero deja la orientación de la
    mano en el vector.
 3. **Versiones separadas (3 y 4) o una sola** para pasos 4–5 y el Bloque 3.
+
+## Lo que se implementó (2026-09-28)
+
+Aprobado con tres decisiones:
+
+1. **ρ y δ en una versión aparte** (`FEATURE_SPEC_VERSION` 4), para que la
+   ablación del Bloque 3 los mida por separado. La v3 son solo los pasos 4 y 5.
+2. **Secuencias sin ningún cuadro fiable: se rechazan** (`InvalidReason.PALM_EDGE_ON`),
+   en vez de caer a la línea de nudillos.
+3. **Histéresis** en el umbral de palma de canto, porque hay letras cerca del
+   corte.
+
+### La histéresis, con los números
+
+Cambios de estado fiable / no fiable en las muestras del dataset, y secuencias que
+parpadean (más de 2 cambios):
+
+| letra | s/palma mínimo | corte único 0.5 | 0.45 / 0.55 | 0.5 / 0.6 | **0.45 / 0.6** |
+|---|---|---|---|---|---|
+| X (101) | 0.007 | 506 · 45 | 289 · 36 | 351 · 41 | **234 · 31** |
+| Q (100) | 0.027 | 209 · 27 | 111 · 14 | 171 · 25 | **109 · 14** |
+| Ñ (100) | 0.108 | 145 · 16 | 65 · 7 | 87 · 11 | **51 · 6** |
+| K (121) | 0.181 | 20 · 3 | 16 · 2 | 16 · 2 | **16 · 2** |
+| Z (100) | 0.444 | 2 · 0 | 2 · 0 | 2 · 0 | **2 · 0** |
+
+- **`rotation_off_ratio` = 0.45, `rotation_on_ratio` = 0.6.** La banda más ancha
+  de las medidas reduce a menos de la mitad los cambios de la X, la Q y la Ñ.
+- **Ninguna estática baja de 0.702** en ningún cuadro, así que con cualquiera de
+  estas bandas nunca dejan de ser fiables: su rotación es exactamente la de la v2.
+- **Ninguna muestra del dataset queda sin cuadro fiable** con ninguna banda. La X
+  de la prueba de reposo (máximo 0.467) sí: se rechazaría, como se decidió.
+
+### Cómo se evita que el rechazo rompa el camino dinámico
+
+La máquina de estados extrae el buffer en cada cuadro. Si una ventana de palma de
+canto reiniciara la máquina como una escala degenerada, la X no podría trazarse.
+
+- **`PALM_EDGE_ON` no reinicia la máquina**: solo la escala degenerada lo hace.
+  Una ventana estable de canto no se clasifica
+  (`RejectionReason.PALM_EDGE_ON`) y la máquina sigue; un trazo de canto llega al
+  DTW, que lo rechaza como UNKNOWN.
+- **La velocidad no pasa por el paso 5**: `features.pair_velocity` hace el
+  suavizado, los pasos 1 a 3 y el tamaño de palma, igual que antes. La mano de
+  canto sigue moviéndose aunque su secuencia no se pueda clasificar.
+- **`mean_scale_px`** (distancia a la cámara) sigue con muñeca → nudillo 9
+  (`features.reference_scales`), con la que se calibró `Distance`.
+
+### Golden
+
+Se regeneraron. Casos nuevos: `palm_edge_on` (un frame de canto: `PALM_EDGE_ON`),
+`rotation_hysteresis` (s/palma ≈ 1, 0.2, 0.5, 0.5, 0.9: el 0.5 conserva el estado
+no fiable y sostiene el ángulo) y `velocity_foreshortened_palm`, que ahora empieza
+con un cuadro de frente. `scale_just_below_minimum` y `collapsed_scale` colapsan la
+palma entera: mover solo el nudillo 9 ya no es escala degenerada, es palma de canto
+(`synthetic.edge_on_palm`).
+
+### Verificación
+
+Se reentrenaron los dos modelos (`lsm-train --sin-sintetico`); los v2 se rechazan
+al cargar.
+
+**Eval de Fase 2 (LOSO):** mejora.
+
+| | v2 | **v3** |
+|---|---|---|
+| accuracy | 0.9261 | **0.9288** |
+| macro | 0.9201 | **0.9240** |
+| UNKNOWN | 0.0573 | 0.0549 |
+| mejor punto del barrido | 0.9578 | 0.9602 |
+
+Por letra solo cambian S (62 → 68 de 80) y W (92 → 93 de 102). **M y N**, las que
+más se reescalan (s/palma 0.80), quedan exactamente igual: 103/114 y 89/92. El
+criterio era no caer más de un punto.
+
+**Eval y replay de Fase 5:** la segmentación no cambia —611 trazos enteros, 11
+partidos, 0 perdidos, como en la v2— y el clasificador dinámico mejora.
+
+| | v2 | **v3** |
+|---|---|---|
+| DTW fuera de línea (LOSO): accuracy | 0.7926 | **0.8087** |
+| macro / UNKNOWN | 0.7896 / 0.0177 | **0.8059 / 0.0000** |
+| replay: dinámicas acertadas | 248 | **270** |
+| Ñ / Q / Z acertadas | 27 / 11 / 46 | **45 / 14 / 47** |
+| J / K / X acertadas | 92 / 70 / 2 | 92 / 70 / 2 |
+| replay: estáticas, 1.ª letra correcta | 0.927 | 0.929 |
+
+La mejora cae donde el escorzo pesaba: la Ñ (s/palma p10 0.59) pasa de 27 a 45.
+La X sigue en 2 de 101: sus plantillas son del dataset viejo y, como se midió, la
+X que se ejecuta hoy no es la grabada.

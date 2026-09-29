@@ -40,6 +40,15 @@ features:
   # exporta el peso con el que se entrenó, y el navegador tiene que usar ese.
   trajectory_weight: 1.0
 
+  # (FEATURE_SPEC 3, ADR 0020) Paso 5 con la palma de canto. Un frame deja de
+  # ser fiable para la rotación cuando s/palma baja de off y vuelve a serlo al
+  # subir a on; mientras no es fiable, se sostiene el ángulo del último fiable.
+  # Con histéresis: con un corte único en 0.5, X, Q y Ñ cambiaban de estado
+  # 506, 209 y 145 veces en el dataset; con 0.45/0.6, 234, 109 y 51. Ninguna
+  # estática baja de 0.702.
+  rotation_off_ratio: 0.45
+  rotation_on_ratio: 0.6
+
 # Clasificador de letras estáticas por centroides (ARQUITECTURA.md §4.3).
 #
 # Los tres valores viajan DENTRO del modelo exportado, no solo aquí: la

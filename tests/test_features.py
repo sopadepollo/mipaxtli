@@ -99,12 +99,15 @@ def test_el_vector_tiene_42_componentes_y_lleva_la_version_del_spec() -> None:
     assert isinstance(outcome, SequenceFeatures)
     assert len(outcome.static.shape) == NUM_FEATURES
     assert outcome.static.shape.spec_version == FEATURE_SPEC_VERSION
-    assert FEATURE_SPEC_VERSION == 2
+    assert FEATURE_SPEC_VERSION == 3
 
 
 def test_tras_el_pipeline_la_muneca_queda_en_el_origen_y_p9_en_0_1() -> None:
     """Postcondición de los pasos 3 y 5 del §1, y razón de que se conserven
-    componentes constantes en el vector: mantienen alineada la numeración."""
+    componentes constantes en el vector: mantienen alineada la numeración.
+
+    Desde FEATURE_SPEC 3 `p_9 = (0, s/m)`: vale `(0, 1)` aquí porque en la mano
+    canónica muñeca → nudillo 9 es el segmento más largo de la palma (`m = s`)."""
     values = features_of(base_sequence())
 
     wrist = 2 * int(LandmarkIndex.WRIST)
@@ -770,17 +773,52 @@ def test_el_tamano_de_palma_nunca_es_menor_que_la_escala_del_paso_4() -> None:
 def test_la_velocidad_no_se_dispara_con_la_palma_de_canto() -> None:
     """El mismo desplazamiento en píxeles da casi la misma velocidad aunque el
     nudillo del medio quede sobre la muñeca (SEGMENTATION_SPEC_VERSION 6, ADR
-    0019). Con la escala del paso 4 como divisor salía ~6 veces mayor."""
-    offsets = ((0.0, 0.0), (20.0, 0.0), (40.0, 0.0))
-    normal = extract_sequence_features(
-        moving_sequence(canonical_hand(), offsets), CONFIG
-    )
-    de_canto = extract_sequence_features(
-        moving_sequence(_palma_de_canto(canonical_hand()), offsets), CONFIG
-    )
-    assert isinstance(normal, SequenceFeatures)
-    assert isinstance(de_canto, SequenceFeatures)
+    0019). Con la escala del paso 4 como divisor salía ~6 veces mayor. Se mide
+    con `pair_velocity`, que no pasa por el paso 5: una secuencia entera de
+    canto no se puede extraer (v3), pero sí tiene velocidad."""
+    from lsm.features import pair_velocity
 
-    for a, b in zip(normal.velocities, de_canto.velocities, strict=True):
-        assert a == pytest.approx(b, rel=0.05)
-    assert normal.velocities[0] > 0.0
+    offsets = ((0.0, 0.0), (20.0, 0.0))
+    normal = moving_sequence(canonical_hand(), offsets).frames
+    de_canto = moving_sequence(_palma_de_canto(canonical_hand()), offsets).frames
+
+    v_normal = pair_velocity(normal[0], normal[1], CONFIG)
+    v_canto = pair_velocity(de_canto[0], de_canto[1], CONFIG)
+
+    assert v_normal is not None
+    assert v_normal > 0.0
+    assert v_canto == pytest.approx(v_normal, rel=0.05)
+
+
+def test_la_velocidad_de_un_par_es_la_de_la_tuberia() -> None:
+    from lsm.features import pair_velocity
+
+    frames = moving_sequence(canonical_hand(), ((0.0, 0.0), (20.0, 5.0))).frames
+    outcome = extract_sequence_features(Sequence(frames=frames), CONFIG)
+
+    assert isinstance(outcome, SequenceFeatures)
+    assert pair_velocity(frames[0], frames[1], CONFIG) == pytest.approx(
+        outcome.velocities[0]
+    )
+
+
+def test_una_secuencia_entera_de_canto_se_rechaza() -> None:
+    """Paso 5 (v3): sin ningún frame fiable no hay rotación que aplicar."""
+    frames = still_sequence(_palma_de_canto(canonical_hand()), length=4).frames
+
+    outcome = extract_sequence_features(Sequence(frames=frames), CONFIG)
+
+    assert isinstance(outcome, ExtractionRejected)
+    assert outcome.reason is InvalidReason.PALM_EDGE_ON
+
+
+def test_los_frames_de_canto_sostienen_el_angulo_del_ultimo_fiable() -> None:
+    """Paso 5 (v3): un frame de canto entre dos de frente se gira con el ángulo
+    del anterior; con su propio ángulo —ruido— su vector saldría girado."""
+    from lsm.features import held_angles, rotation_reliability
+
+    fiables = rotation_reliability((1.0, 0.2, 0.5, 0.9, 0.5), 0.45, 0.6)
+    assert fiables == (True, False, False, True, True)
+    assert held_angles((0.1, 2.0, 3.0, 0.4, 0.5), fiables) == (0.1, 0.1, 0.1, 0.4, 0.5)
+    assert held_angles((1.0, 2.0), (False, True)) == (2.0, 2.0)
+    assert held_angles((1.0, 2.0), (False, False)) is None

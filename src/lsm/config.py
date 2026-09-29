@@ -71,6 +71,27 @@ class FeaturesConfig(_Section):
     #: declaran en su bloque `config`.
     trajectory_weight: float = Field(default=1.0, ge=0.0, le=100.0)
 
+    #: Paso 5 (FEATURE_SPEC_VERSION 3, ADR 0020): un frame deja de ser fiable
+    #: para la rotación cuando `s / m` —escala muñeca → nudillo 9 entre tamaño
+    #: de palma— baja de `rotation_off_ratio`, y vuelve a serlo cuando sube a
+    #: `rotation_on_ratio`. Con histéresis: con un solo corte en 0.5 la X, la Q
+    #: y la Ñ del dataset cambiaban de estado 506, 209 y 145 veces; con
+    #: 0.45 / 0.6, 234, 109 y 51. Ninguna estática baja de 0.702, así que a
+    #: ellas no les toca nunca.
+    rotation_off_ratio: float = Field(default=0.45, gt=0.0, le=1.0)
+    rotation_on_ratio: float = Field(default=0.6, gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _histeresis(self) -> FeaturesConfig:
+        if self.rotation_on_ratio < self.rotation_off_ratio:
+            msg = (
+                f"rotation_on_ratio ({self.rotation_on_ratio}) es menor que "
+                f"rotation_off_ratio ({self.rotation_off_ratio}): la histéresis "
+                "necesita encender por encima de donde apaga"
+            )
+            raise ValueError(msg)
+        return self
+
 
 class StaticKnnConfig(_Section):
     """Clasificador de letras estáticas por centroides (`ARQUITECTURA.md` §4.3).

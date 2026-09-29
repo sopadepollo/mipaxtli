@@ -179,11 +179,14 @@ def test_hay_un_caso_degenerado_con_centinela_explicito(
 ) -> None:
     invalid = [case for case in document["cases"] if case["expected_features"] is None]
 
-    assert invalid
-    assert all(
-        case["expected_invalid_reason"] == str(InvalidReason.SCALE_TOO_SMALL)
-        for case in invalid
-    )
+    # Desde FEATURE_SPEC 3 hay dos rechazos y los dos tienen que estar cubiertos:
+    # la escala degenerada (paso 4) y la palma de canto sin ningún frame fiable
+    # (paso 5).
+    motivos = {case["expected_invalid_reason"] for case in invalid}
+    assert motivos == {
+        str(InvalidReason.SCALE_TOO_SMALL),
+        str(InvalidReason.PALM_EDGE_ON),
+    }
 
 
 def test_el_control_negativo_no_coincide_con_el_caso_base(
