@@ -39,7 +39,12 @@ from lsm.measurements import (
     window_speeds_per_s,
 )
 from lsm.one_euro import OneEuroFilter, OneEuroParams
-from lsm.plausibility import ImplausibleKind, PlausibilityParams, filter_stream
+from lsm.plausibility import (
+    ImplausibleKind,
+    PlausibilityParams,
+    filter_stream,
+    is_implausible,
+)
 from lsm.preprocessing import NotReconstructed, Preprocessing, reconstruct
 from lsm.timing import frame_times_ms
 from lsm.tracking_diagnostics import REST_PREFIX
@@ -754,6 +759,106 @@ def _cmd_one_euro(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Las letras del barrido de umbrales de MediaPipe (Paso 5).
+_LETRAS_MEDIAPIPE = ("X", "ENIE", "Q")
+
+
+def _cmd_mediapipe(args: argparse.Namespace) -> int:
+    """Paso 5: cada sesión de diagnóstico, agrupada por los umbrales del detector
+    con que se grabó, y por letra: detección durante el trazo, fracción que
+    invalida la plausibilidad y trazos completos."""
+    config = load_config(args.config)
+    plaus = PlausibilityParams.from_config(config)
+    #: (presencia, tracking, letra) → [cuadros del trazo, con mano,
+    #: implausibles, intentos, enteros, sesiones]
+    tabla: dict[tuple[str, str, str], list[int]] = {}
+    for carpeta in iter_diagnostic_folders(args.diagnosticos):
+        sesion = load_diagnostic_session(carpeta)
+        meta = sesion.metadata
+        clave_umbral = (
+            str(meta.get("hands.min_hand_presence_confidence", "?")),
+            str(meta.get("hands.min_tracking_confidence", "?")),
+        )
+        registros = sesion.records
+        prompts = [r.prompt for r in registros]
+        tramos = attempt_bounds(prompts, [r.repetition for r in registros])
+        fases = phases_from_states(
+            [r.state for r in registros],
+            [r.wall_ms for r in registros],
+            tramos,
+            config.diagnostics.pre_candidate_ms,
+        )
+        filtrado = tuple(filter_stream(sesion.stream, plaus, 30.0))
+        vistas: set[str] = set()
+        for inicio, fin in tramos:
+            letra = prompts[inicio]
+            if letra not in _LETRAS_MEDIAPIPE:
+                continue
+            fila = tabla.setdefault((*clave_umbral, letra), [0] * 6)
+            if letra not in vistas:
+                fila[5] += 1
+                vistas.add(letra)
+            for i in range(inicio, fin):
+                if fases[i] is not Phase.DURANTE:
+                    continue
+                fila[0] += 1
+                if isinstance(sesion.stream[i], RawFrame):
+                    fila[1] += 1
+                    if is_implausible(filtrado[i]):
+                        fila[2] += 1
+            trazos = sum(
+                1
+                for e in sesion.events
+                if e.kind == "WindowDynamic" and inicio <= e.frame_index < fin
+            )
+            fila[3] += 1
+            fila[4] += int(trazos == 1)
+    filas = [
+        [
+            presencia,
+            tracking,
+            letra,
+            str(n_sesiones),
+            f"{con_mano / cuadros:.3f}" if cuadros else "—",
+            f"{implausibles / con_mano:.4f}" if con_mano else "—",
+            f"{enteros} / {intentos}",
+        ]
+        for (presencia, tracking, letra), (
+            cuadros,
+            con_mano,
+            implausibles,
+            intentos,
+            enteros,
+            n_sesiones,
+        ) in sorted(tabla.items())
+    ]
+    partes = [
+        "# Umbrales de MediaPipe (Paso 5)",
+        "",
+        "Cada sesión de `lsm-demo diagnosticar`, agrupada por "
+        "`min_hand_presence_confidence` × `min_tracking_confidence` (de sus "
+        "metadatos). **detección**: fracción de cuadros con mano durante el trazo; "
+        "**implausibles**: de esos, los que invalida la plausibilidad de "
+        "`config.yaml`; **enteros**: intentos con exactamente un trazo entregado. "
+        "El valor bueno sube la detección sin que los implausibles suban mucho.",
+        "",
+        *_tabla(
+            [
+                "presencia",
+                "tracking",
+                "letra",
+                "sesiones",
+                "detección",
+                "implausibles",
+                "enteros",
+            ],
+            filas,
+        ),
+    ]
+    _escribir("\n".join(partes) + "\n", args.salida)
+    return 0
+
+
 def medir(
     grabaciones: list[Recording],
     tally: Tally,
@@ -830,6 +935,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--d-cutoff", type=float, default=1.0, dest="d_cutoff", help="en Hz"
     )
     one_euro.set_defaults(func=_cmd_one_euro)
+    mediapipe = subcomandos.add_parser(
+        "mediapipe",
+        help=(
+            "Paso 5: las sesiones de diagnóstico por umbrales del detector: "
+            "detección, implausibles y trazos enteros en X, Ñ y Q"
+        ),
+    )
+    mediapipe.set_defaults(func=_cmd_mediapipe)
     return parser
 
 

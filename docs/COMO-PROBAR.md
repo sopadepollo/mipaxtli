@@ -601,6 +601,28 @@ Desde Windows, como la demo en vivo (ver 6.1):
 & $HOME\lsm-win\Scripts\python.exe -m lsm.cli.demo diagnosticar --iluminacion habitual
 ```
 
+**Barrido de umbrales de MediaPipe** (Paso 5, ADR 0030). `--presencia` y
+`--tracking` cambian `hands.min_hand_presence_confidence` y
+`hands.min_tracking_confidence` para esa sesión, y quedan en los metadatos del
+reporte junto con la plausibilidad, el relleno y el One Euro. Una sesión por par,
+misma luz, solo X, Ñ y Q no se puede elegir: la guía pide las ocho, así que
+`--repeticiones 5 --sin-reposo` para que quepa:
+
+```powershell
+foreach ($p in @("0.5 0.5", "0.4 0.35", "0.3 0.2")) {
+  $pres, $trk = $p.Split(" ")
+  & $HOME\lsm-win\Scripts\python.exe -m lsm.cli.demo diagnosticar --mano derecha `
+    --iluminacion habitual --repeticiones 5 --sin-reposo --presencia $pres --tracking $trk
+}
+```
+
+Después, sin cámara, la tabla por par y letra (detección durante el trazo,
+implausibles, trazos enteros):
+
+```bash
+uv run lsm-medir --salida docs/mediciones/mediapipe.md mediapipe
+```
+
 ### 6.3 Medir la cámara: formato y resolución 📷
 
 Para encontrar la configuración que entrega más cuadros **nuevos** por segundo

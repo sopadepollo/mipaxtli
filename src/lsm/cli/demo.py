@@ -48,6 +48,7 @@ from lsm.io.dataset import iter_sample_paths, now, read_sample
 from lsm.io.hands import HandDetector, build_detector, dump_frame_stream
 from lsm.io.preview import DemoHudState
 from lsm.one_euro import OneEuroFilter, OneEuroParams
+from lsm.preprocessing import preprocessing_record
 from lsm.segmentation import (
     EvidenceAccumulated,
     FrameThresholds,
@@ -333,6 +334,12 @@ def escribir_diagnostico(
         "capture.camera_fps (pedidos)": config.capture.camera_fps,
         "pre_candidate_ms": config.diagnostics.pre_candidate_ms,
         "capture.exposure": config.capture.exposure,
+        # Plausibilidad, relleno y One Euro de la sesión (ADR 0027 a 0029): el
+        # reporte de un barrido tiene que decir con qué red se midió.
+        **{
+            f"preprocesado.{clave}": valor
+            for clave, valor in preprocessing_record(config).items()
+        },
         **extra,
     }
     if diagnostico.guiada is not None:
@@ -581,6 +588,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="repeticiones por letra (por defecto: diagnostics.repetitions_per_letter)",
     )
     guiado.add_argument(
+        "--presencia",
+        type=float,
+        default=None,
+        help=(
+            "hands.min_hand_presence_confidence para esta sesión (barrido del "
+            "Paso 5, ADR 0030); queda en los metadatos del reporte"
+        ),
+    )
+    guiado.add_argument(
+        "--tracking",
+        type=float,
+        default=None,
+        help="hands.min_tracking_confidence para esta sesión (barrido del Paso 5)",
+    )
+    guiado.add_argument(
         "--sin-reposo",
         action="store_true",
         dest="sin_reposo",
@@ -656,9 +678,28 @@ def con_one_euro(config: Config, estado: str | None, parametros: str | None) -> 
     return Config.model_validate(crudo)
 
 
+def con_umbrales_de_mediapipe(
+    config: Config, presencia: float | None, tracking: float | None
+) -> Config:
+    """`config` con los umbrales del detector de la línea de comandos (Paso 5)."""
+    cambios: dict[str, float] = {}
+    if presencia is not None:
+        cambios["min_hand_presence_confidence"] = presencia
+    if tracking is not None:
+        cambios["min_tracking_confidence"] = tracking
+    if not cambios:
+        return config
+    crudo = config.model_dump(mode="json")
+    crudo["hands"] |= cambios
+    return Config.model_validate(crudo)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     config = con_one_euro(load_config(args.config), args.one_euro, args.one_euro_params)
+    config = con_umbrales_de_mediapipe(
+        config, getattr(args, "presencia", None), getattr(args, "tracking", None)
+    )
 
     medida = _medida_pedida(args, config)
     if isinstance(medida, str):

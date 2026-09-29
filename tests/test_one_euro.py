@@ -130,3 +130,15 @@ def test_la_demo_puede_encenderlo_con_otros_parametros() -> None:
     assert (config.smoothing.min_cutoff, config.smoothing.beta) == (0.5, 1.0)
     assert config.smoothing.d_cutoff == 2.0
     assert con_one_euro(Config(), None, None) == Config()
+
+
+def test_diagnosticar_puede_cambiar_los_umbrales_de_mediapipe() -> None:
+    """Paso 5 (ADR 0030): cada sesión del barrido con sus umbrales, que quedan
+    en los metadatos del reporte."""
+    from lsm.cli.demo import con_umbrales_de_mediapipe
+
+    config = con_umbrales_de_mediapipe(Config(), 0.3, 0.2)
+
+    assert config.hands.min_hand_presence_confidence == 0.3
+    assert config.hands.min_tracking_confidence == 0.2
+    assert con_umbrales_de_mediapipe(Config(), None, None) == Config()
