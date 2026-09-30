@@ -662,6 +662,29 @@ def _build_parser() -> argparse.ArgumentParser:
     guiado.add_argument(
         "--mano", choices=sorted(MANOS), default=argparse.SUPPRESS, help=AYUDA_MANO
     )
+    # Lo mismo con las opciones del One Euro: `diagnosticar --one-euro on` tiene
+    # que funcionar igual que `--one-euro on diagnosticar`.
+    guiado.add_argument(
+        "--one-euro",
+        choices=("on", "off"),
+        default=argparse.SUPPRESS,
+        dest="one_euro",
+        help="activa o desactiva el One Euro para esta sesión",
+    )
+    guiado.add_argument(
+        "--one-euro-params",
+        default=argparse.SUPPRESS,
+        dest="one_euro_params",
+        metavar="MIN_CUTOFF,BETA,D_CUTOFF",
+        help="los tres parámetros del One Euro para esta sesión",
+    )
+    guiado.add_argument(
+        "--comparar-one-euro",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        dest="comparar_one_euro",
+        help="dibuja el esqueleto crudo (gris) y el filtrado (color)",
+    )
     return parser
 
 

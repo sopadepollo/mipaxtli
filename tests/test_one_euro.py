@@ -164,3 +164,39 @@ def test_diagnosticar_puede_pedir_solo_algunas_letras() -> None:
         ["diagnosticar", "--iluminacion", "habitual", "--letras", "A"]
     )
     assert isinstance(_diagnostico_pedido(malo, Config()), str)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [
+            "diagnosticar",
+            "--iluminacion",
+            "h",
+            "--one-euro",
+            "on",
+            "--one-euro-params",
+            "0.5,1,2",
+            "--comparar-one-euro",
+        ],
+        [
+            "--one-euro",
+            "on",
+            "--one-euro-params",
+            "0.5,1,2",
+            "--comparar-one-euro",
+            "diagnosticar",
+            "--iluminacion",
+            "h",
+        ],
+    ],
+)
+def test_las_opciones_del_one_euro_valen_antes_y_despues_de_diagnosticar(
+    argv: list[str],
+) -> None:
+    from lsm.cli.demo import _build_parser
+
+    args = _build_parser().parse_args(argv)
+
+    assert (args.one_euro, args.one_euro_params) == ("on", "0.5,1,2")
+    assert args.comparar_one_euro is True
