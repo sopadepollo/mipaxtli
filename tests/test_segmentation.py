@@ -1039,6 +1039,19 @@ def test_un_transito_largo_rechazado_deja_paso_a_la_estatica() -> None:
     assert emision.origin is WindowOrigin.STABLE
 
 
+def _cerrojo(**segmentacion: object) -> Config:
+    return Config.model_validate(
+        {
+            "plausibility": {"enabled": False},
+            "smoothing": {"enabled": False},
+            "segmentation": {
+                **DYNAMIC_CONFIG.segmentation.model_dump(),
+                **segmentacion,
+            },
+        }
+    )
+
+
 def test_tras_un_trazo_rechazado_por_margen_la_pose_final_no_se_emite() -> None:
     """ADR 0033: el DTW dijo J con poco margen y la rechazó. La mano queda en la
     pose de la I; es preferible no escribir nada a escribir I. Otra letra sí
@@ -1047,26 +1060,22 @@ def test_tras_un_trazo_rechazado_por_margen_la_pose_final_no_se_emite() -> None:
     flujo = [*viaje, *quieta_tras(viaje, 10)]
     j_dudosa = Prediction(label="J", confidence=0.55)
     i_segura = Prediction(label="I", confidence=0.95)
+    # Sin mínimo de largo: aquí se prueba el cerrojo, no la puerta de duración.
+    config = _cerrojo(final_pose_lock_min_stroke_ms=0.0)
 
-    con_cerrojo = run_dynamic(flujo, PorOrigen(stable=i_segura, dynamic=j_dudosa))
+    con_cerrojo = run_dynamic(
+        flujo, PorOrigen(stable=i_segura, dynamic=j_dudosa), config
+    )
     sin_cerrojo = run_dynamic(
         flujo,
         PorOrigen(stable=i_segura, dynamic=j_dudosa),
-        Config.model_validate(
-            {
-                "plausibility": {"enabled": False},
-                "smoothing": {"enabled": False},
-                "segmentation": {
-                    **DYNAMIC_CONFIG.segmentation.model_dump(),
-                    "rejected_stroke_final_poses": {},
-                },
-            }
-        ),
+        _cerrojo(rejected_stroke_final_poses={}),
     )
-    otra_letra = run_dynamic(flujo, PorOrigen(dynamic=j_dudosa))
+    otra_letra = run_dynamic(flujo, PorOrigen(dynamic=j_dudosa), config)
     tras_rebote = run_dynamic(
         [*flujo, *trazo((10.0, 0.0, 2), start=muneca_px(viaje)), *still_frames(12)],
         PorOrigen(stable=i_segura, dynamic=j_dudosa),
+        config,
     )
 
     assert emitted(con_cerrojo) == []
@@ -1076,6 +1085,28 @@ def test_tras_un_trazo_rechazado_por_margen_la_pose_final_no_se_emite() -> None:
     assert emitted(sin_cerrojo) == ["I"]
     assert emitted(otra_letra) == ["A"]
     assert emitted(tras_rebote) == ["I"]
+
+
+def test_un_trazo_rechazado_corto_no_pone_el_cerrojo() -> None:
+    """ADR 0033: colocar la mano en N es un trazo corto que el DTW lee como una
+    Ñ dudosa. Por debajo de `final_pose_lock_min_stroke_ms` no es plausible que
+    fuera la dinámica, y la estática de llegada sale."""
+    viaje = trazo((10.0, 0.0, DYNAMIC_UMBRALES.motion_min_frames + 3))
+    flujo = [*viaje, *quieta_tras(viaje, 10)]
+    clasificador = PorOrigen(
+        stable=Prediction(label="N", confidence=0.95),
+        dynamic=Prediction(label="ENIE", confidence=0.55),
+    )
+
+    largo = run_dynamic(
+        flujo, clasificador, _cerrojo(final_pose_lock_min_stroke_ms=0.0)
+    )
+    corto = run_dynamic(
+        flujo, clasificador, _cerrojo(final_pose_lock_min_stroke_ms=_ms(100))
+    )
+
+    assert emitted(largo) == []
+    assert emitted(corto) == ["N"]
 
 
 def test_la_pose_final_de_una_dinamica_no_se_emite_como_estatica() -> None:

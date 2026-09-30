@@ -351,6 +351,10 @@ segmentation:
     J: I
     K: P
     ENIE: "N"
+  # (ADR 0033) ...y solo si el trazo rechazado duró al menos esto. Acomodar la
+  # mano en N dura 550-850 ms y el DTW lo lee como una Ñ dudosa; las dinámicas
+  # reales rechazadas duran más. 0: tras cualquier trazo rechazado por margen.
+  final_pose_lock_min_stroke_ms: 1000.0
 
   # Candidato que dura más que esto se descarta sin clasificar. Las muestras
   # grabadas duran 3 s de trazo continuo (tope de captura), así que el límite

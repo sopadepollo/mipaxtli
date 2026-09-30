@@ -1027,7 +1027,10 @@ siendo el mismo trazo):
   la mano: esa ventana se rechaza con `FINAL_POSE_OF_REJECTED_STROKE` (ADR
   0033). Es preferible no escribir nada a escribir I. Cualquier otra letra sale
   como antes, en el frame siguiente: la de llegada de un tránsito largo tiene
-  que salir. Un trazo UNKNOWN o descartado sin clasificar no pone el cerrojo.
+  que salir. Un trazo UNKNOWN o descartado sin clasificar no pone el cerrojo,
+  y tampoco uno más corto que `final_pose_lock_min_stroke_ms` (convertido a
+  cuadros con la tasa congelada, §6.5; se compara el número de cuadros del trazo
+  con `≥`): colocar la mano en N no es una Ñ.
   Entra con el bloque de tolerancia en la versión siguiente de segmentación.
 - La emisión dinámica **no es progresiva**: se clasifica una vez, y se emite si
   la confianza alcanza `min_confidence`.

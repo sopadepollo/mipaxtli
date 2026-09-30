@@ -406,6 +406,13 @@ class SegmentationConfig(_Section):
         default_factory=lambda: {"J": "I", "K": "P", "ENIE": "N"}
     )
 
+    #: El cerrojo de la pose final solo se pone si el trazo rechazado duró al
+    #: menos esto, en milisegundos (ADR 0033, «Solo trazos plausibles»). Colocar
+    #: la mano en N dura 550–850 ms y el DTW lo lee como una Ñ dudosa; una Ñ,
+    #: una J o una K reales rechazadas duran más (medido en los diagnósticos).
+    #: 0 lo pone tras cualquier trazo rechazado por margen.
+    final_pose_lock_min_stroke_ms: float = Field(default=1000.0, ge=0.0, le=10_000.0)
+
     #: Duración máxima de un candidato dinámico, en milisegundos, contada desde
     #: el primer frame del trazo. Por encima se descarta sin clasificar y se
     #: vuelve a TRACKING: nadie tarda eso en trazar una letra, y lo que sí dura

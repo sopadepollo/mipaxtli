@@ -83,3 +83,51 @@ K 53, Ñ 49, Q 31, Z 103 aciertos en los dos casos).
 - Riesgo: «JI» (*jirafa, jinete*) con la J rechazada sale sin nada donde antes
   salía «I»; la I propia necesita un movimiento después del trazo. Con la J
   emitida ya pasaba lo mismo (cerrojo de la dinámica emitida).
+
+## Solo trazos plausibles (2026-09-30)
+
+En el diagnóstico `2026-09-30-090353` (A, N, I, J, Y) la N se escribió en **1 de
+10** intentos: el cerrojo la bloqueó 30 veces. Colocar la mano en N es un
+movimiento corto con la forma de la N, y el DTW lo lee como una Ñ dudosa; se
+rechaza por margen y bloquea su pose final, que es justo la N pedida. En 183332,
+en cambio, la regla Ñ → N evita 3 N espurias tras una Ñ. Las dos sesiones se
+contradicen, así que el cerrojo se restringe a los trazos que **pudieron ser**
+la dinámica, en vez de quitar la regla.
+
+**Qué separa un acomodo de una dinámica real.** Todos los trazos rechazados por
+margen de los 22 diagnósticos (912 trazos), con la plantilla más cercana en una
+dinámica con regla:
+
+| | reales rechazadas | acomodos (letra pedida estática) |
+|---|---|---|
+| Ñ: duración | p50 1795 ms; 35 de 38 ≥ 850 ms | 7 en N: **552–843 ms** |
+| Ñ: longitud de arco | p50 2.35, desde 0.76 | 1.6–2.4 (se solapa) |
+| Ñ: giro de la palma (ρ) | p50 1.17 rad, desde 0.20 | 0.09–0.73 (se solapa) |
+| Ñ: distancia DTW d1 | p50 2.77, desde 1.11 | 1.28–2.25 (se solapa) |
+| J: duración | p50 2352 ms; 52 de 62 ≥ 700 ms | 2 en I: 457 y 1181 ms |
+
+Solo la **duración** separa: arco, giro y distancia se solapan. Las J y K reales
+más cortas son de las sesiones del 26 y 27, a baja tasa (trazos de 4 a 8
+cuadros). No hay acomodos a P en los datos (ninguna sesión pidió la P).
+
+**Decisión:** `segmentation.final_pose_lock_min_stroke_ms` = **1000**, para las
+tres reglas. El cerrojo solo se pone si el trazo rechazado duró al menos eso; 0
+lo pone siempre. Entre 700 y 1000 ms los resultados son idénticos en las
+sesiones medidas; 1000 deja más margen sobre el acomodo más largo (843 ms).
+
+Replay con el modelo actual (intentos con la letra escrita; entre paréntesis, las
+estáticas espurias):
+
+| sesión | sin cerrojo | cerrojo sin mínimo | cerrojo ≥ 1000 ms |
+|---|---|---|---|
+| 090353: N | 5 | 1 | **5** |
+| 090353: I | 10 | 9 | 10 |
+| 090353: J (I espurias) | 2 (6) | 2 (1) | 2 (1) |
+| 183332: Ñ (N espurias) | 9 (5) | 9 (2) | 9 (**2**) |
+| 184727: Ñ / Q / X | 10 / 9 / 6 | igual | igual |
+| 215749: J (I espurias) | 10 (5) | 10 (3) | 10 (4) |
+| 191843: J (I espurias) | 3 (8) | 3 (1) | 3 (1) |
+
+Se recuperan 4 N en 090353 sin que reaparezcan las N espurias de 183332. El
+coste es una I en 215749: una J de 544 ms, más corta que el mínimo.
+

@@ -263,6 +263,9 @@ class FrameThresholds:
     closing_window_frames: int
     #: La espera máxima tras un `DYNAMIC_TOO_LONG` (v6, `motion_exhausted_ms`).
     motion_exhausted_frames: int
+    #: Largo mínimo del trazo rechazado para poner el cerrojo de la pose final
+    #: (ADR 0033, `final_pose_lock_min_stroke_ms`). 0 si no hay mínimo.
+    final_pose_lock_min_frames: int = 0
 
     @classmethod
     def from_config(cls, config: Config, fps: float) -> FrameThresholds:
@@ -287,6 +290,11 @@ class FrameThresholds:
             velocity_window_frames=frames_from_ms(settings.velocity_window_ms, fps),
             closing_window_frames=frames_from_ms(settings.closing_window_ms, fps),
             motion_exhausted_frames=frames_from_ms(settings.motion_exhausted_ms, fps),
+            final_pose_lock_min_frames=(
+                frames_from_ms(settings.final_pose_lock_min_stroke_ms, fps)
+                if settings.final_pose_lock_min_stroke_ms > 0.0
+                else 0
+            ),
         )
 
 
@@ -956,7 +964,12 @@ def run_segmentation(
                 yield WindowRejected(
                     frame_index=index, reason=RejectionReason.LOW_CONFIDENCE
                 )
-                if not prediction.is_unknown:
+                # Solo si el trazo pudo ser esa dinámica: colocar la mano en N
+                # es un trazo corto que el DTW lee como una Ñ dudosa.
+                if (
+                    not prediction.is_unknown
+                    and len(trazo) >= thresholds.final_pose_lock_min_frames
+                ):
                     final_pose_lock = settings.rejected_stroke_final_poses.get(
                         prediction.label, ""
                     )
