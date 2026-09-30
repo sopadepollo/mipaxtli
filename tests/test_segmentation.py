@@ -932,7 +932,7 @@ def test_sin_la_suspension_el_freno_si_se_leeria_como_estatica() -> None:
                 **DYNAMIC_CONFIG.segmentation.model_dump(),
                 "motion_min_ms": _ms(200),
                 "motion_max_ms": _ms(400),
-            }
+            },
         }
     )
     pausa = DYNAMIC_UMBRALES.stable_frames + 1
@@ -1191,7 +1191,7 @@ def test_el_cierre_mira_su_propia_ventana_y_el_resto_la_suya() -> None:
             "segmentation": {
                 **DYNAMIC_CONFIG.segmentation.model_dump(),
                 "closing_window_ms": _ms(1),
-            }
+            },
         }
     )
     larga = Config.model_validate(
@@ -1201,7 +1201,7 @@ def test_el_cierre_mira_su_propia_ventana_y_el_resto_la_suya() -> None:
                 **DYNAMIC_CONFIG.segmentation.model_dump(),
                 "velocity_window_ms": _ms(1),
                 "closing_window_ms": _ms(3),
-            }
+            },
         }
     )
     frames = trazo((10.0, 0.0, 8))
