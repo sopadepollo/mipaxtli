@@ -233,6 +233,9 @@ def test_cada_caso_de_secuencia_reproduce_su_salida(document: dict[str, Any]) ->
                 outcome.trajectory.points, expected_run["trajectory"], strict=True
             ):
                 assert_vectors_close(point, expected_point, tolerance, case["id"])
+            assert_vectors_close(
+                outcome.trajectory.depth, expected_run["depth"], tolerance, case["id"]
+            )
 
             # §6: el contrato de segmentación viaja en el mismo archivo.
             assert_vectors_close(
@@ -257,7 +260,7 @@ def test_cada_caso_de_secuencia_reproduce_su_salida(document: dict[str, Any]) ->
                 assert_vectors_close(row, expected_row, tolerance, case["id"])
 
 
-def test_las_filas_dinamicas_miden_24_por_44(document: dict[str, Any]) -> None:
+def test_las_filas_dinamicas_miden_24_por_45(document: dict[str, Any]) -> None:
     rows = [
         run["dynamic_rows"]
         for case in document["sequence_cases"]
@@ -268,14 +271,15 @@ def test_las_filas_dinamicas_miden_24_por_44(document: dict[str, Any]) -> None:
     assert rows
     for matrix in rows:
         assert len(matrix) == 24
-        assert all(len(row) == 44 for row in matrix)
+        assert all(len(row) == 45 for row in matrix)
 
 
 def test_la_trayectoria_ponderada_es_el_final_de_cada_fila(
     document: dict[str, Any],
 ) -> None:
-    """§3.3: g_t = concat(f_t, w_τ · τ_t). Las dos últimas columnas son el trazo."""
+    """§3.3: g_t = concat(f_t, w_τ · τ_t, w_δ · δ_t). Las tres últimas: el trazo."""
     weight = document["config"]["trajectory_weight"]
+    depth_weight = document["config"]["depth_weight"]
 
     for case in document["sequence_cases"]:
         for run in case["expected"]["runs"]:
@@ -286,6 +290,11 @@ def test_la_trayectoria_ponderada_es_el_final_de_cada_fila(
             ):
                 assert row[42] == pytest.approx(weight * point[0], abs=1e-12)
                 assert row[43] == pytest.approx(weight * point[1], abs=1e-12)
+            depth = run["depth"]
+            if len(depth) == len(run["dynamic_rows"]):
+                # Sin remuestreo efectivo (T_src = 24) δ va tal cual.
+                for row, value in zip(run["dynamic_rows"], depth, strict=True):
+                    assert row[44] == pytest.approx(depth_weight * value, abs=1e-12)
 
 
 def test_la_secuencia_estatica_no_traza_nada(document: dict[str, Any]) -> None:
@@ -377,6 +386,73 @@ def test_hay_una_velocidad_por_cada_par_de_frames(document: dict[str, Any]) -> N
         for run in case["expected"]["runs"]:
             assert len(run["scales"]) == run["length"], case["id"]
             assert len(run["velocities"]) == run["length"] - 1, case["id"]
+
+
+def test_cada_caso_de_plausibilidad_marca_los_mismos_frames(
+    document: dict[str, Any],
+) -> None:
+    """§0.4 (v4): `filter_stream` sobre la entrada marca lo que dice el archivo."""
+    from dataclasses import replace
+
+    from lsm.plausibility import PlausibilityParams, filter_stream
+
+    casos = document["plausibility_cases"]
+    assert {c["id"] for c in casos} == {
+        "plausibility_bone",
+        "plausibility_jump_and_reset",
+    }
+    vistos: set[str] = set()
+    for case in casos:
+        entrada = case["input"]
+        frames = tuple(
+            replace(frame_from_input(entry), timestamp_ms=t)
+            for entry, t in zip(entrada["frames"], entrada["times_ms"], strict=True)
+        )
+        salida = list(
+            filter_stream(frames, PlausibilityParams(**entrada["params"]), fps=30.0)
+        )
+        marcas = [getattr(slot, "detail", None) for slot in salida]
+        assert marcas == case["expected"]["implausible"], case["id"]
+        vistos.update(m for m in marcas if m is not None)
+    # Los casos ejercitan de verdad las dos comprobaciones activas.
+    assert vistos == {"BONE", "JUMP"}
+
+
+def test_cada_caso_de_one_euro_reproduce_su_salida(document: dict[str, Any]) -> None:
+    """§4 (v4): `filter_sequence` con el dt real da los landmarks del archivo."""
+    from lsm.one_euro import OneEuroParams, filter_sequence
+    from lsm.types import Sequence
+
+    tolerance = document["tolerance"]
+    for case in document["one_euro_cases"]:
+        entrada = case["input"]
+        frames = tuple(frame_from_input(entry) for entry in entrada["frames"])
+        salida = filter_sequence(
+            Sequence(frames=frames),
+            entrada["times_ms"],
+            OneEuroParams(**entrada["params"]),
+        )
+        esperado = [frame_from_input(e) for e in case["expected"]["frames"]]
+        assert esperado[0].landmarks == frames[0].landmarks, case["id"]
+        for a, b in zip(esperado, salida.frames, strict=True):
+            for la, lb in zip(a.landmarks, b.landmarks, strict=True):
+                assert_vectors_close(
+                    (lb.x, lb.y, lb.z), (la.x, la.y, la.z), tolerance, case["id"]
+                )
+        # El filtro hace algo: la salida no es la entrada.
+        assert any(
+            a.landmarks != b.landmarks for a, b in zip(esperado, frames, strict=True)
+        ), case["id"]
+
+
+def test_delta_crece_cuando_la_mano_se_acerca(document: dict[str, Any]) -> None:
+    import math
+
+    (caso,) = [c for c in document["sequence_cases"] if c["id"] == "depth_approach"]
+    (run,) = caso["expected"]["runs"]
+    assert run["depth"][0] == 0.0
+    assert run["depth"][-1] == pytest.approx(math.log(1.6), abs=1e-6)
+    assert max(abs(x) + abs(y) for x, y in run["trajectory"]) < 1e-9
 
 
 def test_cada_caso_de_hueco_reproduce_su_reconstruccion(

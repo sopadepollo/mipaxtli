@@ -47,6 +47,8 @@ from lsm.features import (
 )
 from lsm.gaps import GapPolicy, GapRejected, fill_gaps
 from lsm.io.hands import dump_frame_stream
+from lsm.one_euro import OneEuroParams, filter_sequence
+from lsm.plausibility import PlausibilityParams, filter_stream
 from lsm.preprocessing import preprocessing_record
 from lsm.segmentation import SEGMENTATION_SPEC_VERSION
 from lsm.synthetic import (
@@ -472,6 +474,25 @@ def sequence_cases() -> tuple[SequenceCase, ...]:
             validates="§0.3: la secuencia simplemente se corta antes.",
             stream=(*hook[:-1], InvalidFrame(reason=InvalidReason.NO_HAND)),
         ),
+        SequenceCase(
+            id="depth_approach",
+            description=(
+                "La mano se acerca a la cámara sin desplazar la muñeca: su tamaño "
+                "aparente crece hasta 1.6 veces."
+            ),
+            validates=(
+                "§3.1 (v4): τ ≈ 0 y δ_t = ln(m_t / m_0) crece hasta ln 1.6; es "
+                "la componente 45 de g_t, ponderada por w_δ."
+            ),
+            stream=tuple(
+                to_frame(
+                    scaled(translated(hand, *CENTER), 1.0 + 0.6 * i / 9),
+                    width=1280,
+                    height=720,
+                )
+                for i in range(10)
+            ),
+        ),
     )
 
 
@@ -526,6 +547,7 @@ def _run_expectation(features: SequenceFeatures, length: int) -> dict[str, Any]:
         "static_features": list(features.static.shape.values),
         "mean_scale": features.trajectory.mean_scale,
         "trajectory": [list(point) for point in features.trajectory.points],
+        "depth": list(features.trajectory.depth),
         # §6: contrato de segmentación, versionado aparte de las features.
         "scales": list(features.scales),
         "velocities": list(features.velocities),
@@ -673,6 +695,166 @@ def build_gap_case(case: GapCase) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Preprocesado del flujo: plausibilidad (§0.4) y One Euro (§4), v4
+# --------------------------------------------------------------------------- #
+
+#: Marcas de tiempo irregulares a propósito: los dos filtros usan el dt real.
+_TIEMPOS_IRREGULARES_MS = (
+    0.0,
+    33.0,
+    67.0,
+    83.0,
+    117.0,
+    150.0,
+    200.0,
+    233.0,
+    267.0,
+    300.0,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TimedCase:
+    """Un flujo con marcas de tiempo y los parámetros con que se filtra."""
+
+    id: str
+    description: str
+    validates: str
+    frames: tuple[RawFrame, ...]
+    times_ms: tuple[float, ...]
+
+
+def _a_ritmo(frames: tuple[RawFrame, ...], paso_ms: float) -> tuple[float, ...]:
+    return tuple(i * paso_ms for i in range(len(frames)))
+
+
+def plausibility_cases() -> tuple[TimedCase, ...]:
+    """Un hueso que se estira, un salto de palma y el reinicio tras 100 ms."""
+    hand = translated(canonical_hand(), *CENTER)
+    quieta = to_frame(hand, width=1280, height=720)
+    estirada = list(hand)
+    x, y, z = hand[8]
+    estirada[8] = (x + 300.0, y, z)
+    con_hueso = (
+        *(quieta,) * 16,
+        to_frame(tuple(estirada), width=1280, height=720),
+        *(quieta,) * 3,
+    )
+    lejos = to_frame(translated(hand, 400.0, 0.0), width=1280, height=720)
+    con_salto = (*(quieta,) * 5, *(lejos,) * 6)
+    return (
+        TimedCase(
+            id="plausibility_bone",
+            description=(
+                "Dieciséis frames de la misma mano y uno con la punta del índice "
+                "300 px más allá."
+            ),
+            validates=(
+                "§0.4: con 15 frames de referencia, un hueso que se aparta de su "
+                "mediana más de bone_max_deviation palmas invalida el frame "
+                "(BONE); el siguiente, normal, se acepta."
+            ),
+            frames=con_hueso,
+            times_ms=_a_ritmo(con_hueso, 1000.0 / 30.0),
+        ),
+        TimedCase(
+            id="plausibility_jump_and_reset",
+            description=(
+                "La mano entera salta 400 px entre dos frames y se queda allí."
+            ),
+            validates=(
+                "§0.4: el salto de palma por encima de max_palm_speed_per_s es "
+                "JUMP; tras reset_after_ms de rechazos seguidos, la referencia "
+                "se reinicia y la mano nueva se acepta."
+            ),
+            frames=con_salto,
+            times_ms=_a_ritmo(con_salto, 1000.0 / 30.0),
+        ),
+    )
+
+
+def one_euro_cases() -> tuple[TimedCase, ...]:
+    """Un trazo y una mano quieta con temblor, los dos con dt irregular."""
+    hand = canonical_hand()
+    trazo = moving_sequence(hand, arc_offsets(10)).frames
+    temblor = moving_sequence(
+        hand, tuple((1.5 * (-1) ** i, 0.5 * (i % 3)) for i in range(10))
+    ).frames
+    return (
+        TimedCase(
+            id="one_euro_stroke",
+            description="Un gancho como el de la J con marcas de tiempo irregulares.",
+            validates=(
+                "§4: el filtro sobre las 63 coordenadas crudas con el dt real, la "
+                "velocidad en palmas por segundo y el primer frame intacto."
+            ),
+            frames=trazo,
+            times_ms=_TIEMPOS_IRREGULARES_MS,
+        ),
+        TimedCase(
+            id="one_euro_jitter",
+            description="La mano quieta con un temblor de un par de píxeles.",
+            validates="§4: a baja velocidad el corte es min_cutoff y el temblor baja.",
+            frames=temblor,
+            times_ms=_TIEMPOS_IRREGULARES_MS,
+        ),
+    )
+
+
+def _timed_input(case: TimedCase) -> dict[str, Any]:
+    return {
+        "frames": [_frame_input(frame) for frame in case.frames],
+        "times_ms": list(case.times_ms),
+    }
+
+
+def build_plausibility_case(
+    case: TimedCase, params: PlausibilityParams
+) -> dict[str, Any]:
+    marcados = tuple(
+        replace(frame, timestamp_ms=t)
+        for frame, t in zip(case.frames, case.times_ms, strict=True)
+    )
+    salida = tuple(filter_stream(marcados, params, fps=30.0))
+    return {
+        "id": case.id,
+        "description": case.description,
+        "validates": case.validates,
+        "input": {**_timed_input(case), "params": params.to_json()},
+        "expected": {
+            "implausible": [
+                slot.detail if isinstance(slot, InvalidFrame) else None
+                for slot in salida
+            ]
+        },
+    }
+
+
+def build_one_euro_case(case: TimedCase, params: OneEuroParams) -> dict[str, Any]:
+    salida = filter_sequence(Sequence(frames=case.frames), case.times_ms, params)
+    return {
+        "id": case.id,
+        "description": case.description,
+        "validates": case.validates,
+        "input": {**_timed_input(case), "params": params.to_json()},
+        "expected": {"frames": [_frame_input(frame) for frame in salida.frames]},
+    }
+
+
+#: Los parámetros de los casos viajan en cada caso, no salen de `config.yaml`:
+#: los golden fijan las cuentas, no la calibración.
+_PLAUSIBILIDAD = PlausibilityParams(
+    enabled=True,
+    bone_max_deviation=0.45,
+    bone_reference_frames=15,
+    max_mcp_dorsal_deg=None,
+    max_palm_speed_per_s=30.0,
+    reset_after_ms=100.0,
+)
+_ONE_EURO = OneEuroParams(enabled=True, min_cutoff=0.5, beta=1.0, d_cutoff=2.0)
+
+
 def build_document(config: Config) -> dict[str, Any]:
     """Arma el documento completo de golden vectors."""
     cases = [build_frame_case(case, config) for case in frame_cases()]
@@ -690,6 +872,7 @@ def build_document(config: Config) -> dict[str, Any]:
         "generated_by": "lsm.cli.golden — Python es la referencia normativa",
         "config": {
             "trajectory_weight": config.features.trajectory_weight,
+            "depth_weight": config.features.depth_weight,
             "min_source_frames": config.dtw.min_source_frames,
             "preprocessing": preprocessing_record(config),
             "resample_length": RESAMPLE_LENGTH,
@@ -700,6 +883,13 @@ def build_document(config: Config) -> dict[str, Any]:
             build_sequence_case(case, config) for case in sequence_cases()
         ],
         "gap_cases": [build_gap_case(case) for case in gap_cases()],
+        "plausibility_cases": [
+            build_plausibility_case(case, _PLAUSIBILIDAD)
+            for case in plausibility_cases()
+        ],
+        "one_euro_cases": [
+            build_one_euro_case(case, _ONE_EURO) for case in one_euro_cases()
+        ],
     }
 
 

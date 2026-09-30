@@ -176,7 +176,12 @@ from lsm.types import (
 #: **v7** (Bloque 2, ADR 0021): dentro de DYNAMIC_CANDIDATE, un hueco de como
 #: mucho `dynamic_max_gap_ms` entre dos frames de la misma mano se rellena
 #: interpolando los landmarks crudos (`lsm.gaps`), en vez de cortar el trazo.
-SEGMENTATION_SPEC_VERSION: Final = 7
+#:
+#: **v8** (bloque de tolerancia, ADR 0034): antes de la máquina, la
+#: plausibilidad anatómica (§0.4) y el One Euro (§4) sobre el flujo; el relleno
+#: de huecos también en TRACKING y STABLE con su límite por estado (ADR 0029), y
+#: el cerrojo tras un trazo rechazado por margen (ADR 0033).
+SEGMENTATION_SPEC_VERSION: Final = 8
 
 
 def window_velocity(

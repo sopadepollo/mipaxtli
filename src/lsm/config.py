@@ -72,6 +72,11 @@ class FeaturesConfig(_Section):
     #: declaran en su bloque `config`.
     trajectory_weight: float = Field(default=1.0, ge=0.0, le=100.0)
 
+    #: `w_δ` del §3.3 (FEATURE_SPEC_VERSION 4, ADR 0034): peso de δ, la
+    #: profundidad relativa `ln(m_t / m_0)`. 0 apaga el canal sin cambiar el
+    #: ancho de `g_t`: así se mide con y sin δ con el mismo contrato.
+    depth_weight: float = Field(default=1.0, ge=0.0, le=100.0)
+
     #: Paso 5 (FEATURE_SPEC_VERSION 3, ADR 0020): un frame deja de ser fiable
     #: para la rotación cuando `s / m` —escala muñeca → nudillo 9 entre tamaño
     #: de palma— baja de `rotation_off_ratio`, y vuelve a serlo cuando sube a
@@ -223,7 +228,7 @@ class DtwConfig(_Section):
     #: dinámica: un tránsito largo entre dos letras, un saludo, una estática que
     #: tembló lo bastante para cruzar el umbral de movimiento. DTW siempre tiene
     #: una plantilla más cercana, y sin esta puerta esa gana. Depende de
-    #: `features.trajectory_weight`, que escala dos de las 44 componentes: si se
+    #: `features.trajectory_weight`, que escala dos de las 45 componentes: si se
     #: toca una, hay que volver a medir la otra.
     #:
     #: MEDIDO (ADR 0016) con `w_τ = 1.0`: el p99 de `d₁` de los aciertos

@@ -240,6 +240,7 @@ def test_el_export_es_json_y_lleva_lo_que_el_navegador_necesita(
         "band_radius": CONFIG.dtw.band_radius,
         "max_distance": CONFIG.dtw.max_distance,
         "trajectory_weight": CONFIG.features.trajectory_weight,
+        "depth_weight": CONFIG.features.depth_weight,
         "min_source_frames": CONFIG.dtw.min_source_frames,
         "resample_length": RESAMPLE_LENGTH,
         "preprocessing": preprocessing_record(CONFIG),
@@ -297,18 +298,22 @@ def test_el_peso_de_trayectoria_viaja_con_el_modelo() -> None:
     """Las plantillas ya llevan `w_τ` multiplicado: un navegador que construyera
     la entrada con otro peso compararía filas incomparables. Por eso el peso
     viaja en `params` y la recarga lo respeta."""
-    config = Config.model_validate({"features": {"trajectory_weight": 9.0}})
+    config = Config.model_validate(
+        {"features": {"trajectory_weight": 9.0, "depth_weight": 3.0}}
+    )
     classifier = DynamicDtwClassifier(config=config)
     classifier.fit(list(MUESTRAS))
 
     recargado = DynamicDtwClassifier.from_export(classifier.export())
 
     assert recargado.config.features.trajectory_weight == 9.0
+    assert recargado.config.features.depth_weight == 3.0
     rows = dynamic_rows(MUESTRAS[0].sequence, recargado.config)
+    base = dynamic_rows(MUESTRAS[0].sequence, CONFIG)
     assert rows is not None
+    assert base is not None
+    # g_t = (f_t, w_τ·τ_t, w_δ·δ_t): la y de τ es la penúltima columna.
     assert math.isclose(
-        rows[-1][-1],
-        9.0
-        / CONFIG.features.trajectory_weight
-        * (dynamic_rows(MUESTRAS[0].sequence, CONFIG) or ())[-1][-1],
+        rows[-1][-2], 9.0 / CONFIG.features.trajectory_weight * base[-1][-2]
     )
+    assert math.isclose(rows[-1][-1], 3.0 / CONFIG.features.depth_weight * base[-1][-1])

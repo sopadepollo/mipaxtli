@@ -40,6 +40,11 @@ features:
   # exporta el peso con el que se entrenó, y el navegador tiene que usar ese.
   trajectory_weight: 1.0
 
+  # (FEATURE_SPEC 4, ADR 0034) Peso de δ = ln(palma_t / palma_0), la profundidad
+  # relativa: la componente 45 de g_t. La X nueva va hacia la cámara y vuelve, y
+  # sin δ su trayectoria es casi plana. 0 apaga el canal (misma forma de g_t).
+  depth_weight: 1.0
+
   # (FEATURE_SPEC 3, ADR 0020) Paso 5 con la palma de canto. Un frame deja de
   # ser fiable para la rotación cuando s/palma baja de off y vuelve a serlo al
   # subir a on; mientras no es fiable, se sostiene el ángulo del último fiable.

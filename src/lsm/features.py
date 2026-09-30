@@ -58,7 +58,11 @@ from lsm.types import (
 #: **v2** (ADR 0017): el paso 2 espeja según la mano **declarada** de la sesión,
 #: no según la etiqueta del detector cuadro a cuadro. Las cuentas son las mismas;
 #: cambia de dónde sale la entrada, y un modelo v1 se entrenó con la otra.
-FEATURE_SPEC_VERSION: Final = 3
+#:
+#: **v4** (bloque de tolerancia, ADR 0034): plausibilidad anatómica (§0.4), One
+#: Euro sobre los landmarks crudos (§4) y δ, la profundidad relativa, como
+#: componente 45 de `g_t` (§3.1, §3.3). Una sola versión para las tres.
+FEATURE_SPEC_VERSION: Final = 4
 
 #: T_ref del §3.2: toda secuencia dinámica se remuestrea a esta longitud.
 RESAMPLE_LENGTH: Final = 24
@@ -87,7 +91,7 @@ class StaticFeatures:
 
 @dataclass(frozen=True, slots=True)
 class DynamicFeatures:
-    """Matriz `(24, 44)` del §3.3, lista para el DTW."""
+    """Matriz `(24, 45)` del §3.3, lista para el DTW."""
 
     rows: tuple[tuple[float, ...], ...]
     #: Cuántos frames válidos tenía la secuencia antes de remuestrear. Útil para
@@ -460,6 +464,11 @@ def _trajectory_channel(geometries: tuple[_FrameGeometry, ...]) -> TrajectoryCha
 
     El origen en `w_0` la hace invariante a la posición en el encuadre; la
     división por `s̄` la hace invariante a la distancia a la cámara.
+
+    `δ_t = ln(m_t / m_0)` (v4) recupera el eje que τ no ve: la X va hacia la
+    cámara y vuelve, y en el plano su trayectoria es casi un punto. El
+    logaritmo hace simétricos acercarse y alejarse, y el cociente lo hace
+    invariante a la distancia de partida.
     """
     total_scale = 0.0
     for geometry in geometries:
@@ -474,7 +483,9 @@ def _trajectory_channel(geometries: tuple[_FrameGeometry, ...]) -> TrajectoryCha
         )
         for geometry in geometries
     )
-    return TrajectoryChannel(points=points, mean_scale=mean_scale)
+    origin_palm = geometries[0].palm
+    depth = tuple(math.log(geometry.palm / origin_palm) for geometry in geometries)
+    return TrajectoryChannel(points=points, mean_scale=mean_scale, depth=depth)
 
 
 def resample(
@@ -542,9 +553,9 @@ def _dynamic_features(
     trajectory: TrajectoryChannel,
     config: Config,
 ) -> DynamicFeatures | DynamicUnavailable:
-    """`g_t = concat(f_t, w_τ · τ_t) ∈ ℝ⁴⁴`, remuestreado a 24 filas (§3.2-§3.3).
+    """`g_t = concat(f_t, w_τ · τ_t, w_δ · δ_t) ∈ ℝ⁴⁵`, a 24 filas (§3.2-§3.3).
 
-    Se remuestrean por separado el canal de forma y el de trayectoria, y la
+    Se remuestrean por separado el canal de forma, el de trayectoria y δ, y la
     ponderación se aplica **después** de interpolar. Multiplicar antes daría
     resultados distintos bit a bit.
     """
@@ -554,11 +565,15 @@ def _dynamic_features(
 
     shape_rows = resample(tuple(vector.values for vector in frame_vectors))
     trajectory_rows = resample(trajectory.points)
+    depth_rows = resample(tuple((value,) for value in trajectory.depth))
     weight = config.features.trajectory_weight
+    depth_weight = config.features.depth_weight
 
     rows = tuple(
-        (*shape, weight * point[0], weight * point[1])
-        for shape, point in zip(shape_rows, trajectory_rows, strict=True)
+        (*shape, weight * point[0], weight * point[1], depth_weight * depth[0])
+        for shape, point, depth in zip(
+            shape_rows, trajectory_rows, depth_rows, strict=True
+        )
     )
     return DynamicFeatures(rows=rows, source_length=source_length)
 

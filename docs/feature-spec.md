@@ -1,6 +1,16 @@
-# Especificación de Features — v3
+# Especificación de Features — v4
 
-**`FEATURE_SPEC_VERSION = 3`**
+**`FEATURE_SPEC_VERSION = 4`**
+
+> **v4** (2026-09-29, bloque de tolerancia a MediaPipe,
+> `docs/adr/0034-bloque-de-tolerancia-v4.md`): tres cambios en una sola versión,
+> con los golden regenerados una vez. La **plausibilidad anatómica** (§0.4)
+> invalida los frames imposibles antes del relleno; el **filtro One Euro** (§4)
+> suaviza los landmarks crudos con el dt real; y **δ_t = ln(m_t / m_0)**, la
+> profundidad relativa, es la componente 45 de `g_t` (§3.1, §3.3). Cada uno
+> tiene su interruptor en `config.yaml` para medirlo por separado; el modelo
+> exportado declara el preprocesado con que se entrenó y el runtime rechaza uno
+> distinto. Modelos v3 rechazados al cargar; hay que reentrenar.
 
 > **v3** (2026-09-28, `docs/adr/0020-escala-y-rotacion-con-la-palma-de-canto.md`):
 > la escala del paso 4 es el **tamaño de palma** y no la distancia muñeca →
@@ -144,12 +154,11 @@ MediaPipe Hands entrega 21 landmarks por mano, cada uno con `(x, y, z)`:
 > coherente consigo mismo y el modelo entrena sin quejarse. Ver
 > `docs/adr/0006-deteccion-de-manos-y-captura.md`.
 
-### 0.4 Plausibilidad anatómica (entra en la v4, ADR 0027)
+### 0.4 Plausibilidad anatómica (v4, ADR 0027)
 
-> **Versión.** Esta sección forma parte del bloque de tolerancia a MediaPipe
-> (plausibilidad, One Euro del §4 y δ) y entra con él en `FEATURE_SPEC_VERSION`
-> 4, con los golden regenerados una sola vez. Hasta entonces el runtime la aplica
-> por defecto (`plausibility.enabled`) y los golden no la cubren.
+> **Versión.** Forma parte del bloque de tolerancia a MediaPipe (plausibilidad,
+> One Euro del §4 y δ), `FEATURE_SPEC_VERSION` 4. Los golden la cubren en
+> `plausibility_cases`, con los parámetros en cada caso.
 
 Antes que nada —antes del relleno de huecos del §0.3 y del filtro del §4—, cada
 frame válido se juzga contra los anteriores del mismo flujo. Los que no pasan se
@@ -390,10 +399,18 @@ Se computa a nivel de secuencia, no de frame. Sea `w_t` la muñeca cruda tras el
 ```
 s̄ = mean_t( s_t )
 τ_t = (w_t - w_0) / s̄        ∈ ℝ²
+δ_t = ln( m_t / m_0 )        ∈ ℝ          (v4)
 ```
 
 - Origen en la muñeca del primer frame → invariante a la posición en el encuadre.
 - Escala en unidades de mano → invariante a la distancia a la cámara.
+- **δ (v4, ADR 0034)** es la profundidad relativa: `m_t` es el tamaño de palma
+  del paso 4 (la mayor distancia 2D entre los segmentos de la palma), así que
+  δ > 0 cuando la mano se acerca a la cámara y δ < 0 cuando se aleja. τ vive en
+  el plano de la imagen y no ve ese eje: la X va hacia la cámara y vuelve, y sin
+  δ su trayectoria es casi un punto. Con el tamaño de palma y no con la escala
+  muñeca → nudillo 9, un giro de la palma no se lee como acercamiento (ADR 0020,
+  tabla de δ). `δ_0 = 0` exactamente; `math.log` en punto flotante doble.
 
 ### 3.2 Remuestreo temporal
 
@@ -421,15 +438,19 @@ en ese caso.
 El peso `w_τ` del §3.3 se aplica **después** de interpolar, nunca antes.
 
 La ponderación y el remuestreo se aplican a los canales por separado: primero se
-remuestrea `f_t`, luego `τ_t`, y solo entonces se concatenan.
+remuestrea `f_t`, luego `τ_t`, luego δ_t (como filas de una componente), y solo
+entonces se concatenan.
 
 ### 3.3 Vector por frame para el clasificador dinámico
 
 ```
-g_t = concat( f_t , w_τ · τ_t )        ∈ ℝ⁴⁴
+g_t = concat( f_t , w_τ · τ_t , w_δ · δ_t )        ∈ ℝ⁴⁵        (v4)
 ```
 
 `w_τ = config.features.trajectory_weight`, por defecto `1.0`.
+`w_δ = config.features.depth_weight`, por defecto `1.0` (v4). `w_δ = 0` apaga
+δ sin cambiar el ancho de `g_t`: es como se mide con y sin δ (ADR 0034). El
+modelo dinámico exporta los dos pesos.
 
 > **Calibrado en la Fase 5** (ADR 0016): el punto de partida era `4.0`; el barrido
 > con leave-one-signer-out dio `1.0`. La fórmula no cambia —por eso
@@ -446,7 +467,7 @@ registrarse.
 
 ### 3.4 Distancia
 
-DTW sobre las secuencias `(24, 44)` con distancia euclidiana local, ventana de
+DTW sobre las secuencias `(24, 45)` con distancia euclidiana local, ventana de
 Sakoe-Chiba de radio `config.dtw.band_radius` (por defecto `6`), y costo normalizado
 por la longitud del camino de alineación.
 
@@ -488,7 +509,7 @@ plantillas; la confianza es `d₂ / (d₁ + d₂)` entre las dos letras más cer
 
 ---
 
-## 4. Suavizado temporal: filtro One Euro (entra en la v4, ADR 0028)
+## 4. Suavizado temporal: filtro One Euro (v4, ADR 0028)
 
 > **Versión.** Sustituye a la media exponencial de α fijo de la v3 (que estaba
 > desactivada, `α = 1`). Entra en `FEATURE_SPEC_VERSION` 4 junto con el §0.4 y δ,
@@ -627,7 +648,7 @@ entrada por cada secuencia válida máxima con:
 | `scales` | `s_t` del paso 4 por frame, en las unidades corregidas del paso 1. |
 | `velocities` | `v_t` del §6, longitud `T − 1`. Es lo que `segmentation.ts` debe reproducir. |
 | `resampled_trajectory` | `τ` tras el remuestreo del §3.2, sin ponderar. |
-| `dynamic_rows` | `g_t` final: 24 filas de 44 componentes. |
+| `dynamic_rows` | `g_t` final: 24 filas de 45 componentes. |
 | `dynamic_unavailable_reason` | `TOO_FEW_SOURCE_FRAMES` si la secuencia se rechazó para el canal dinámico; en ese caso los dos campos anteriores van en `null`. |
 
 La cobertura incluye **la misma interrupción al inicio, en medio y al final**,

@@ -121,10 +121,19 @@ def test_la_confianza_vive_en_cero_uno() -> None:
 
 
 def test_el_canal_de_trayectoria_exige_escala_positiva() -> None:
-    TrajectoryChannel(points=((0.0, 0.0), (0.1, 0.2)), mean_scale=0.08)
+    TrajectoryChannel(
+        points=((0.0, 0.0), (0.1, 0.2)), mean_scale=0.08, depth=(0.0, 0.1)
+    )
 
     with pytest.raises(ValueError, match="escala media"):
-        TrajectoryChannel(points=((0.0, 0.0),), mean_scale=0.0)
+        TrajectoryChannel(points=((0.0, 0.0),), mean_scale=0.0, depth=(0.0,))
+
+
+def test_delta_lleva_un_valor_por_punto() -> None:
+    with pytest.raises(ValueError, match="δ tiene"):
+        TrajectoryChannel(
+            points=((0.0, 0.0), (0.1, 0.2)), mean_scale=0.08, depth=(0.0,)
+        )
 
 
 def test_una_muestra_sin_signer_id_no_se_construye() -> None:

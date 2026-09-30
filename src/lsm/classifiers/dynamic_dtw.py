@@ -3,7 +3,7 @@
 `ARQUITECTURA.md` §4.3 y `docs/feature-spec.md` §3. La ventana que llega es el
 trazo crudo que la segmentación acumuló en DYNAMIC_CANDIDATE (§6.7); aquí se
 extrae con la tubería de siempre, se remuestrea a `T_ref = 24` filas de
-`g_t ∈ ℝ⁴⁴` (§3.2-§3.3) y se alinea contra cada plantilla con DTW (§3.4).
+`g_t ∈ ℝ⁴⁵` (§3.2-§3.3) y se alinea contra cada plantilla con DTW (§3.4).
 
 **Por qué DTW y no una red.** Con tres personas grabadas una red recurrente
 sobreajusta, y además hay que ejecutarla en un navegador móvil. DTW no entrena
@@ -65,8 +65,8 @@ from lsm.vocabulary import DIRECTION_PENDING_LABELS
 #: export. Es lo que `classifiers.registry` lee para saber qué cargar.
 CLASSIFIER_NAME: Final = "dynamic_dtw"
 
-#: Componentes de `g_t` (§3.3): 42 de forma más 2 de trayectoria ponderada.
-DYNAMIC_ROW_WIDTH: Final = NUM_FEATURES + 2
+#: Componentes de `g_t` (§3.3): 42 de forma, 2 de trayectoria y δ, ponderados.
+DYNAMIC_ROW_WIDTH: Final = NUM_FEATURES + 3
 
 #: Una fila de `g_t` y una secuencia remuestreada de ellas.
 Row = tuple[float, ...]
@@ -349,7 +349,8 @@ class DynamicDtwClassifier:
         """El JSON del `ARQUITECTURA.md` §4.6, reimplementable en TypeScript.
 
         `params` lleva lo que decide —`band_radius`, `max_distance`— y lo que hace
-        falta para reconstruir la entrada: `trajectory_weight` (§3.3),
+        falta para reconstruir la entrada: `trajectory_weight` y `depth_weight`
+        (§3.3),
         `min_source_frames` y `resample_length` (§3.2) y `preprocessing` (la
         plausibilidad, el relleno y el One Euro, §0.3, §0.4 y §4). Sin cualquiera
         de ellos, el navegador compararía otras filas contra las mismas
@@ -362,6 +363,7 @@ class DynamicDtwClassifier:
                 "band_radius": self.config.dtw.band_radius,
                 "max_distance": self.config.dtw.max_distance,
                 "trajectory_weight": self.config.features.trajectory_weight,
+                "depth_weight": self.config.features.depth_weight,
                 "min_source_frames": self.config.dtw.min_source_frames,
                 "resample_length": RESAMPLE_LENGTH,
                 "preprocessing": preprocessing_record(self.config),
@@ -410,7 +412,10 @@ class DynamicDtwClassifier:
                     "max_distance": params["max_distance"],
                     "min_source_frames": params["min_source_frames"],
                 },
-                "features": {"trajectory_weight": params["trajectory_weight"]},
+                "features": {
+                    "trajectory_weight": params["trajectory_weight"],
+                    "depth_weight": params["depth_weight"],
+                },
                 **config_from_record(params["preprocessing"]),
             }
         )

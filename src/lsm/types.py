@@ -381,16 +381,27 @@ class TrajectoryChannel:
     Es la razón de ser del §3: el paso 3 destruye a propósito la posición de la
     mano en el encuadre, y sin este canal una J y una I son indistinguibles.
     `points[0]` es siempre `(0.0, 0.0)`: el origen es la muñeca del primer frame.
+
+    `depth` es δ (FEATURE_SPEC_VERSION 4, ADR 0034): `ln(m_t / m_0)`, cuánto se
+    acercó (> 0) o alejó (< 0) la mano de la cámara desde el primer frame. Uno
+    por punto; `depth[0]` es siempre `0.0`.
     """
 
     points: Points2
     mean_scale: float
+    depth: tuple[float, ...]
 
     def __post_init__(self) -> None:
         if not self.points:
             raise ValueError("el canal de trayectoria necesita al menos un punto")
         if self.mean_scale <= 0.0:
             raise ValueError(f"escala media no positiva: {self.mean_scale}")
+        if len(self.depth) != len(self.points):
+            msg = (
+                f"δ tiene {len(self.depth)} valores y la trayectoria "
+                f"{len(self.points)} puntos"
+            )
+            raise ValueError(msg)
 
     def __len__(self) -> int:
         return len(self.points)

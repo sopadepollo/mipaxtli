@@ -98,7 +98,7 @@ def test_el_vector_tiene_42_componentes_y_lleva_la_version_del_spec() -> None:
     assert isinstance(outcome, SequenceFeatures)
     assert len(outcome.static.shape) == NUM_FEATURES
     assert outcome.static.shape.spec_version == FEATURE_SPEC_VERSION
-    assert FEATURE_SPEC_VERSION == 3
+    assert FEATURE_SPEC_VERSION == 4
 
 
 def test_tras_el_pipeline_la_muneca_queda_en_el_origen_y_p9_en_0_1() -> None:
@@ -616,7 +616,7 @@ def test_un_solo_frame_se_replica() -> None:
     assert all(row == (3.0, -1.0) for row in out)
 
 
-def test_el_canal_dinamico_tiene_forma_24_por_44() -> None:
+def test_el_canal_dinamico_tiene_forma_24_por_45() -> None:
     outcome = extract_sequence_features(
         moving_sequence(canonical_hand(), arc_offsets(9)), CONFIG
     )
@@ -625,7 +625,7 @@ def test_el_canal_dinamico_tiene_forma_24_por_44() -> None:
     dynamic = outcome.dynamic
     assert not isinstance(dynamic, DynamicUnavailable)
     assert len(dynamic.rows) == RESAMPLE_LENGTH
-    assert all(len(row) == NUM_FEATURES + 2 for row in dynamic.rows)
+    assert all(len(row) == NUM_FEATURES + 3 for row in dynamic.rows)
 
 
 def test_el_canal_dinamico_pondera_la_trayectoria() -> None:
@@ -642,6 +642,12 @@ def test_el_canal_dinamico_pondera_la_trayectoria() -> None:
     for row, point in zip(dynamic.rows, resampled_trajectory, strict=True):
         assert row[NUM_FEATURES] == pytest.approx(weight * point[0], abs=TOL)
         assert row[NUM_FEATURES + 1] == pytest.approx(weight * point[1], abs=TOL)
+    depth_weight = CONFIG.features.depth_weight
+    resampled_depth = resample(
+        tuple((value,) for value in outcome.trajectory.depth), RESAMPLE_LENGTH
+    )
+    for row, (depth,) in zip(dynamic.rows, resampled_depth, strict=True):
+        assert row[NUM_FEATURES + 2] == pytest.approx(depth_weight * depth, abs=TOL)
 
 
 def test_una_secuencia_demasiado_corta_no_se_estira_a_24() -> None:
