@@ -386,6 +386,17 @@ class SegmentationConfig(_Section):
     #: crecer (Bloque 2, Paso 4).
     dynamic_max_interpolated_fraction: float = Field(default=0.25, ge=0.0, lt=1.0)
 
+    #: Pose final de cada dinámica (ADR 0022, medido en los diagnósticos). Tras
+    #: un trazo rechazado **por margen** —el clasificador dio la letra D, con
+    #: confianza bajo `min_confidence`—, la estática `final_poses[D]` no se
+    #: emite hasta que la mano vuelva a moverse (ADR 0033): la J rechazada acaba
+    #: en la mano de la I, y es preferible no escribir nada a escribir I. Las
+    #: demás letras salen como siempre. Z → L queda fuera, como en el ADR 0022:
+    #: LL no tiene plantilla y sus trazos caen en Z. Vacío apaga el cerrojo.
+    rejected_stroke_final_poses: dict[str, str] = Field(
+        default_factory=lambda: {"J": "I", "K": "P", "ENIE": "N"}
+    )
+
     #: Duración máxima de un candidato dinámico, en milisegundos, contada desde
     #: el primer frame del trazo. Por encima se descarta sin clasificar y se
     #: vuelve a TRACKING: nadie tarda eso en trazar una letra, y lo que sí dura

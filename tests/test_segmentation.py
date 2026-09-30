@@ -1033,6 +1033,44 @@ def test_un_transito_largo_rechazado_deja_paso_a_la_estatica() -> None:
     assert emision.origin is WindowOrigin.STABLE
 
 
+def test_tras_un_trazo_rechazado_por_margen_la_pose_final_no_se_emite() -> None:
+    """ADR 0033: el DTW dijo J con poco margen y la rechazó. La mano queda en la
+    pose de la I; es preferible no escribir nada a escribir I. Otra letra sí
+    sale, y el siguiente movimiento libera el cerrojo."""
+    viaje = trazo((10.0, 0.0, DYNAMIC_UMBRALES.motion_min_frames + 3))
+    flujo = [*viaje, *quieta_tras(viaje, 10)]
+    j_dudosa = Prediction(label="J", confidence=0.55)
+    i_segura = Prediction(label="I", confidence=0.95)
+
+    con_cerrojo = run_dynamic(flujo, PorOrigen(stable=i_segura, dynamic=j_dudosa))
+    sin_cerrojo = run_dynamic(
+        flujo,
+        PorOrigen(stable=i_segura, dynamic=j_dudosa),
+        Config.model_validate(
+            {
+                "plausibility": {"enabled": False},
+                "segmentation": {
+                    **DYNAMIC_CONFIG.segmentation.model_dump(),
+                    "rejected_stroke_final_poses": {},
+                },
+            }
+        ),
+    )
+    otra_letra = run_dynamic(flujo, PorOrigen(dynamic=j_dudosa))
+    tras_rebote = run_dynamic(
+        [*flujo, *trazo((10.0, 0.0, 2), start=muneca_px(viaje)), *still_frames(12)],
+        PorOrigen(stable=i_segura, dynamic=j_dudosa),
+    )
+
+    assert emitted(con_cerrojo) == []
+    assert RejectionReason.FINAL_POSE_OF_REJECTED_STROKE in [
+        e.reason for e in con_cerrojo if isinstance(e, WindowRejected)
+    ]
+    assert emitted(sin_cerrojo) == ["I"]
+    assert emitted(otra_letra) == ["A"]
+    assert emitted(tras_rebote) == ["I"]
+
+
 def test_la_pose_final_de_una_dinamica_no_se_emite_como_estatica() -> None:
     """La J termina en la mano de la I. Sostenerla después del trazo no escribe
     una I: hasta que la mano se mueva, el camino estático no promueve a STABLE.

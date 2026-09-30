@@ -318,6 +318,9 @@ class RejectionReason(StrEnum):
     #: La letra es la misma que la última emitida y la mano no ha salido de STABLE
     #: desde entonces. Ver la regla de letras dobles en el encabezado del módulo.
     REPEATED_LETTER = "REPEATED_LETTER"
+    #: La letra es la pose final de un trazo que se acaba de rechazar por margen
+    #: (J → I, ADR 0033) y la mano no se ha movido desde entonces.
+    FINAL_POSE_OF_REJECTED_STROKE = "FINAL_POSE_OF_REJECTED_STROKE"
     #: El candidato dinámico superó `motion_max_ms` sin que la mano se detuviera.
     #: Se descarta **sin clasificar**: nadie tarda eso en trazar una letra.
     DYNAMIC_TOO_LONG = "DYNAMIC_TOO_LONG"
@@ -602,6 +605,9 @@ def run_segmentation(
     #: en la mano de la I, la LL en la de la L. Mientras la mano no se mueva, el
     #: camino estático no promueve a STABLE. Se libera como `pending_repeat`.
     dynamic_lock = False
+    #: Tras un trazo rechazado por margen, la estática de su pose final (ADR
+    #: 0033). Se libera como `pending_repeat`. Cadena vacía: sin cerrojo.
+    final_pose_lock = ""
 
     # -- Huecos dentro de un trazo (Bloque 2) -----------------------------------
     politica = GapPolicy.from_config(config, thresholds.fps)
@@ -756,6 +762,7 @@ def run_segmentation(
                 suppressed = 0
                 pending_repeat = ""
                 dynamic_lock = False
+                final_pose_lock = ""
             continue
 
         missing = 0
@@ -807,6 +814,7 @@ def run_segmentation(
         if moving:
             pending_repeat = ""
             dynamic_lock = False
+            final_pose_lock = ""
         if (
             state is State.DYNAMIC_CANDIDATE
             and velocity is not None
@@ -932,13 +940,21 @@ def run_segmentation(
 
             prediction = classify(trazo, WindowOrigin.DYNAMIC)
             if prediction.is_unknown or prediction.confidence < settings.min_confidence:
-                # Un tránsito largo entre dos letras acaba aquí, y es lo normal:
-                # la mano ya reposa sobre la letra siguiente y `stable_run`
-                # conserva ese reposo, así que el camino estático la toma en el
-                # frame siguiente en vez de esperar otra vez.
+                # Un tránsito largo entre dos letras acaba aquí, y lo normal es
+                # que el camino estático tome la letra de llegada en el frame
+                # siguiente. Salvo una: la pose final de la dinámica que el
+                # clasificador tenía delante —la J acaba en la I, la K en la P
+                # (ADR 0022)—. Si el rechazo es por margen, esa estática no sale
+                # hasta que la mano se mueva: es preferible no escribir nada a
+                # escribir I (ADR 0033). Bloquear cualquier estática costaba
+                # 3.4 puntos de acierto en el replay del dataset.
                 yield WindowRejected(
                     frame_index=index, reason=RejectionReason.LOW_CONFIDENCE
                 )
+                if not prediction.is_unknown:
+                    final_pose_lock = settings.rejected_stroke_final_poses.get(
+                        prediction.label, ""
+                    )
                 yield StateChanged(
                     frame_index=index,
                     previous=State.DYNAMIC_EMIT,
@@ -1074,6 +1090,16 @@ def run_segmentation(
             # entera para terminar en este mismo rechazo.
             yield WindowRejected(
                 frame_index=index, reason=RejectionReason.REPEATED_LETTER
+            )
+            suppressed = thresholds.reject_cooldown_frames
+            continue
+
+        if prediction.label == final_pose_lock:
+            # La pose final de un trazo rechazado por margen (ADR 0033). Antes
+            # de acumular, por lo mismo que el cerrojo de repetición.
+            yield WindowRejected(
+                frame_index=index,
+                reason=RejectionReason.FINAL_POSE_OF_REJECTED_STROKE,
             )
             suppressed = thresholds.reject_cooldown_frames
             continue

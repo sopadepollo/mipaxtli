@@ -333,6 +333,16 @@ segmentation:
   # interpolada, el trazo se rechaza y la ventana estable espera a crecer.
   dynamic_max_interpolated_fraction: 0.25
 
+  # (ADR 0033) Tras un trazo rechazado por margen cuya letra más cercana era D,
+  # la estática de su pose final no se emite hasta que la mano vuelva a moverse:
+  # la J rechazada acaba en la mano de la I, y es preferible no escribir nada a
+  # escribir I. Solo esa letra: las demás salen como siempre. Mapa del ADR 0022
+  # (Z -> L fuera hasta que LL tenga plantilla). {} apaga el cerrojo.
+  rejected_stroke_final_poses:
+    J: I
+    K: P
+    ENIE: "N"
+
   # Candidato que dura más que esto se descarta sin clasificar. Las muestras
   # grabadas duran 3 s de trazo continuo (tope de captura), así que el límite
   # va por encima.

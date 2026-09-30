@@ -997,6 +997,15 @@ siendo el mismo trazo):
   cerrojo impide que TRACKING promueva a STABLE hasta que un frame supere
   `velocity_threshold` o se pierda la mano: la pose en que termina una dinámica
   no es una letra nueva (la J acaba en la mano de la I).
+- **Tras rechazar un trazo por margen** —el clasificador dinámico dio la letra D,
+  con confianza bajo `min_confidence`— la estática
+  `rejected_stroke_final_poses[D]`, su pose final (J → I, K → P, Ñ → N; ADR
+  0022), no se emite hasta que un frame supere `velocity_threshold` o se pierda
+  la mano: esa ventana se rechaza con `FINAL_POSE_OF_REJECTED_STROKE` (ADR
+  0033). Es preferible no escribir nada a escribir I. Cualquier otra letra sale
+  como antes, en el frame siguiente: la de llegada de un tránsito largo tiene
+  que salir. Un trazo UNKNOWN o descartado sin clasificar no pone el cerrojo.
+  Entra con el bloque de tolerancia en la versión siguiente de segmentación.
 - La emisión dinámica **no es progresiva**: se clasifica una vez, y se emite si
   la confianza alcanza `min_confidence`.
 
