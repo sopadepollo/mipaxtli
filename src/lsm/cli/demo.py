@@ -588,6 +588,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="repeticiones por letra (por defecto: diagnostics.repetitions_per_letter)",
     )
     guiado.add_argument(
+        "--letras",
+        default=None,
+        help=(
+            "solo estas dinámicas, separadas por comas (p. ej. X,ENIE,Q). Por "
+            "defecto las ocho del glosario"
+        ),
+    )
+    guiado.add_argument(
         "--presencia",
         type=float,
         default=None,
@@ -967,8 +975,20 @@ def _diagnostico_pedido(
         repeticiones = args.repeticiones or config.diagnostics.repetitions_per_letter
         if repeticiones < 1:
             return f"--repeticiones tiene que ser positivo, no {repeticiones}"
+        letras = letras_dinamicas()
+        if args.letras:
+            pedidas = tuple(
+                x.strip().upper() for x in args.letras.split(",") if x.strip()
+            )
+            desconocidas = [x for x in pedidas if x not in letras]
+            if desconocidas:
+                return (
+                    f"--letras: {', '.join(desconocidas)} no son dinámicas; las "
+                    f"válidas son {', '.join(letras)}"
+                )
+            letras = pedidas
         guiada = GuidedSession(
-            letters=() if args.solo_reposo else letras_dinamicas(),
+            letters=() if args.solo_reposo else letras,
             repetitions=repeticiones,
             rest_poses=() if args.sin_reposo else tuple(REST_POSES),
             rest_ms=config.diagnostics.rest_ms,

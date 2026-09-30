@@ -346,6 +346,15 @@ diagnósticos con la configuración de `config.yaml`: para medir otro umbral,
 `--config` con otra copia.
 
 ```bash
+# Paso 6: ablación. Reproduce la máquina sobre el flujo crudo de cada sesión de
+# diagnóstico con cada componente (plausibilidad, One Euro, relleno ampliado)
+# solo y juntos, y cuenta por letra los intentos con el trazo entero, partido o
+# perdido. Una variante tarda varios minutos; se pueden pedir sueltas.
+uv run lsm-medir --salida docs/mediciones/ablacion.md ablacion
+uv run lsm-medir ablacion --variantes antes todo
+```
+
+```bash
 # Paso 3: barrido del One Euro. Temblor en reposo contra retraso y amplitud del
 # trazo en J, Ñ y Q. ~40 s por valor de d_cutoff.
 uv run lsm-medir --salida docs/mediciones/one-euro.md one-euro --d-cutoff 2
@@ -567,6 +576,8 @@ uv run lsm-demo diagnosticar --mano derecha --iluminacion habitual --solo-reposo
 uv run lsm-demo diagnosticar --mano derecha --iluminacion habitual --sin-reposo
 ```
 
+Para diagnosticar solo algunas dinámicas, `--letras X,ENIE,Q`.
+
 En pantalla, abajo, dice qué letra hacer y cuántas van. **ESPACIO** da la
 repetición por hecha, **BACKSPACE** la descarta y la vuelve a pedir, **q**
 termina (lo registrado hasta ese momento se escribe igual). Hacer cada letra
@@ -605,14 +616,14 @@ Desde Windows, como la demo en vivo (ver 6.1):
 `--tracking` cambian `hands.min_hand_presence_confidence` y
 `hands.min_tracking_confidence` para esa sesión, y quedan en los metadatos del
 reporte junto con la plausibilidad, el relleno y el One Euro. Una sesión por par,
-misma luz, solo X, Ñ y Q no se puede elegir: la guía pide las ocho, así que
-`--repeticiones 5 --sin-reposo` para que quepa:
+misma luz, solo X, Ñ y Q:
 
 ```powershell
 foreach ($p in @("0.5 0.5", "0.4 0.35", "0.3 0.2")) {
   $pres, $trk = $p.Split(" ")
   & $HOME\lsm-win\Scripts\python.exe -m lsm.cli.demo diagnosticar --mano derecha `
-    --iluminacion habitual --repeticiones 5 --sin-reposo --presencia $pres --tracking $trk
+    --iluminacion habitual --letras X,ENIE,Q --sin-reposo `
+    --presencia $pres --tracking $trk
 }
 ```
 

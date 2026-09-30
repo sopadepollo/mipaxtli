@@ -859,6 +859,160 @@ def _cmd_mediapipe(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Las variantes de la ablación (Paso 6): cada componente de la serie, solo y
+#: juntos. «antes» es la tubería previa: sin plausibilidad, sin One Euro, relleno
+#: solo dentro del trazo y con el límite provisional de 150 ms.
+_ANTES: dict[str, object] = {
+    "plausibility.enabled": False,
+    "smoothing.enabled": False,
+    "segmentation.dynamic_max_gap_ms": 150.0,
+    "segmentation.tracking_max_gap_ms": 0.0,
+    "segmentation.stable_max_gap_ms": 0.0,
+}
+_RELLENO: dict[str, object] = {
+    "segmentation.dynamic_max_gap_ms": 200.0,
+    "segmentation.tracking_max_gap_ms": 200.0,
+    "segmentation.stable_max_gap_ms": 100.0,
+}
+_ONE_EURO: dict[str, object] = {
+    "smoothing.enabled": True,
+    "smoothing.min_cutoff": 0.5,
+    "smoothing.beta": 1.0,
+    "smoothing.d_cutoff": 2.0,
+}
+VARIANTES: dict[str, dict[str, object]] = {
+    "antes": _ANTES,
+    "+plausibilidad": {**_ANTES, "plausibility.enabled": True},
+    "+one_euro": {**_ANTES, **_ONE_EURO},
+    "+relleno": {**_ANTES, **_RELLENO},
+    "plaus+relleno": {**_ANTES, **_RELLENO, "plausibility.enabled": True},
+    "todo": {**_ANTES, **_RELLENO, "plausibility.enabled": True, **_ONE_EURO},
+}
+#: Letras cuyos intentos se cuentan en la ablación.
+_LETRAS_ABLACION = ("X", "ENIE", "Q", "K", "J", "Z")
+
+
+def _con(config: Config, cambios: dict[str, object]) -> Config:
+    crudo = config.model_dump(mode="json")
+    for ruta, valor in cambios.items():
+        seccion, campo = ruta.split(".")
+        crudo[seccion][campo] = valor
+    return Config.model_validate(crudo)
+
+
+def _cmd_ablacion(args: argparse.Namespace) -> int:
+    """Reproduce la máquina sobre el flujo crudo de cada sesión de diagnóstico
+    con cada variante, y cuenta por letra los intentos con el trazo entero,
+    partido o perdido. Sin clasificador: lo que se mide es la segmentación."""
+    from lsm.segmentation import (
+        RejectionReason,
+        WindowDynamic,
+        WindowRejected,
+        run_segmentation,
+    )
+    from lsm.types import Prediction, WindowOrigin
+    from lsm.types import Sequence as Secuencia
+
+    def ninguno(_w: Secuencia, _o: WindowOrigin) -> Prediction:
+        return Prediction.unknown()
+
+    base = load_config(args.config)
+    variantes = {n: _con(base, c) for n, c in VARIANTES.items() if n in args.variantes}
+    #: (variante, letra) → [intentos, limpios, tras corte, partidos, perdidos,
+    #: interrumpidos]
+    tabla: dict[tuple[str, str], list[int]] = {}
+    #: (variante, letra) → frames de cada trazo entregado.
+    largos: dict[tuple[str, str], list[float]] = {}
+    for carpeta in iter_diagnostic_folders(args.diagnosticos):
+        sesion = load_diagnostic_session(carpeta)
+        prompts = [r.prompt for r in sesion.records]
+        tramos = [
+            (a, b)
+            for a, b in attempt_bounds(prompts, [r.repetition for r in sesion.records])
+            if prompts[a] in _LETRAS_ABLACION
+        ]
+        if not tramos:
+            continue
+        try:
+            fps = float(str(sesion.metadata.get("fps medidos al arrancar", "")))
+        except ValueError:
+            fps = float(base.capture.camera_fps)
+        for nombre, config in variantes.items():
+            trazos: list[tuple[int, int]] = []
+            cortes: list[int] = []
+            for evento in run_segmentation(sesion.stream, config, ninguno, fps=fps):
+                if isinstance(evento, WindowDynamic):
+                    trazos.append((evento.frame_index, len(evento.window)))
+                elif (
+                    isinstance(evento, WindowRejected)
+                    and evento.reason is RejectionReason.DYNAMIC_INTERRUPTED
+                ):
+                    cortes.append(evento.frame_index)
+            for inicio, fin in tramos:
+                propios = [n for i, n in trazos if inicio <= i < fin]
+                corte = sum(1 for i in cortes if inicio <= i < fin)
+                clave = (nombre, str(prompts[inicio]))
+                fila = tabla.setdefault(clave, [0] * 6)
+                fila[0] += 1
+                if len(propios) == 1:
+                    fila[1 if corte == 0 else 2] += 1
+                else:
+                    fila[3 if propios else 4] += 1
+                fila[5] += corte
+                largos.setdefault(clave, []).extend(float(n) for n in propios)
+    filas = [
+        [
+            letra,
+            nombre,
+            str(intentos),
+            f"{limpios} ({limpios / intentos:.0%})",
+            str(tras_corte),
+            str(partidos),
+            str(perdidos),
+            str(interrumpidos),
+            _f(percentile(largos.get((nombre, letra), []), 0.5), "{:.0f}"),
+        ]
+        for letra in _LETRAS_ABLACION
+        for nombre in variantes
+        if (valores := tabla.get((nombre, letra)))
+        for intentos, limpios, tras_corte, partidos, perdidos, interrumpidos in [
+            valores
+        ]
+    ]
+    partes = [
+        "# Ablación de la tolerancia (Paso 6)",
+        "",
+        "Cada sesión de diagnóstico reproducida por la máquina de estados con cada "
+        "variante, a la tasa medida al arrancar la sesión y con su reloj real. Por "
+        "intento guiado: **entero** = un solo trazo entregado y ningún corte; "
+        "**tras corte** = un solo trazo, pero después de que un hueco sin rellenar "
+        "cortara otro (el trazo entregado es un pedazo); **partido** = más de uno; "
+        "**perdido** = ninguno; **cortes** = trazos interrumpidos por un hueco; "
+        "**frames** = mediana del largo de los trazos entregados. Sin "
+        "clasificador: se mide la segmentación. La X de estas sesiones es la de la "
+        "definición anterior.",
+        "",
+        *(f"- **{n}**: {VARIANTES[n]}" for n in variantes),
+        "",
+        *_tabla(
+            [
+                "letra",
+                "variante",
+                "intentos",
+                "enteros",
+                "tras corte",
+                "partidos",
+                "perdidos",
+                "cortes",
+                "frames",
+            ],
+            filas,
+        ),
+    ]
+    _escribir("\n".join(partes) + "\n", args.salida)
+    return 0
+
+
 def medir(
     grabaciones: list[Recording],
     tally: Tally,
@@ -943,6 +1097,21 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     mediapipe.set_defaults(func=_cmd_mediapipe)
+    ablacion = subcomandos.add_parser(
+        "ablacion",
+        help=(
+            "Paso 6: trazos enteros, partidos y perdidos por letra con cada "
+            "componente de la tolerancia encendido y apagado"
+        ),
+    )
+    ablacion.add_argument(
+        "--variantes",
+        nargs="+",
+        choices=sorted(VARIANTES),
+        default=list(VARIANTES),
+        help="qué variantes reproducir (por defecto, todas)",
+    )
+    ablacion.set_defaults(func=_cmd_ablacion)
     return parser
 
 

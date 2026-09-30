@@ -142,3 +142,25 @@ def test_diagnosticar_puede_cambiar_los_umbrales_de_mediapipe() -> None:
     assert config.hands.min_hand_presence_confidence == 0.3
     assert config.hands.min_tracking_confidence == 0.2
     assert con_umbrales_de_mediapipe(Config(), None, None) == Config()
+
+
+def test_diagnosticar_puede_pedir_solo_algunas_letras() -> None:
+    """Paso 13: el diagnóstico en vivo de X, Ñ y Q, sin las otras cinco."""
+    from pathlib import Path
+
+    from lsm.cli.demo import Diagnostico, _build_parser, _diagnostico_pedido
+
+    args = _build_parser().parse_args(
+        ["diagnosticar", "--iluminacion", "habitual", "--letras", "X,enie,Q"]
+    )
+    diagnostico = _diagnostico_pedido(args, Config())
+
+    assert isinstance(diagnostico, Diagnostico)
+    assert diagnostico.guiada is not None
+    assert diagnostico.guiada.letters == ("X", "ENIE", "Q")
+    assert diagnostico.salida == Path("data/diagnostico")
+
+    malo = _build_parser().parse_args(
+        ["diagnosticar", "--iluminacion", "habitual", "--letras", "A"]
+    )
+    assert isinstance(_diagnostico_pedido(malo, Config()), str)
