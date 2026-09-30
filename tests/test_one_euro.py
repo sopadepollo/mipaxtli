@@ -162,8 +162,16 @@ def test_diagnosticar_puede_pedir_solo_algunas_letras() -> None:
     assert diagnostico.guiada.letters == ("X", "ENIE", "Q")
     assert diagnostico.salida == Path("data/diagnostico")
 
+    estaticas = _build_parser().parse_args(
+        ["diagnosticar", "--iluminacion", "habitual", "--letras", "a,N"]
+    )
+    con_estaticas = _diagnostico_pedido(estaticas, Config())
+    assert isinstance(con_estaticas, Diagnostico)
+    assert con_estaticas.guiada is not None
+    assert con_estaticas.guiada.letters == ("A", "N")
+
     malo = _build_parser().parse_args(
-        ["diagnosticar", "--iluminacion", "habitual", "--letras", "A"]
+        ["diagnosticar", "--iluminacion", "habitual", "--letras", "A,QQ"]
     )
     assert isinstance(_diagnostico_pedido(malo, Config()), str)
 

@@ -580,7 +580,10 @@ uv run lsm-demo diagnosticar --mano derecha --iluminacion habitual --solo-reposo
 uv run lsm-demo diagnosticar --mano derecha --iluminacion habitual --sin-reposo
 ```
 
-Para diagnosticar solo algunas dinámicas, `--letras X,ENIE,Q`.
+Para diagnosticar solo algunas letras, `--letras X,ENIE,Q`. Admite también
+estáticas (`--letras A,N,I`): cuando una letra no sale en vivo pero sí en la
+evaluación, la sesión guarda el flujo para ver sin cámara qué decidió la
+máquina y con qué confianza.
 
 En pantalla, abajo, dice qué letra hacer y cuántas van. **ESPACIO** da la
 repetición por hecha, **BACKSPACE** la descarta y la vuelve a pedir, **q**

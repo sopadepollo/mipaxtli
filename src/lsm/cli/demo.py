@@ -606,8 +606,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--letras",
         default=None,
         help=(
-            "solo estas dinámicas, separadas por comas (p. ej. X,ENIE,Q). Por "
-            "defecto las ocho del glosario"
+            "solo estas letras, separadas por comas (p. ej. X,ENIE,Q o A,N,I,J). "
+            "Admite estáticas: la sesión guarda el flujo y se reproduce igual. "
+            "Por defecto las ocho dinámicas del glosario"
         ),
     )
     guiado.add_argument(
@@ -1018,11 +1019,14 @@ def _diagnostico_pedido(
             pedidas = tuple(
                 x.strip().upper() for x in args.letras.split(",") if x.strip()
             )
-            desconocidas = [x for x in pedidas if x not in letras]
+            # También estáticas: la A o la N que no salen en vivo se diagnostican
+            # igual que una dinámica, con el flujo guardado para reproducirlo.
+            validas = tuple(label.value for label in ALPHABET)
+            desconocidas = [x for x in pedidas if x not in validas]
             if desconocidas:
                 return (
-                    f"--letras: {', '.join(desconocidas)} no son dinámicas; las "
-                    f"válidas son {', '.join(letras)}"
+                    f"--letras: {', '.join(desconocidas)} no son letras del "
+                    f"alfabeto; las válidas son {', '.join(validas)}"
                 )
             letras = pedidas
         guiada = GuidedSession(
