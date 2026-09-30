@@ -247,3 +247,24 @@ tasa medida) y el replay de Fase 5 (sección 4 de `lsm-eval-dinamico`, LOSO):
    para después de medir A.
 2. **El valor de `motion_exhausted_ms`.** 1000 ms sale de la separación entre
    intentos de una sesión; en uso real puede pedir otro.
+
+## Riesgo en vigilancia: la Q quieta no reposa (2026-09-29)
+
+La prueba de reposo de los diagnósticos del 2026-09-29 da, para la Q quieta, la
+fracción de ventanas que superan el umbral de reposo del cierre:
+
+| sesión | ventanas de la Q quieta sobre el umbral |
+|---|---|
+| `2026-09-29-184727-habitual` | 8 % |
+| `2026-09-29-191843-habitual` | **39 %** |
+
+La misma mano, quieta, pasa de reposar casi siempre a no reposar en dos de cada
+cinco ventanas entre una sesión y la siguiente. Midiendo solo con los puntos
+estables y una ventana de 150 ms, la de 191843 baja al 5 %.
+
+**No se cambia nada todavía.** Dos sesiones no bastan para decidir si la causa es
+la ejecución, la luz o la medida, y cambiar los puntos o la ventana del cierre
+toca todas las dinámicas. Si una Q que no cierra vuelve a aparecer en los
+diagnósticos siguientes —trazos `DYNAMIC_TOO_LONG` o que no cierran en la Q—, la
+primera candidata es esa medida del reposo (puntos estables, 150 ms), medida con
+la ablación del ADR 0031 antes de adoptarla.
