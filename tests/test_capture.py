@@ -564,7 +564,8 @@ def test_la_muestra_dinamica_es_el_trazo_de_la_maquina_mas_su_reposo() -> None:
     from lsm.capture import DelimitedStroke, delimit_dynamic_stroke
     from lsm.segmentation import FrameThresholds
 
-    config = Config()
+    # Sin One Euro: su retraso corre el frame de partida uno (§4).
+    config = Config.model_validate({"smoothing": {"enabled": False}})
     fps = float(config.capture.camera_fps)
     umbrales = FrameThresholds.from_config(config, fps)
     flujo = _trazo_y_reposo(
@@ -662,7 +663,7 @@ def test_un_intento_rechazado_se_vuelve_a_segmentar_igual_que_en_vivo() -> None:
     from lsm.capture import ResegmentedStroke, resegment_attempt
     from lsm.segmentation import FrameThresholds
 
-    config = Config()
+    config = Config.model_validate({"smoothing": {"enabled": False}})
     umbrales = FrameThresholds.from_config(config, 30.0)
     bueno = tuple(
         _trazo_y_reposo(movimiento=20, reposo=umbrales.motion_confirm_low_frames + 5)

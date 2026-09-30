@@ -167,7 +167,7 @@ def test_un_modelo_entrenado_con_otro_preprocesado_se_rechaza_al_cargar() -> Non
     from lsm.preprocessing import preprocessing_record
 
     entrenado = Config()
-    con_filtro = Config.model_validate({"smoothing": {"enabled": True, "beta": 1.0}})
+    con_filtro = Config.model_validate({"smoothing": {"enabled": False}})
     payload = {"params": {"preprocessing": preprocessing_record(entrenado)}}
 
     check_preprocessing(payload, preprocessing_record(entrenado))

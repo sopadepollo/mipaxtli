@@ -148,17 +148,21 @@ class SmoothingConfig(_Section):
     """
 
     #: Interruptor, para medir el componente por separado (ablación).
-    enabled: bool = False
+    #:
+    #: CANDIDATO (0.5, 1, 2), fijado el 2026-09-29 (ADR 0028, «Candidato»): el
+    #: único componente del bloque que mejora los intentos en vivo. No cumple a
+    #: la vez los dos criterios del barrido y retrasa la J.
+    enabled: bool = True
 
     #: Frecuencia de corte con la mano quieta, en Hz: cuánto temblor se quita.
-    min_cutoff: float = Field(default=1.0, gt=0.0, le=100.0)
+    min_cutoff: float = Field(default=0.5, gt=0.0, le=100.0)
 
     #: Cuánto sube la frecuencia de corte por cada palma por segundo de
     #: velocidad: cuánto se abre el filtro en un trazo para no retrasarlo.
-    beta: float = Field(default=0.0, ge=0.0, le=1000.0)
+    beta: float = Field(default=1.0, ge=0.0, le=1000.0)
 
     #: Frecuencia de corte del filtro de la derivada, en Hz.
-    d_cutoff: float = Field(default=1.0, gt=0.0, le=100.0)
+    d_cutoff: float = Field(default=2.0, gt=0.0, le=100.0)
 
 
 class PlausibilityConfig(_Section):

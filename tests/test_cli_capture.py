@@ -52,6 +52,7 @@ from lsm.io.dataset import (
     save_consent,
     trial_root,
 )
+from lsm.preprocessing import Preprocessing
 from lsm.synthetic import (
     arc_offsets,
     canonical_hand,
@@ -169,8 +170,11 @@ def test_la_sigma_anotada_es_la_que_se_re_deriva(tmp_path: Path) -> None:
     config = Config()
     grabar_veinte(tmp_path, config)
 
+    preprocesado = Preprocessing.from_config(config, config.capture.camera_fps)
     for almacenada in iter_samples(tmp_path):
-        extraccion = extract_sequence_features(almacenada.to_sample().sequence, config)
+        extraccion = extract_sequence_features(
+            almacenada.to_sample(preprocesado).sequence, config
+        )
         assert not isinstance(extraccion, ExtractionRejected)
         assert extraccion.static.dispersion == almacenada.metadata.dispersion
 

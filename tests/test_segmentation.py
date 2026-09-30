@@ -73,8 +73,11 @@ CONFIG = Config.model_validate(
         # quieta en x=640 y el viaje desde x=300, o 700 px a través de un hueco
         # de un cuadro): el filtro de plausibilidad los invalida con razón
         # (§0.4). Estos tests son de la lógica de estados; el filtro tiene los
-        # suyos en `tests/test_plausibility.py`.
+        # suyos en `tests/test_plausibility.py`. Lo mismo el One Euro (§4): su
+        # retraso movería los frames exactos que estos tests fijan; tiene los
+        # suyos en `tests/test_one_euro.py`.
         "plausibility": {"enabled": False},
+        "smoothing": {"enabled": False},
         "segmentation": {
             "buffer_ms": _ms(6),
             "stable_ms": _ms(2),
@@ -403,6 +406,7 @@ def test_una_ventana_inestable_se_rechaza_antes_de_clasificar() -> None:
     """σ por encima de `quality.max_dispersion`: la ventana no llega al modelo."""
     config = Config.model_validate(
         {
+            "smoothing": {"enabled": False},
             "quality": {"max_dispersion": 1e-4},
             "segmentation": {
                 "buffer_ms": _ms(6),
@@ -780,6 +784,7 @@ def test_la_maquina_usa_la_tasa_que_se_le_pasa() -> None:
 DYNAMIC_CONFIG = Config.model_validate(
     {
         "plausibility": {"enabled": False},
+        "smoothing": {"enabled": False},
         "segmentation": {
             **CONFIG.segmentation.model_dump(),
             "velocity_threshold_per_s": 0.02 * FPS,
@@ -922,6 +927,7 @@ def test_sin_la_suspension_el_freno_si_se_leeria_como_estatica() -> None:
     """
     sin_camino = Config.model_validate(
         {
+            "smoothing": {"enabled": False},
             "segmentation": {
                 **DYNAMIC_CONFIG.segmentation.model_dump(),
                 "motion_min_ms": _ms(200),
@@ -1049,6 +1055,7 @@ def test_tras_un_trazo_rechazado_por_margen_la_pose_final_no_se_emite() -> None:
         Config.model_validate(
             {
                 "plausibility": {"enabled": False},
+                "smoothing": {"enabled": False},
                 "segmentation": {
                     **DYNAMIC_CONFIG.segmentation.model_dump(),
                     "rejected_stroke_final_poses": {},
@@ -1180,6 +1187,7 @@ def test_el_cierre_mira_su_propia_ventana_y_el_resto_la_suya() -> None:
     tarde; sin candidato, nada cambia."""
     corta = Config.model_validate(
         {
+            "smoothing": {"enabled": False},
             "segmentation": {
                 **DYNAMIC_CONFIG.segmentation.model_dump(),
                 "closing_window_ms": _ms(1),
@@ -1188,6 +1196,7 @@ def test_el_cierre_mira_su_propia_ventana_y_el_resto_la_suya() -> None:
     )
     larga = Config.model_validate(
         {
+            "smoothing": {"enabled": False},
             "segmentation": {
                 **DYNAMIC_CONFIG.segmentation.model_dump(),
                 "velocity_window_ms": _ms(1),
@@ -1321,6 +1330,7 @@ def test_fuera_del_candidato_un_hueco_sigue_interrumpiendo() -> None:
 SOSTEN_CONFIG = Config.model_validate(
     {
         "plausibility": {"enabled": False},
+        "smoothing": {"enabled": False},
         "segmentation": {
             **DYNAMIC_CONFIG.segmentation.model_dump(),
             "tracking_max_gap_ms": _ms(2),

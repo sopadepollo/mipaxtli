@@ -116,9 +116,11 @@ def test_el_filtro_no_toca_los_metadatos_del_frame() -> None:
     assert (salida.width, salida.height) == (1280, 720)
 
 
-def test_de_fabrica_esta_apagado_hasta_elegir_parametros() -> None:
-    """ADR 0028: ningún punto del barrido cumplió temblor y retraso a la vez."""
-    assert OneEuroParams.from_config(Config()).enabled is False
+def test_de_fabrica_lleva_el_candidato() -> None:
+    """ADR 0028, «Candidato»: (0.5, 1, 2), fijado con la ablación en vivo."""
+    params = OneEuroParams.from_config(Config())
+    assert params.enabled is True
+    assert (params.min_cutoff, params.beta, params.d_cutoff) == (0.5, 1.0, 2.0)
 
 
 def test_la_demo_puede_encenderlo_con_otros_parametros() -> None:

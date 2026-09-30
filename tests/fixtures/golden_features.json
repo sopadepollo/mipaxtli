@@ -17,10 +17,10 @@
         "reset_after_ms": 100.0
       },
       "one_euro": {
-        "enabled": false,
-        "min_cutoff": 1.0,
-        "beta": 0.0,
-        "d_cutoff": 1.0
+        "enabled": true,
+        "min_cutoff": 0.5,
+        "beta": 1.0,
+        "d_cutoff": 2.0
       },
       "dynamic_max_gap_ms": 200.0,
       "tracking_max_gap_ms": 200.0,

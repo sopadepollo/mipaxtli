@@ -22,7 +22,7 @@ def test_config_por_defecto_cubre_los_umbrales_del_contrato() -> None:
 
     assert config.quality.max_dispersion > 0.0
     assert config.features.trajectory_weight == 1.0
-    assert config.smoothing.enabled is False
+    assert config.smoothing.enabled is True
     assert config.dtw.band_radius == 6
     assert config.dtw.min_source_frames >= 1
 

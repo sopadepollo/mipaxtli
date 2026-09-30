@@ -413,6 +413,8 @@ def test_un_cuadro_imposible_de_una_dinamica_se_rellena_y_se_cuenta() -> None:
     salto de media pantalla en un cuadro se invalida y se rellena."""
     from dataclasses import replace
 
+    from lsm.config import Config
+
     frames = list(still_sequence(canonical_hand(), length=24).frames)
     frames[12] = replace(
         frames[12],
@@ -421,8 +423,12 @@ def test_un_cuadro_imposible_de_una_dinamica_se_rellena_y_se_cuenta() -> None:
         ),
     )
 
+    # Sin One Euro: lo que se comprueba es el relleno exacto del cuadro.
+    sin_filtro = Preprocessing.from_config(
+        Config.model_validate({"smoothing": {"enabled": False}}), 30.0
+    )
     convertida = muestra(frames=tuple(frames), kind=SampleKind.DYNAMIC).to_sample(
-        _preprocesado()
+        sin_filtro
     )
 
     assert convertida.interpolated_frames == 1

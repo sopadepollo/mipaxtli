@@ -117,13 +117,17 @@ static_knn:
 # mismos. Calibración: `lsm-medir one-euro`.
 smoothing:
   # Interruptor, para medir el componente por separado (ablación).
-  enabled: false
+  # CANDIDATO (0.5, 1, 2), fijado el 2026-09-29 (ADR 0028, «Candidato»): el único
+  # componente del bloque que mejora los intentos en vivo (X, Ñ, Q). No cumple
+  # a la vez los dos criterios del barrido; cuesta retraso en la J. Los modelos
+  # tienen que entrenarse con estos mismos valores: la demo rechaza otros.
+  enabled: true
   # Frecuencia de corte con la mano quieta, en Hz: cuánto temblor se quita.
-  min_cutoff: 1.0
+  min_cutoff: 0.5
   # Cuánto se abre el filtro por cada palma por segundo de velocidad.
-  beta: 0.0
+  beta: 1.0
   # Frecuencia de corte de la derivada, en Hz.
-  d_cutoff: 1.0
+  d_cutoff: 2.0
 
 # Filtro de plausibilidad anatómica (feature-spec.md §0.4, ADR 0027). Un cuadro
 # físicamente imposible no se corrige: se marca inválido (IMPLAUSIBLE) y lo

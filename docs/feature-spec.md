@@ -512,10 +512,12 @@ plantillas; la confianza es `d₂ / (d₁ + d₂)` entre las dos letras más cer
 ## 4. Suavizado temporal: filtro One Euro (v4, ADR 0028)
 
 > **Versión.** Sustituye a la media exponencial de α fijo de la v3 (que estaba
-> desactivada, `α = 1`). Entra en `FEATURE_SPEC_VERSION` 4 junto con el §0.4 y δ,
-> con los golden regenerados una sola vez. Hasta entonces está **apagado por
-> defecto** (`smoothing.enabled: false`): ningún punto del barrido cumplió a la
-> vez quitar el temblor y no retrasar los trazos (ADR 0028).
+> desactivada, `α = 1`). Es parte de `FEATURE_SPEC_VERSION` 4 junto con el §0.4
+> y δ; los golden lo cubren en `one_euro_cases`, con sus parámetros en cada caso.
+> En el código está apagado por defecto; `config.yaml` lo activa con el
+> **candidato (0.5, 1, 2)** (ADR 0028): ningún punto del barrido cumplió a la vez
+> quitar el temblor y no retrasar los trazos, y este es el que mejora los
+> intentos en vivo. El modelo exportado declara los valores con que se entrenó.
 
 Filtro de Casiez, Roussel y Vogel (2012) sobre **cada coordenada cruda** (x, y, z
 de los 21 landmarks: 63 señales con estado propio), **después** de la

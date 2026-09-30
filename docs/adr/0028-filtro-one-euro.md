@@ -1,9 +1,9 @@
 # ADR 0028 — Filtro One Euro en lugar del suavizado fijo (Paso 3)
 
-- **Estado:** **implementado, apagado por defecto** (2026-09-29). **Ningún punto
-  del barrido cumple a la vez los dos criterios**; no se elige uno. Queda para
-  decidir a ojo con `lsm-demo --comparar-one-euro` y con la ablación del Paso 6.
-  Entra en `FEATURE_SPEC_VERSION` 4 (§4) con la plausibilidad y δ.
+- **Estado:** **implementado; candidato (0.5, 1, 2) activo por defecto** desde el
+  2026-09-29 (ver «Candidato»). **Ningún punto del barrido cumple a la vez los
+  dos criterios**; el candidato se fijó por la ablación en vivo, no por el
+  barrido. Parte de `FEATURE_SPEC_VERSION` 4 (§4, ADR 0034).
 - **Fecha:** 2026-09-29
 - **Datos:** reposo: las 9 posturas de las pruebas de reposo de los diagnósticos
   (estática, J, K, Q, X de la definición anterior), con reloj real y sin el
@@ -86,3 +86,53 @@ Candidatos para mirar en vivo, de más suave a más fiel al trazo:
   activo son del Paso 6 (ablación).
 - **La X nueva**: no hay ninguna grabada todavía.
 - El retraso en la K y la Z.
+
+## Candidato (0.5, 1, 2), 2026-09-29
+
+Fijado en `config.yaml` y en los defaults. Es el único componente del bloque que
+mejoró los intentos en vivo (ADR 0031: X 12 → 19 trazos enteros, Q 5 → 9), y con
+él Ñ y Q salen 10 de 10 en el diagnóstico 184727. Los modelos declaran estos
+valores y la demo rechaza otros: al cambiarlos hay que reentrenar.
+
+### Ablación con y sin One Euro (contrato v4, w_δ = 1, cerrojo del ADR 0033)
+
+Cada sesión de diagnóstico se reproduce **con y sin** el filtro sobre el mismo
+flujo crudo, con modelos entrenados con el mismo preprocesado que la réplica.
+Intentos con la letra pedida escrita (y emisiones erróneas):
+
+| sesión (en vivo) | sin One Euro | con One Euro |
+|---|---|---|
+| 183332 (sin): Ñ / Q | 9 (N 2) / 0 | 9 (N 2) / 2 |
+| 184727 (con): Ñ / Q | 9 / 2 | **10 / 10** |
+| 191843 (con): J | 2 (I 2) | 3 (I 1) |
+| X, las dos sesiones | 0 | 0 (no hay plantillas, ADR 0032) |
+
+Corpus (`lsm-eval-dinamico`, leave-one-signer-out, reloj nominal):
+
+| | sin One Euro | con One Euro |
+|---|---|---|
+| accuracy LOSO dinámica | 0.9084 | 0.9006 |
+| replay, aciertos J / K / Ñ / Q / Z | 123 / 51 / 49 / 31 / 105 | **112** / 50 / **44** / 31 / 104 |
+| replay, Q perdidas | 0 | 4 |
+| replay, primera letra estática correcta | 0.9234 | 0.9246 |
+| estáticas que entran a candidato dinámico | 124 | 95 |
+
+En vivo el filtro gana (sobre todo la Q de 184727); en el corpus cuesta J y Ñ,
+como ya medía el ADR 0031 (J 124 → 112). Las estáticas no empeoran: el temblor
+que ya no cruza el umbral de movimiento saca 29 muestras del camino dinámico.
+
+### Qué falta para que la comparación sea limpia
+
+1. **Una sesión de J sin One Euro en vivo.** La única J de hoy (191843) se grabó
+   con el filtro; el «sin» de la tabla es una réplica, no un intento en vivo.
+2. **El corpus está grabado a ~16 fps y sin marca de tiempo** (reloj nominal):
+   el coste en J y Ñ del replay puede ser de la tasa, no del filtro. Lo resuelve
+   regrabar J y Ñ a 30 fps con la captura actual, que ya guarda marcas.
+3. **Estáticas en vivo con el filtro.** Los diagnósticos de hoy son solo de
+   dinámicas; el retraso del filtro en la entrada a STABLE no se ha visto en
+   vivo. Un `diagnosticar` con letras estáticas (p. ej. `--letras A,E,I,N,P`)
+   con el candidato lo cubre.
+4. Las sesiones 183332 y 184727 son **tomas distintas**: comparar sus emisiones
+   en vivo mezcla filtro y ejecución. Las réplicas de la tabla usan el mismo
+   flujo con y sin filtro y son la comparación válida.
+

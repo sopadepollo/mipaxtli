@@ -69,7 +69,9 @@ RAIZ_REPO = Path(__file__).resolve().parents[1]
 #: doblan los dedos encogiéndolos (`lsm.synthetic._bend`), así que el largo de
 #: los huesos cambia entre letras. El filtro invalida las dos cosas con razón
 #: (§0.4); aquí se prueba el deletreo, no el filtro.
-CONFIG = Config.model_validate({"plausibility": {"enabled": False}})
+CONFIG = Config.model_validate(
+    {"plausibility": {"enabled": False}, "smoothing": {"enabled": False}}
+)
 
 #: Los umbrales de `CONFIG` resueltos a cuadros con la tasa NOMINAL, que es la
 #: que usa `run_segmentation` cuando nadie le pasa una medida — el caso de estos
@@ -343,6 +345,7 @@ def test_nada_por_debajo_del_umbral_llega_al_buffer() -> None:
         # NADA emita, ni de inmediato ni acumulando.
         {
             "plausibility": {"enabled": False},
+            "smoothing": {"enabled": False},
             "segmentation": {"min_confidence": 0.99, "high_confidence": 0.99},
         }
     )
