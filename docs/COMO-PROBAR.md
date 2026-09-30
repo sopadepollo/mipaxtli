@@ -363,17 +363,21 @@ uv run lsm-medir --salida docs/mediciones/one-euro.md one-euro --d-cutoff 2
 ### 5.3 El One Euro a ojo 📷
 
 El barrido no encontró un punto que quite el temblor sin retrasar los trazos
-(ADR 0028), así que el filtro viene apagado. Para verlo en vivo, con el
-esqueleto crudo en gris y el filtrado en color encima:
+(ADR 0028); el filtro viene **encendido con el candidato `0.5,1,2`**, elegido
+por la ablación en vivo. Los modelos se entrenan con el mismo filtro y la demo
+rechaza un modelo entrenado con otro: si lo apagas o cambias sus valores en
+`config.yaml`, reentrena (`make train`). Para verlo en vivo, con el esqueleto
+crudo en gris y el filtrado en color encima:
 
 ```bash
 uv run lsm-demo --mano derecha --comparar-one-euro --one-euro-params 0.5,1,2
 ```
 
 `--comparar-one-euro` solo cambia el dibujo; la máquina sigue con lo que diga
-`smoothing.enabled`. Para que además deletree con el filtro, `--one-euro on`;
-`--one-euro off` lo apaga aunque `config.yaml` lo tenga encendido. Los tres
-candidatos del ADR 0028 son `0.5,1,2`, `0.5,3,0.5` y `1,1,2`.
+`smoothing.enabled`. `--one-euro off` lo apaga para la máquina y `--one-euro on`
+con otros `--one-euro-params` lo cambia; en los dos casos hace falta un modelo
+entrenado con ese mismo preprocesado. Los tres candidatos del ADR 0028 son
+`0.5,1,2` (el activo), `0.5,3,0.5` y `1,1,2`.
 
 ---
 
