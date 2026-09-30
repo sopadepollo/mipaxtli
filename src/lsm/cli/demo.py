@@ -38,6 +38,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from lsm.classifiers.base import IncompatibleModelError, check_preprocessing
 from lsm.classifiers.registry import ClassifierRegistry
 from lsm.cli import AYUDA_MANO, MANOS, MENSAJE_SIN_EXTRAS
 from lsm.config import Config, load_config
@@ -419,12 +420,18 @@ def aplicar_evento(sesion: Sesion, evento: SegmentationEvent) -> None:
             pass
 
 
-def cargar_registro(estatico: Path, dinamico: Path | None) -> ClassifierRegistry:
+def cargar_registro(
+    estatico: Path, dinamico: Path | None, config: Config
+) -> ClassifierRegistry:
     """Carga los modelos exportados en su ranura del registry.
 
     `from_export` rechaza un `feature_spec_version` o un
     `detector_input` que no coincidan, que es la defensa contra predecir
-    en silencio con una normalización distinta a la del entrenamiento.
+    en silencio con una normalización distinta a la del entrenamiento. Aquí se
+    rechaza además un modelo entrenado con otro preprocesado —plausibilidad,
+    relleno, One Euro— que el de `config` (`base.check_preprocessing`): con
+    `--one-euro on` y un modelo entrenado sin él, las plantillas describen otra
+    señal.
 
     El estático es obligatorio; el dinámico no. Sin él la demo avisa y sigue:
     deletrear estáticas no depende de la Fase 5, y los trazos que la
@@ -445,6 +452,14 @@ def cargar_registro(estatico: Path, dinamico: Path | None) -> ClassifierRegistry
             "movimiento no se reconocerán. `uv run lsm-train --sin-sintetico` "
             "entrena los dos."
         )
+    runtime = preprocessing_record(config)
+    for ruta, payload in ((estatico, payload_estatico), (dinamico, payload_dinamico)):
+        if payload is None:
+            continue
+        try:
+            check_preprocessing(payload, runtime)
+        except IncompatibleModelError as error:
+            raise SystemExit(f"{ruta}: {error}") from None
     return ClassifierRegistry.from_exports(
         static=payload_estatico, dynamic=payload_dinamico
     )
@@ -751,7 +766,7 @@ def main(argv: list[str] | None = None) -> int:
         print(SIN_MUESTRAS.format(raiz=args.desde_dataset))
         return 1
 
-    registro = cargar_registro(args.modelo, args.modelo_dinamico)
+    registro = cargar_registro(args.modelo, args.modelo_dinamico, config)
     sesion = Sesion(config=config)
 
     if args.desde_dataset is not None:

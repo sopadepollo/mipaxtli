@@ -157,3 +157,21 @@ def test_un_export_al_que_le_falta_un_campo_se_rechaza() -> None:
 
 def test_un_export_valido_pasa_la_verificacion() -> None:
     check_export_compatibility(DummyClassifier().export())
+
+
+def test_un_modelo_entrenado_con_otro_preprocesado_se_rechaza_al_cargar() -> None:
+    """Mismo patrón que `feature_spec_version`: el One Euro, la plausibilidad y
+    el relleno con que se entrenó tienen que ser los del runtime."""
+    from lsm.classifiers.base import IncompatibleModelError, check_preprocessing
+    from lsm.config import Config
+    from lsm.preprocessing import preprocessing_record
+
+    entrenado = Config()
+    con_filtro = Config.model_validate({"smoothing": {"enabled": True, "beta": 1.0}})
+    payload = {"params": {"preprocessing": preprocessing_record(entrenado)}}
+
+    check_preprocessing(payload, preprocessing_record(entrenado))
+    with pytest.raises(IncompatibleModelError, match="one_euro"):
+        check_preprocessing(payload, preprocessing_record(con_filtro))
+    with pytest.raises(IncompatibleModelError, match="no declara"):
+        check_preprocessing({"params": {}}, preprocessing_record(entrenado))

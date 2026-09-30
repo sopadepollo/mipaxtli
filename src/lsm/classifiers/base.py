@@ -154,3 +154,35 @@ def check_export_compatibility(payload: Mapping[str, Any]) -> None:
             "espejo, y con la misma confianza que si acertara."
         )
         raise IncompatibleModelError(msg)
+
+
+def check_preprocessing(payload: Mapping[str, Any], runtime: Mapping[str, Any]) -> None:
+    """Verifica que el modelo se entrenó con el preprocesado del runtime.
+
+    `runtime` es `lsm.preprocessing.preprocessing_record(config)`: la
+    plausibilidad, el relleno de huecos y el One Euro con que el runtime va a
+    alimentar al modelo. Si el modelo se entrenó con otros, sus plantillas o
+    centroides describen otra señal —la misma seña filtrada distinto— y predice
+    peor sin ningún síntoma. Mismo patrón que `feature_spec_version`: se rechaza
+    al cargar, con la lista de lo que difiere.
+    """
+    entrenado = payload.get("params", {}).get("preprocessing")
+    if entrenado is None:
+        msg = (
+            "el modelo no declara con qué preprocesado se entrenó "
+            "(params.preprocessing): es anterior a la serie de tolerancia. "
+            "Reentrenar con `lsm-train`."
+        )
+        raise IncompatibleModelError(msg)
+    diferencias = [
+        f"{clave}: modelo {entrenado.get(clave)!r}, runtime {runtime.get(clave)!r}"
+        for clave in sorted(set(entrenado) | set(runtime))
+        if entrenado.get(clave) != runtime.get(clave)
+    ]
+    if diferencias:
+        msg = (
+            "el modelo se entrenó con otro preprocesado que el de este runtime; "
+            "reentrenar con la misma configuración (`lsm-train --config ...`) o "
+            "usar la del modelo:\n  " + "\n  ".join(diferencias)
+        )
+        raise IncompatibleModelError(msg)
