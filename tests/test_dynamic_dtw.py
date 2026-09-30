@@ -124,6 +124,52 @@ def test_el_medoide_es_la_muestra_central() -> None:
     assert medoid(grupo, band_radius=0) == 1
 
 
+def test_con_un_medoide_k_medoids_es_el_medoide_de_siempre() -> None:
+    """ADR 0035: con `templates_per_signer = 1` el modelo no cambia."""
+    from lsm.classifiers.dynamic_dtw import k_medoids
+
+    grupo = [rampa(9), rampa(10), rampa(11), rampa(20)]
+
+    assert k_medoids(grupo, 1, band_radius=0) == [medoid(grupo, band_radius=0)]
+
+
+def test_el_segundo_medoide_cubre_lo_que_el_primero_deja_lejos() -> None:
+    from lsm.classifiers.dynamic_dtw import k_medoids
+
+    grupo = [rampa(9), rampa(10), rampa(11), rampa(20), rampa(21)]
+
+    elegidos = k_medoids(grupo, 2, band_radius=0)
+
+    assert elegidos[0] == medoid(grupo, band_radius=0)
+    assert elegidos[1] in (3, 4)  # uno de los escalones tardíos
+    assert k_medoids(grupo, 2, band_radius=0) == elegidos  # determinista
+    assert k_medoids(grupo, 9, band_radius=0) == [0, 1, 2, 3, 4]
+
+
+def test_las_plantillas_por_firmante_salen_de_la_config() -> None:
+    muestras = list(MUESTRAS)
+    por_grupo = len(muestras) // (len(ETIQUETAS) * 3)
+
+    uno = DynamicDtwClassifier(
+        config=Config.model_validate({"dtw": {"templates_per_signer": 1}})
+    )
+    uno.fit(muestras)
+    dos = DynamicDtwClassifier(
+        config=Config.model_validate({"dtw": {"templates_per_signer": 2}})
+    )
+    dos.fit(muestras)
+    todas = DynamicDtwClassifier(
+        config=Config.model_validate({"dtw": {"templates_per_signer": 0}})
+    )
+    todas.fit(muestras)
+
+    assert len(uno.templates) == len(ETIQUETAS) * 3
+    assert len(dos.templates) == len(ETIQUETAS) * 3 * min(2, por_grupo)
+    assert len(todas.templates) == len(muestras)
+    # El primero de cada grupo sigue siendo el medoide.
+    assert {t.rows for t in uno.templates} <= {t.rows for t in dos.templates}
+
+
 def test_la_distancia_a_una_letra_es_la_de_su_plantilla_mas_cercana() -> None:
     from lsm.classifiers.dynamic_dtw import Template
 
@@ -166,11 +212,19 @@ def test_cumple_el_protocolo() -> None:
     assert isinstance(DynamicDtwClassifier(config=CONFIG), Classifier)
 
 
-def test_una_plantilla_por_letra_y_persona(entrenado: DynamicDtwClassifier) -> None:
+def test_las_plantillas_van_por_letra_y_persona(
+    entrenado: DynamicDtwClassifier,
+) -> None:
+    """`templates_per_signer` por (letra, persona); el corpus sintético tiene 3
+    repeticiones por grupo, así que con el valor de fábrica entran todas."""
     claves = [(t.label, t.signer_id) for t in entrenado.templates]
+    k = min(CONFIG.dtw.templates_per_signer, 3)
 
     assert claves == sorted(
-        (label, firmante) for label in ETIQUETAS for firmante in ("sint00", "sint01")
+        (label, firmante)
+        for label in ETIQUETAS
+        for firmante in ("sint00", "sint01")
+        for _ in range(k)
     )
 
 

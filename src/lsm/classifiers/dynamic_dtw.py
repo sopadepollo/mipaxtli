@@ -13,9 +13,11 @@ líneas. Ver `docs/adr/0016-clasificador-dinamico-y-barrido.md`.
 
 ## Las plantillas
 
-Una por **(letra, persona)**: el medoide DTW de las muestras de esa persona para
-esa letra, o sea la muestra cuya suma de distancias al resto de su grupo es
-mínima. Es una muestra real, no un promedio: promediar trazos con ritmos
+`dtw.templates_per_signer` por **(letra, persona)** (ADR 0035): con 1, el
+medoide DTW de las muestras de esa persona para esa letra, o sea la muestra cuya
+suma de distancias al resto de su grupo es mínima; con k > 1, los k-medoides que
+elige el BUILD de PAM (`k_medoids`); con 0, todas las muestras (vecino más
+cercano). Es una muestra real, no un promedio: promediar trazos con ritmos
 distintos da un trazo que nadie ejecutó, que es justo lo que DTW existe para no
 tener que hacer. Por persona y no por letra porque cada quien traza a su manera,
 y quedarse con una sola plantilla por letra obligaría a elegir de quién.
@@ -212,6 +214,49 @@ def medoid(group: AbcSequence[Rows], band_radius: int) -> int:
     return best_index
 
 
+def k_medoids(group: AbcSequence[Rows], k: int, band_radius: int) -> list[int]:
+    """Índices de `k` medoides DTW de un grupo: el BUILD de PAM, determinista.
+
+    El primero es el `medoid` de siempre, así que con `k = 1` las plantillas son
+    las mismas que antes del ADR 0035. Cada siguiente es la muestra que más
+    reduce la suma, sobre todo el grupo, de la distancia de cada muestra a su
+    medoide más cercano. Empates por el índice más bajo. Sin la fase SWAP de
+    PAM: es más cara y el orden de llegada ya lo fija `fit`.
+
+    Las distancias van en el mismo sentido que en `medoid`: `d(medoide, muestra)`.
+    Con `k ≥ len(group)` devuelve todas.
+    """
+    if k < 1:
+        raise ValueError(f"k tiene que ser ≥ 1, no {k}")
+    n = len(group)
+    if k >= n:
+        return list(range(n))
+    d = [
+        [
+            0.0 if a == b else dtw_distance(group[a], group[b], band_radius)
+            for b in range(n)
+        ]
+        for a in range(n)
+    ]
+    elegidos = [medoid(group, band_radius)]
+    costo = [d[elegidos[0]][i] for i in range(n)]
+    while len(elegidos) < k:
+        mejor = -1
+        mejor_ganancia = -1.0
+        for m in range(n):
+            if m in elegidos:
+                continue
+            ganancia = 0.0
+            for i in range(n):
+                ganancia += max(0.0, costo[i] - d[m][i])
+            if ganancia > mejor_ganancia:
+                mejor = m
+                mejor_ganancia = ganancia
+        elegidos.append(mejor)
+        costo = [min(costo[i], d[mejor][i]) for i in range(n)]
+    return elegidos
+
+
 def label_distances(
     rows: Rows, templates: AbcSequence[Template], band_radius: int
 ) -> dict[str, float]:
@@ -285,7 +330,7 @@ class DynamicDtwClassifier:
     # -- entrenamiento ----------------------------------------------------- #
 
     def fit(self, samples: list[Sample]) -> None:
-        """Una plantilla por (letra, persona): su medoide DTW.
+        """`templates_per_signer` plantillas por (letra, persona) (ADR 0035).
 
         Las muestras se ordenan por sesión y marca de tiempo antes de agrupar,
         para que el desempate del medoide no dependa del orden en que las lea
@@ -309,9 +354,11 @@ class DynamicDtwClassifier:
                 continue
             grupos.setdefault((sample.label, sample.signer_id), []).append(rows)
 
+        k = self.config.dtw.templates_per_signer
         self._templates = [
-            Template(label=label, signer_id=signer, rows=grupo[medoid(grupo, band)])
+            Template(label=label, signer_id=signer, rows=grupo[i])
             for (label, signer), grupo in sorted(grupos.items())
+            for i in (range(len(grupo)) if k == 0 else k_medoids(grupo, k, band))
         ]
         counts: dict[str, int] = {}
         for (label, _), grupo in grupos.items():

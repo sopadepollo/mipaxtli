@@ -240,6 +240,15 @@ class DtwConfig(_Section):
     #: estáticas de dinámicas, y lo que filtra es la segmentación más el margen.
     max_distance: float = Field(default=6.0, gt=0.0, le=1000.0)
 
+    #: Plantillas por (letra, persona) (ADR 0035): 1 es el medoide DTW; k > 1,
+    #: los k-medoides del BUILD de PAM; 0, todas las muestras (vecino más
+    #: cercano). Cada plantilla cuesta un DTW por trazo en vivo.
+    #:
+    #: MEDIDO (ADR 0035): con 3, LOSO 0.907 → 0.956 y emisiones erróneas
+    #: 0.8% → 0.2%, a 37 ms por trazo (13 con 1). Con 5 la Ñ de hoy cae; todas
+    #: las muestras dan 0.986 pero cuestan 405 ms por trazo.
+    templates_per_signer: int = Field(default=3, ge=0, le=1000)
+
 
 class SegmentationConfig(_Section):
     """Umbrales de la máquina de estados (`ARQUITECTURA.md` §4.2)."""

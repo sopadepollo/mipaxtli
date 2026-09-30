@@ -177,6 +177,12 @@ dtw:
   # dinámico— y el margen: con segmentation.min_confidence = 0.6 pasan el 53%
   # de los aciertos y el 0.8% de los fallos.
   max_distance: 6.0
+  # (ADR 0035) Plantillas por (letra, firmante): 1 = el medoide; k > 1 = los
+  # k-medoides; 0 = todas las muestras. Con 3: LOSO 0.907 -> 0.956 y emisiones
+  # erróneas 0.8% -> 0.2%, a 37 ms por trazo. Con varias plantillas, las
+  # grabaciones nuevas de una persona cuentan como otra forma válida de la
+  # letra en vez de diluirse en un único medoide.
+  templates_per_signer: 3
 
 # Máquina de estados de segmentación (ARQUITECTURA.md §4.2).
 #
